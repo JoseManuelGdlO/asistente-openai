@@ -22,6 +22,9 @@ const openai = new OpenAI({
 // Store thread IDs per user
 const userThreads = new Map();
 
+// Cache para mensajes procesados
+const processedMessages = new Set();
+
 // WhatsApp Webhook verification
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -43,100 +46,132 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   try {
     const { body } = req;
-    console.log('Peticion recibida');
+    console.log('=== Nueva petición recibida ===');
+    console.log('Tipo de petición:', body.object);
+    console.log('Timestamp:', new Date().toISOString());
     
-
-    if (body.object) {
-      if (
-        body.entry &&
-        body.entry[0].changes &&
-        body.entry[0].changes[0] &&
-        body.entry[0].changes[0].value.messages &&
-        body.entry[0].changes[0].value.messages[0]
-      ) {
-        const phone_number_id = body.entry[0].changes[0].value.metadata.phone_number_id;
-        const from = body.entry[0].changes[0].value.messages[0].from;
-        const msg_body = body.entry[0].changes[0].value.messages[0].text.body;
-
-        // Obtener o crear thread para el usuario
-        let threadId = userThreads.get(from);
-        if (!threadId) {
-          const thread = await openai.beta.threads.create();
-          threadId = thread.id;
-          userThreads.set(from, threadId);
+    // Verificar si es una petición de verificación
+    if (body.object === 'whatsapp_business_account') {
+      if (body.entry && body.entry[0].changes) {
+        const change = body.entry[0].changes[0];
+        console.log('Tipo de cambio:', change.field);
+        
+        // Si es un cambio de estado, solo responder OK
+        if (change.field === 'status') {
+          console.log('Cambio de estado recibido');
+          return res.sendStatus(200);
         }
 
-        // Esperar a que no haya runs activos en el thread
-        let hasActiveRun = true;
-        while (hasActiveRun) {
-          const runs = await openai.beta.threads.runs.list(threadId, { limit: 20 });
-          hasActiveRun = runs.data.some(run =>
-            ["in_progress", "queued", "cancelling", "requires_action"].includes(run.status)
-          );
-          if (hasActiveRun) {
-            await new Promise(r => setTimeout(r, 1500));
+        // Verificar si hay mensajes
+        if (change.value && change.value.messages && change.value.messages[0]) {
+          const message = change.value.messages[0];
+          console.log('Mensaje recibido de:', message.from);
+          console.log('ID del mensaje:', message.id);
+          console.log('Tipo de mensaje:', message.type);
+          
+          // Verificar si ya procesamos este mensaje
+          if (processedMessages.has(message.id)) {
+            console.log('Mensaje ya procesado, ignorando:', message.id);
+            return res.sendStatus(200);
           }
-        }
 
-        // Ahora sí, puedes agregar el mensaje y crear el run
-        await openai.beta.threads.messages.create(threadId, {
-          role: "user",
-          content: msg_body
-        });
+          // Verificar si es un mensaje de texto
+          if (message.type === 'text') {
+            const phone_number_id = change.value.metadata.phone_number_id;
+            const from = message.from;
+            const msg_body = message.text.body;
 
-        const run = await openai.beta.threads.runs.create(threadId, {
-          assistant_id: process.env.ASISTENTE_ID
-        });
+            // Marcar mensaje como procesado
+            processedMessages.add(message.id);
 
-        // Esperar a que termine el run (polling)
-        let runStatus;
-        do {
-          await new Promise(r => setTimeout(r, 1500));
-          runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+            // Limpiar mensajes antiguos (mantener solo los últimos 1000)
+            if (processedMessages.size > 1000) {
+              const oldestMessages = Array.from(processedMessages).slice(0, processedMessages.size - 1000);
+              oldestMessages.forEach(id => processedMessages.delete(id));
+            }
 
-          // Si requiere acción, manejar tool_calls
-          if (runStatus.status === "requires_action") {
-            await handleRequiredAction({ runStatus, threadId, run, openai });
+            // Obtener o crear thread para el usuario
+            let threadId = userThreads.get(from);
+            if (!threadId) {
+              const thread = await openai.beta.threads.create();
+              threadId = thread.id;
+              userThreads.set(from, threadId);
+            }
+
+            // Esperar a que no haya runs activos en el thread
+            let hasActiveRun = true;
+            while (hasActiveRun) {
+              const runs = await openai.beta.threads.runs.list(threadId, { limit: 20 });
+              hasActiveRun = runs.data.some(run =>
+                ["in_progress", "queued", "cancelling", "requires_action"].includes(run.status)
+              );
+              if (hasActiveRun) {
+                await new Promise(r => setTimeout(r, 1500));
+              }
+            }
+
+            // Ahora sí, puedes agregar el mensaje y crear el run
+            await openai.beta.threads.messages.create(threadId, {
+              role: "user",
+              content: msg_body
+            });
+
+            const run = await openai.beta.threads.runs.create(threadId, {
+              assistant_id: process.env.ASISTENTE_ID
+            });
+
+            // Esperar a que termine el run (polling)
+            let runStatus;
+            do {
+              await new Promise(r => setTimeout(r, 1500));
+              runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+
+              // Si requiere acción, manejar tool_calls
+              if (runStatus.status === "requires_action") {
+                await handleRequiredAction({ runStatus, threadId, run, openai });
+              }
+            } while (runStatus.status !== "completed" && runStatus.status !== "failed");
+
+            let aiResponse = "No response from assistant.";
+            if (runStatus.status === "completed") {
+              // Obtener la respuesta del assistant
+              const messages = await openai.beta.threads.messages.list(threadId);
+              // Tomar el último mensaje del assistant
+              const lastMsg = messages.data.reverse().find(m => m.role === "assistant");
+              aiResponse = lastMsg ? lastMsg.content[0].text.value : aiResponse;
+            } else {
+              aiResponse = "Hubo un error procesando tu mensaje. Intenta de nuevo.";
+            }
+
+            // Enviar respuesta a WhatsApp
+            await axios({
+              method: 'POST',
+              url: `https://graph.facebook.com/v17.0/${phone_number_id}/messages`,
+              headers: {
+                'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              data: {
+                messaging_product: 'whatsapp',
+                to: from,
+                text: { body: aiResponse }
+              }
+            });
+          } else {
+            console.log('Mensaje no es de tipo texto, ignorando');
           }
-        } while (runStatus.status !== "completed" && runStatus.status !== "failed");
-
-        let aiResponse = "No response from assistant.";
-        if (runStatus.status === "completed") {
-          // Obtener la respuesta del assistant
-          const messages = await openai.beta.threads.messages.list(threadId);
-          // Tomar el último mensaje del assistant
-          const lastMsg = messages.data.reverse().find(m => m.role === "assistant");
-          aiResponse = lastMsg ? lastMsg.content[0].text.value : aiResponse;
         } else {
-          aiResponse = "Hubo un error procesando tu mensaje. Intenta de nuevo.";
+          console.log('No hay mensajes en la petición');
         }
-
-        // Enviar respuesta a WhatsApp
-        await axios({
-          method: 'POST',
-          url: `https://graph.facebook.com/v17.0/${phone_number_id}/messages`,
-          headers: {
-            'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-          data: {
-            messaging_product: 'whatsapp',
-            to: from,
-            text: { body: aiResponse }
-          }
-        });
-
-        res.sendStatus(200);
-      } else {
-        res.sendStatus(404);
       }
-    } else {
-      res.sendStatus(404);
     }
+
+    // Enviar una única respuesta al final
+    return res.sendStatus(200);
   } catch (error) {
     console.error('Error processing webhook:', error);
     console.error('Error details:', error.response?.data || error.message);
-    res.sendStatus(500);
+    return res.sendStatus(500);
   }
 });
 

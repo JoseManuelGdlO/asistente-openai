@@ -32,6 +32,16 @@ class GoogleCalendarService {
           inicio = hoy;
           fin = hoy.plus({ days: 3 }).set({ hour: 19 }); // 3 días después, 7pm
         }
+
+        // 2 de 30 minutos por consulta 
+
+        // 15 8 y cierra 7 
+
+        // 8:00
+        // // 8:30
+        // 9:00
+        // 9:30
+
     
         const res = await this.calendar.events.list({
           calendarId: 'primary',
