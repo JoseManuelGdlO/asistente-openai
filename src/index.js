@@ -42,6 +42,83 @@ app.get('/webhook', (req, res) => {
   }
 });
 
+app.get('/consultar_disponibilidad', async (req, res) => {
+  const fecha_inicio = req.query.fecha_inicio;
+
+  const disponibilidad = await googleCalendarService.consultarDisponibilidad(fecha_inicio);
+
+  res.json(disponibilidad);
+});
+
+app.post('/crear_evento', async (req, res) => {
+  try {
+    const {
+      fecha_inicio,
+      horario,
+      paciente,
+      descripcion,
+      tutor,
+      subSecuente,
+      mensaje,
+      telefono
+    } = req.body;
+
+    // Validar campos requeridos
+    if (!fecha_inicio || !horario || !paciente) {
+      return res.status(400).json({
+        error: true,
+        mensaje: "Faltan campos requeridos: fecha_inicio, horario y paciente son obligatorios"
+      });
+    }
+
+    const evento = await googleCalendarService.crearEvento({
+      fecha_inicio,
+      horario,
+      paciente,
+      descripcion,
+      tutor,
+      subSecuente,
+      mensaje,
+      telefono
+    });
+
+    res.json(evento);
+  } catch (error) {
+    console.error('Error al crear evento:', error);
+    res.status(500).json({
+      error: true,
+      mensaje: "Error al procesar la solicitud"
+    });
+  }
+});
+
+app.post('/cancelar_evento', async (req, res) => {
+  try {
+    const { fecha, paciente } = req.body;
+
+    // Validar campos requeridos
+    if (!fecha || !paciente) {
+      return res.status(400).json({
+        error: true,
+        mensaje: "Faltan campos requeridos: fecha y paciente son obligatorios"
+      });
+    }
+
+    const resultado = await googleCalendarService.cancelarEvento({
+      fecha,
+      paciente
+    });
+
+    res.json(resultado);
+  } catch (error) {
+    console.error('Error al cancelar evento:', error);
+    res.status(500).json({
+      error: true,
+      mensaje: "Error al procesar la solicitud"
+    });
+  }
+});
+
 // WhatsApp Webhook for receiving messages
 app.post('/webhook', async (req, res) => {
   try {
