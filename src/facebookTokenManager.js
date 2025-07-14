@@ -7,6 +7,7 @@ class FacebookTokenManager {
     this.tokenFilePath = path.join(__dirname, '../token.json');
     this.refreshInterval = null;
     this.lastRefreshDate = null;
+    this.isRefreshing = false; // Flag para evitar refreshes simultáneos
   }
 
   async refreshFacebookToken(longLivedToken) {
@@ -36,7 +37,13 @@ class FacebookTokenManager {
     };
 
     try {
-      await fs.writeFile(this.tokenFilePath, JSON.stringify(tokenData, null, 2));
+      // Escribir a un archivo temporal primero
+      const tempFilePath = this.tokenFilePath + '.tmp';
+      await fs.writeFile(tempFilePath, JSON.stringify(tokenData, null, 2));
+      
+      // Luego renombrar el archivo temporal al archivo final
+      await fs.rename(tempFilePath, this.tokenFilePath);
+      
       console.log('Token guardado exitosamente');
       this.lastRefreshDate = new Date();
     } catch (error) {
@@ -48,7 +55,20 @@ class FacebookTokenManager {
   async loadToken() {
     try {
       const data = await fs.readFile(this.tokenFilePath, 'utf8');
+      
+      // Validar que el archivo no esté vacío
+      if (!data || data.trim() === '') {
+        console.log('Archivo de token vacío, usando token de entorno');
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
       const tokenData = JSON.parse(data);
+      
+      // Validar estructura del token
+      if (!tokenData.token || !tokenData.expiresAt) {
+        console.log('Estructura de token inválida, usando token de entorno');
+        return process.env.WHATSAPP_TOKEN;
+      }
       
       // Verificar si el token está próximo a expirar (menos de 5 días)
       const expiresAt = new Date(tokenData.expiresAt);
@@ -67,12 +87,32 @@ class FacebookTokenManager {
         console.log('Archivo de token no encontrado, usando token de entorno');
         return process.env.WHATSAPP_TOKEN;
       }
+      
+      if (error instanceof SyntaxError) {
+        console.error('Error de sintaxis JSON en token.json, eliminando archivo corrupto...');
+        try {
+          await fs.unlink(this.tokenFilePath);
+          console.log('Archivo corrupto eliminado');
+        } catch (deleteError) {
+          console.error('No se pudo eliminar archivo corrupto:', deleteError.message);
+        }
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
       console.error('Error al cargar token:', error);
-      throw error;
+      return process.env.WHATSAPP_TOKEN; // Fallback al token de entorno
     }
   }
 
   async refreshAndSaveToken(currentToken) {
+    // Evitar refreshes simultáneos
+    if (this.isRefreshing) {
+      console.log('Refresh ya en progreso, esperando...');
+      return currentToken;
+    }
+
+    this.isRefreshing = true;
+    
     try {
       console.log('Iniciando refresh del token de Facebook...');
       const newToken = await this.refreshFacebookToken(currentToken);
@@ -83,6 +123,8 @@ class FacebookTokenManager {
       console.error('Error al refrescar token:', error);
       // Si falla el refresh, usar el token actual
       return currentToken;
+    } finally {
+      this.isRefreshing = false;
     }
   }
 
