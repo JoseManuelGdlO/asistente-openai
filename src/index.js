@@ -4,9 +4,6 @@ const OpenAI = require('openai');
 const axios = require('axios');
 require('dotenv').config();
 
-const GoogleCalendarService = require('./calendar');
-const googleCalendarService = new GoogleCalendarService();
-
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -25,6 +22,9 @@ const userThreads = new Map();
 // Cache para mensajes procesados
 const processedMessages = new Set();
 
+// Mapa para guardar el estado de los runs por thread
+const threadRuns = new Map();
+
 // WhatsApp Webhook verification
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -42,88 +42,21 @@ app.get('/webhook', (req, res) => {
   }
 });
 
-app.get('/consultar_disponibilidad', async (req, res) => {
-  const fecha_inicio = req.query.fecha_inicio;
-
-  const disponibilidad = await googleCalendarService.consultarDisponibilidad(fecha_inicio);
-
-  res.json(disponibilidad);
+app.post('/reset_threads', (req, res) => {
+  userThreads.clear();
+  console.log('=== Threads reseteados ===');
+  res.json({ ok: true, message: 'Todos los threads de usuario han sido reseteados.' });
 });
 
-app.post('/crear_evento', async (req, res) => {
-  try {
-    const {
-      fecha_inicio,
-      horario,
-      paciente,
-      descripcion,
-      tutor,
-      subSecuente,
-      mensaje,
-      telefono
-    } = req.body;
 
-    // Validar campos requeridos
-    if (!fecha_inicio || !horario || !paciente) {
-      return res.status(400).json({
-        error: true,
-        mensaje: "Faltan campos requeridos: fecha_inicio, horario y paciente son obligatorios"
-      });
-    }
-
-    const evento = await googleCalendarService.crearEvento({
-      fecha_inicio,
-      horario,
-      paciente,
-      descripcion,
-      tutor,
-      subSecuente,
-      mensaje,
-      telefono
-    });
-
-    res.json(evento);
-  } catch (error) {
-    console.error('Error al crear evento:', error);
-    res.status(500).json({
-      error: true,
-      mensaje: "Error al procesar la solicitud"
-    });
-  }
-});
-
-app.post('/cancelar_evento', async (req, res) => {
-  try {
-    const { fecha, paciente } = req.body;
-
-    // Validar campos requeridos
-    if (!fecha || !paciente) {
-      return res.status(400).json({
-        error: true,
-        mensaje: "Faltan campos requeridos: fecha y paciente son obligatorios"
-      });
-    }
-
-    const resultado = await googleCalendarService.cancelarEvento({
-      fecha,
-      paciente
-    });
-
-    res.json(resultado);
-  } catch (error) {
-    console.error('Error al cancelar evento:', error);
-    res.status(500).json({
-      error: true,
-      mensaje: "Error al procesar la solicitud"
-    });
-  }
-});
 
 // WhatsApp Webhook for receiving messages
 app.post('/webhook', async (req, res) => {
   try {
     const { body } = req;
     console.log('=== Nueva petición recibida ===');
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body completo:', JSON.stringify(body, null, 2));
     console.log('Tipo de petición:', body.object);
     console.log('Timestamp:', new Date().toISOString());
     
@@ -186,6 +119,15 @@ app.post('/webhook', async (req, res) => {
           console.log('Usando thread existente:', threadId);
         }
 
+        // === CONTROL DE RUN ACTIVO ===
+        let runStatus = threadRuns.get(threadId);
+        if (runStatus && runStatus !== 'completed' && runStatus !== 'failed') {
+          console.log('Run activo para este thread, pidiendo al usuario que espere.');
+          // Opcional: puedes enviar un mensaje a WhatsApp aquí avisando que espere
+          // O simplemente responder 429
+          return res.status(429).json({ error: 'Por favor espera a que termine la respuesta anterior.' });
+        }
+
         console.log('Mensaje del usuario:', msg_body);
         
         // Agregar el mensaje al thread
@@ -209,26 +151,30 @@ app.post('/webhook', async (req, res) => {
         });
         console.log('Run creado:', run.id);
 
+        // Guardar estado del run como in_progress
+        threadRuns.set(threadId, 'in_progress');
+
         // Esperar a que termine el run (polling)
-        let runStatus;
+        let runStatusObj;
         let retryCount = 0;
         const maxRetries = 10;
         
         do {
           await new Promise(r => setTimeout(r, 1500));
-          runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
-          console.log('Estado del run:', runStatus.status);
+          runStatusObj = await openai.beta.threads.runs.retrieve(threadId, run.id);
+          threadRuns.set(threadId, runStatusObj.status);
+          console.log('Estado del run:', runStatusObj.status);
           
-          if (runStatus.status === 'failed') {
-            console.error('Error en el run:', runStatus.last_error);
+          if (runStatusObj.status === 'failed') {
+            console.error('Error en el run:', runStatusObj.last_error);
             break;
           }
 
           // Si requiere acción, manejar tool_calls
-          if (runStatus.status === "requires_action") {
+          if (runStatusObj.status === "requires_action") {
             console.log('El run requiere acción, procesando tool_calls...');
-            console.log('Tool calls:', JSON.stringify(runStatus.required_action.submit_tool_outputs.tool_calls, null, 2));
-            await handleRequiredAction({ runStatus, threadId, run, openai });
+            console.log('Tool calls:', JSON.stringify(runStatusObj.required_action.submit_tool_outputs.tool_calls, null, 2));
+            await handleRequiredAction({ runStatus: runStatusObj, threadId, run, openai });
           }
 
           retryCount++;
@@ -236,10 +182,13 @@ app.post('/webhook', async (req, res) => {
             console.error('Se alcanzó el máximo número de reintentos');
             break;
           }
-        } while (runStatus.status !== "completed" && runStatus.status !== "failed");
+        } while (runStatusObj.status !== "completed" && runStatusObj.status !== "failed");
+
+        // Guardar estado final del run
+        threadRuns.set(threadId, runStatusObj.status);
 
         let aiResponse = "No response from assistant.";
-        if (runStatus.status === "completed") {
+        if (runStatusObj.status === "completed") {
           console.log('Run completado, obteniendo mensajes...');
           // Obtener la respuesta del assistant
           const messages = await openai.beta.threads.messages.list(threadId, {
@@ -259,9 +208,9 @@ app.post('/webhook', async (req, res) => {
             aiResponse = "Lo siento, hubo un error procesando tu solicitud. ¿Podrías intentarlo de nuevo?";
           }
         } else {
-          console.error('El run falló o no se completó:', runStatus.status);
-          if (runStatus.last_error) {
-            console.error('Error del run:', runStatus.last_error);
+          console.error('El run falló o no se completó:', runStatusObj.status);
+          if (runStatusObj.last_error) {
+            console.error('Error del run:', runStatusObj.last_error);
           }
           aiResponse = "Hubo un error procesando tu mensaje. Intenta de nuevo.";
         }
@@ -310,6 +259,19 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK' });
 });
 
+// Test endpoint para verificar que el servidor recibe peticiones
+app.post('/test', (req, res) => {
+  console.log('=== Test endpoint recibido ===');
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  res.json({ 
+    status: 'OK', 
+    message: 'Test endpoint working',
+    timestamp: new Date().toISOString(),
+    body: req.body
+  });
+});
+
 // Función para manejar required_action y tool_calls
 async function handleRequiredAction({ runStatus, threadId, run, openai }) {
   const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
@@ -331,14 +293,8 @@ async function processToolCalls(toolCalls) {
     const args = JSON.parse(toolCall.function.arguments);
     let output = null;
 
-    if (functionName === "consultar_disponibilidad") {
-        output = await googleCalendarService.consultarDisponibilidad(args.fecha_inicio, args.fecha_fin);
-      } else if (functionName === "crear_evento") {
-        output = await googleCalendarService.crearEvento(args);
-      } else {
-        output = { error: `Función ${functionName} no implementada.` };
-      }
-  
+    // Por ahora no hay funciones implementadas
+    output = { error: `Función ${functionName} no implementada.` };
 
     tool_outputs.push({
       tool_call_id: toolCall.id,
@@ -352,5 +308,12 @@ app.listen(port, () => {
     console.log('=== SERVER STARTED ===');
     console.log(`Server is running on port ${port}`);
     console.log(`Webhook URL: http://localhost:${port}/webhook`);
-  // No logs salvo error
+    console.log(`Test URL: http://localhost:${port}/test`);
+    console.log(`Health URL: http://localhost:${port}/health`);
+    console.log('Variables de entorno:');
+    console.log('- OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- ASISTENTE_ID:', process.env.ASISTENTE_ID ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- WHATSAPP_TOKEN:', process.env.WHATSAPP_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- WHATSAPP_VERIFY_TOKEN:', process.env.WHATSAPP_VERIFY_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('=== SERVER READY ===');
 }); 
