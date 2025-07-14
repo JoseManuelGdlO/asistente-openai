@@ -40,7 +40,7 @@ class FacebookTokenManager {
       console.log('Token guardado exitosamente');
       this.lastRefreshDate = new Date();
     } catch (error) {
-      console.error('Error al guardar token:', error);
+      console.error('Error al guardar token:', error); 
       throw error;
     }
   }
