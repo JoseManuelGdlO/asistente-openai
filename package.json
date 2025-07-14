@@ -12,7 +12,8 @@
     "create-assistant": "node create-assistant.js",
     "list-assistants": "node list-assistants.js",
     "refresh-token": "node refresh-token.js",
-    "reset-token": "node reset-token.js"
+    "reset-token": "node reset-token.js",
+    "send-agenda": "node send-agenda-example.js"
   },
   "keywords": [
     "openai",

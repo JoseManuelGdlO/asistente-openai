@@ -29,6 +29,76 @@ const processedMessages = new Set();
 // Mapa para guardar el estado de los runs por thread
 const threadRuns = new Map();
 
+// Mapa para guardar el contexto de conversación por usuario
+const userContext = new Map();
+
+// Patrones de mensajes de confirmación
+const confirmationPatterns = [
+  /^(muy bien|perfecto|ok|okay|vale|genial|excelente|perfecto|gracias|thank you|thanks)$/i,
+  /^(muy bien gracias|perfecto gracias|ok gracias|vale gracias|genial gracias|excelente gracias)$/i,
+  /^(está bien|esta bien|está perfecto|esta perfecto)$/i,
+  /^(confirmado|confirmo|acepto|aceptado)$/i,
+  /^(👍|✅|👌|😊|🙏)$/,
+  /^(si|sí|yes|yep|yeah|claro|por supuesto)$/i
+];
+
+// Función para detectar si un mensaje es de confirmación
+function isConfirmationMessage(message) {
+  const cleanMessage = message.trim().toLowerCase();
+  
+  // Verificar patrones de confirmación
+  for (const pattern of confirmationPatterns) {
+    if (pattern.test(cleanMessage)) {
+      return true;
+    }
+  }
+  
+  // Verificar si el mensaje es muy corto (menos de 10 caracteres) y contiene palabras de confirmación
+  if (cleanMessage.length < 10) {
+    const confirmationWords = ['bien', 'ok', 'vale', 'si', 'sí', 'yes', 'gracias', 'thanks', 'perfecto'];
+    const words = cleanMessage.split(/\s+/);
+    const hasConfirmationWord = words.some(word => confirmationWords.includes(word));
+    
+    if (hasConfirmationWord && words.length <= 3) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Función para obtener el contexto del usuario
+function getUserContext(userId) {
+  if (!userContext.has(userId)) {
+    userContext.set(userId, {
+      lastMessageType: null,
+      lastMessageTime: null,
+      confirmationCount: 0,
+      isWaitingForConfirmation: false
+    });
+  }
+  return userContext.get(userId);
+}
+
+// Función para actualizar el contexto del usuario
+function updateUserContext(userId, messageType, messageContent) {
+  const context = getUserContext(userId);
+  const now = new Date();
+  
+  context.lastMessageType = messageType;
+  context.lastMessageTime = now;
+  
+  if (messageType === 'confirmation') {
+    context.confirmationCount++;
+    context.isWaitingForConfirmation = false;
+  } else if (messageType === 'agenda_sent') {
+    context.isWaitingForConfirmation = true;
+    context.confirmationCount = 0;
+  }
+  
+  userContext.set(userId, context);
+}
+
 // WhatsApp Webhook verification
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -52,6 +122,81 @@ app.post('/reset_threads', (req, res) => {
   userThreads.clear();
   console.log('=== Threads reseteados ===');
   res.json({ ok: true, message: 'Todos los threads de usuario han sido reseteados.' });
+});
+
+// Endpoint para marcar que se envió la agenda del día a un usuario
+app.post('/mark-agenda-sent', (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'userId es requerido' 
+      });
+    }
+    
+    // Marcar que se envió la agenda y estamos esperando confirmación
+    updateUserContext(userId, 'agenda_sent', 'Agenda del día enviada');
+    
+    console.log(`=== Agenda marcada como enviada para usuario: ${userId} ===`);
+    
+    res.json({ 
+      ok: true, 
+      message: `Usuario ${userId} marcado como agenda enviada`,
+      context: getUserContext(userId)
+    });
+  } catch (error) {
+    console.error('Error al marcar agenda enviada:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al marcar agenda enviada',
+      details: error.message 
+    });
+  }
+});
+
+// Endpoint para ver el contexto de un usuario
+app.get('/user-context/:userId', (req, res) => {
+  try {
+    const { userId } = req.params;
+    const context = getUserContext(userId);
+    
+    res.json({
+      ok: true,
+      userId: userId,
+      context: context
+    });
+  } catch (error) {
+    console.error('Error al obtener contexto del usuario:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al obtener contexto del usuario',
+      details: error.message 
+    });
+  }
+});
+
+// Endpoint para limpiar el contexto de un usuario
+app.post('/clear-user-context/:userId', (req, res) => {
+  try {
+    const { userId } = req.params;
+    userContext.delete(userId);
+    
+    console.log(`=== Contexto limpiado para usuario: ${userId} ===`);
+    
+    res.json({ 
+      ok: true, 
+      message: `Contexto limpiado para usuario ${userId}`
+    });
+  } catch (error) {
+    console.error('Error al limpiar contexto del usuario:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al limpiar contexto del usuario',
+      details: error.message 
+    });
+  }
 });
 
 // Endpoint para refrescar manualmente el token de Facebook
@@ -172,6 +317,60 @@ app.post('/webhook', async (req, res) => {
           oldestMessages.forEach(id => processedMessages.delete(id));
         }
 
+        // === DETECCIÓN DE MENSAJES DE CONFIRMACIÓN ===
+        const userCtx = getUserContext(from);
+        const isConfirmation = isConfirmationMessage(msg_body);
+        
+        console.log('Mensaje del usuario:', msg_body);
+        console.log('¿Es confirmación?', isConfirmation);
+        console.log('Contexto del usuario:', userCtx);
+        
+        // Si es un mensaje de confirmación y estamos esperando confirmación, responder sin procesar con IA
+        if (isConfirmation && userCtx.isWaitingForConfirmation) {
+          console.log('Mensaje de confirmación detectado, respondiendo automáticamente');
+          
+          const confirmationResponse = "¡Perfecto! Me alegra saber que todo está bien. Si necesitas algo más, no dudes en preguntarme. 😊";
+          
+          try {
+            const messageData = {
+              messaging_product: 'whatsapp',
+              to: from,
+              text: { 
+                body: confirmationResponse 
+              }
+            };
+            
+            console.log('Enviando respuesta de confirmación a WhatsApp');
+            
+            const validToken = await facebookTokenManager.getValidTokenWithAutoRefresh();
+            
+            const response = await axios({
+              method: 'POST',
+              url: `https://graph.facebook.com/v17.0/${phone_number_id}/messages`,
+              headers: {
+                'Authorization': `Bearer ${validToken}`,
+                'Content-Type': 'application/json',
+              },
+              data: messageData
+            });
+            
+            console.log('Respuesta de confirmación enviada:', response.data);
+            
+            // Actualizar contexto del usuario
+            updateUserContext(from, 'confirmation', msg_body);
+            
+            return res.sendStatus(200);
+          } catch (error) {
+            console.error('Error al enviar respuesta de confirmación:', error.response?.data || error.message);
+            return res.sendStatus(500);
+          }
+        }
+        
+        // Si es confirmación pero no estamos esperando confirmación, procesar normalmente
+        if (isConfirmation) {
+          updateUserContext(from, 'confirmation', msg_body);
+        }
+
         // Obtener o crear thread para el usuario
         let threadId = userThreads.get(from);
         if (!threadId) {
@@ -191,8 +390,6 @@ app.post('/webhook', async (req, res) => {
           // O simplemente responder 429
           return res.status(429).json({ error: 'Por favor espera a que termine la respuesta anterior.' });
         }
-
-        console.log('Mensaje del usuario:', msg_body);
         
         // Agregar el mensaje al thread
         const threadMessage = await openai.beta.threads.messages.create(threadId, {
