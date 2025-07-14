@@ -76,8 +76,8 @@ class FacebookTokenManager {
       const daysUntilExpiry = (expiresAt - now) / (1000 * 60 * 60 * 24);
 
       if (daysUntilExpiry < 5) {
-        console.log(`Token expira en ${daysUntilExpiry.toFixed(1)} días, refrescando...`);
-        return await this.refreshAndSaveToken(tokenData.token);
+        console.log(`Token expira en ${daysUntilExpiry.toFixed(1)} días, pero no se refrescará automáticamente`);
+        console.log('Usar endpoint /refresh-token para refrescar manualmente');
       }
 
       this.lastRefreshDate = new Date(tokenData.refreshDate);
@@ -135,7 +135,8 @@ class FacebookTokenManager {
     this.refreshInterval = setInterval(async () => {
       try {
         console.log('Ejecutando refresh automático del token...');
-        const currentToken = await this.loadToken();
+        // Obtener token actual sin verificar expiración para evitar bucles
+        const currentToken = await this.getCurrentToken();
         await this.refreshAndSaveToken(currentToken);
       } catch (error) {
         console.error('Error en refresh automático:', error);
@@ -150,6 +151,38 @@ class FacebookTokenManager {
       clearInterval(this.refreshInterval);
       this.refreshInterval = null;
       console.log('Refresh automático detenido');
+    }
+  }
+
+  async getCurrentToken() {
+    try {
+      const data = await fs.readFile(this.tokenFilePath, 'utf8');
+      
+      // Validar que el archivo no esté vacío
+      if (!data || data.trim() === '') {
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
+      const tokenData = JSON.parse(data);
+      
+      // Validar estructura del token
+      if (!tokenData.token) {
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
+      return tokenData.token;
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
+      if (error instanceof SyntaxError) {
+        console.error('Error de sintaxis JSON en token.json, usando token de entorno');
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
+      console.error('Error al obtener token actual:', error);
+      return process.env.WHATSAPP_TOKEN;
     }
   }
 
