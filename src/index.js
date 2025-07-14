@@ -221,13 +221,13 @@ app.post('/webhook', async (req, res) => {
         // Esperar a que termine el run (polling)
         let runStatusObj;
         let retryCount = 0;
-        const maxRetries = 10;
+        const maxRetries = 150; // Aumentado a 150 (5 minutos total)
         
         do {
-          await new Promise(r => setTimeout(r, 1500));
+          await new Promise(r => setTimeout(r, 2000)); // 2 segundos entre intentos
           runStatusObj = await openai.beta.threads.runs.retrieve(threadId, run.id);
           threadRuns.set(threadId, runStatusObj.status);
-          console.log('Estado del run:', runStatusObj.status);
+          console.log(`Estado del run: ${runStatusObj.status} (intento ${retryCount + 1}/${maxRetries})`);
           
           if (runStatusObj.status === 'failed') {
             console.error('Error en el run:', runStatusObj.last_error);
@@ -243,7 +243,8 @@ app.post('/webhook', async (req, res) => {
 
           retryCount++;
           if (retryCount >= maxRetries) {
-            console.error('Se alcanzó el máximo número de reintentos');
+            console.error(`Se alcanzó el máximo número de reintentos (${maxRetries}). El asistente está tardando más de lo esperado.`);
+            console.error(`Tiempo total esperado: ${(maxRetries * 2)} segundos (${Math.round((maxRetries * 2) / 60)} minutos)`);
             break;
           }
         } while (runStatusObj.status !== "completed" && runStatusObj.status !== "failed");
