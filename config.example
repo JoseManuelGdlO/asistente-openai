@@ -9,5 +9,9 @@ ASISTENTE_ID=asst-your-assistant-id-here
 WHATSAPP_TOKEN=your-whatsapp-access-token-here
 WHATSAPP_VERIFY_TOKEN=your-custom-verify-token-here
 
+# Facebook App Configuration (para refresh automático de token)
+FB_APP_ID=your-facebook-app-id-here
+FB_APP_SECRET=your-facebook-app-secret-here
+
 # Server Configuration
 PORT=3000 

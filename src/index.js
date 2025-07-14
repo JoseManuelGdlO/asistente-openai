@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const OpenAI = require('openai');
 const axios = require('axios');
+const FacebookTokenManager = require('./facebookTokenManager');
 require('dotenv').config();
 
 const app = express();
@@ -15,6 +16,9 @@ app.use(express.json());
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+// Initialize Facebook Token Manager
+const facebookTokenManager = new FacebookTokenManager();
 
 // Store thread IDs per user
 const userThreads = new Map();
@@ -42,10 +46,59 @@ app.get('/webhook', (req, res) => {
   }
 });
 
+
+
 app.post('/reset_threads', (req, res) => {
   userThreads.clear();
   console.log('=== Threads reseteados ===');
   res.json({ ok: true, message: 'Todos los threads de usuario han sido reseteados.' });
+});
+
+// Endpoint para refrescar manualmente el token de Facebook
+app.post('/refresh-token', async (req, res) => {
+  try {
+    console.log('=== Refresh manual de token solicitado ===');
+    const currentToken = await facebookTokenManager.getValidToken();
+    const newToken = await facebookTokenManager.refreshAndSaveToken(currentToken);
+    
+    res.json({ 
+      ok: true, 
+      message: 'Token refrescado exitosamente',
+      refreshDate: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error en refresh manual:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al refrescar token',
+      details: error.message 
+    });
+  }
+});
+
+// Endpoint para ver el estado del token
+app.get('/token-status', async (req, res) => {
+  try {
+    const token = await facebookTokenManager.getValidToken();
+    const tokenData = await facebookTokenManager.loadToken();
+    
+    res.json({
+      ok: true,
+      hasToken: !!token,
+      tokenLength: token ? token.length : 0,
+      lastRefresh: facebookTokenManager.lastRefreshDate,
+      expiresAt: tokenData?.expiresAt,
+      daysUntilExpiry: tokenData?.expiresAt ? 
+        Math.ceil((new Date(tokenData.expiresAt) - new Date()) / (1000 * 60 * 60 * 24)) : null
+    });
+  } catch (error) {
+    console.error('Error al obtener estado del token:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al obtener estado del token',
+      details: error.message 
+    });
+  }
 });
 
 
@@ -227,11 +280,14 @@ app.post('/webhook', async (req, res) => {
           
           console.log('Enviando mensaje a WhatsApp:', JSON.stringify(messageData, null, 2));
           
+          // Obtener token válido de Facebook
+          const validToken = await facebookTokenManager.getValidToken();
+          
           const response = await axios({
             method: 'POST',
             url: `https://graph.facebook.com/v17.0/${phone_number_id}/messages`,
             headers: {
-              'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+              'Authorization': `Bearer ${validToken}`,
               'Content-Type': 'application/json',
             },
             data: messageData
@@ -304,7 +360,7 @@ async function processToolCalls(toolCalls) {
   return tool_outputs;
 }
 
-app.listen(port, () => {
+app.listen(port, async () => {
     console.log('=== SERVER STARTED ===');
     console.log(`Server is running on port ${port}`);
     console.log(`Webhook URL: http://localhost:${port}/webhook`);
@@ -315,5 +371,17 @@ app.listen(port, () => {
     console.log('- ASISTENTE_ID:', process.env.ASISTENTE_ID ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- WHATSAPP_TOKEN:', process.env.WHATSAPP_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- WHATSAPP_VERIFY_TOKEN:', process.env.WHATSAPP_VERIFY_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- FB_APP_ID:', process.env.FB_APP_ID ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- FB_APP_SECRET:', process.env.FB_APP_SECRET ? 'Configurado' : 'NO CONFIGURADO');
+    
+    // Inicializar sistema de refresh de token de Facebook
+    try {
+      console.log('Inicializando sistema de refresh de token de Facebook...');
+      await facebookTokenManager.startAutoRefresh();
+      console.log('Sistema de refresh de token inicializado correctamente');
+    } catch (error) {
+      console.error('Error al inicializar sistema de refresh de token:', error);
+    }
+    
     console.log('=== SERVER READY ===');
 }); 
