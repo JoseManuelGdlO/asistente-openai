@@ -47,13 +47,7 @@ class FacebookTokenManager {
       console.log('Token guardado exitosamente');
       this.lastRefreshDate = new Date();
     } catch (error) {
-      console.error('Error al guardar token:', error);
-      // Intentar limpiar archivo temporal si existe
-      try {
-        await fs.unlink(this.tokenFilePath + '.tmp');
-      } catch (cleanupError) {
-        // Ignorar error de limpieza
-      }
+      console.error('Error al guardar token:', error); 
       throw error;
     }
   }
