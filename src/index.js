@@ -79,8 +79,18 @@ app.post('/refresh-token', async (req, res) => {
 // Endpoint para ver el estado del token
 app.get('/token-status', async (req, res) => {
   try {
-    const token = await facebookTokenManager.getValidToken();
+    const token = await facebookTokenManager.getValidTokenWithAutoRefresh();
     const tokenData = await facebookTokenManager.loadToken();
+    
+    let daysUntilExpiry = null;
+    let needsRefresh = false;
+    
+    if (tokenData?.expiresAt) {
+      const expiresAt = new Date(tokenData.expiresAt);
+      const now = new Date();
+      daysUntilExpiry = Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24));
+      needsRefresh = daysUntilExpiry < 5;
+    }
     
     res.json({
       ok: true,
@@ -88,8 +98,9 @@ app.get('/token-status', async (req, res) => {
       tokenLength: token ? token.length : 0,
       lastRefresh: facebookTokenManager.lastRefreshDate,
       expiresAt: tokenData?.expiresAt,
-      daysUntilExpiry: tokenData?.expiresAt ? 
-        Math.ceil((new Date(tokenData.expiresAt) - new Date()) / (1000 * 60 * 60 * 24)) : null
+      daysUntilExpiry: daysUntilExpiry,
+      needsRefresh: needsRefresh,
+      autoRefreshEnabled: true
     });
   } catch (error) {
     console.error('Error al obtener estado del token:', error);
@@ -279,9 +290,10 @@ app.post('/webhook', async (req, res) => {
           };
           
           console.log('Enviando mensaje a WhatsApp:', JSON.stringify(messageData, null, 2));
+          console.log('=== Verificando caducidad del token antes de enviar mensaje ===');
           
-          // Obtener token válido de Facebook
-          const validToken = await facebookTokenManager.getValidToken();
+          // Obtener token válido de Facebook con verificación automática de caducidad
+          const validToken = await facebookTokenManager.getValidTokenWithAutoRefresh();
           
           const response = await axios({
             method: 'POST',
@@ -374,14 +386,6 @@ app.listen(port, async () => {
     console.log('- FB_APP_ID:', process.env.FB_APP_ID ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- FB_APP_SECRET:', process.env.FB_APP_SECRET ? 'Configurado' : 'NO CONFIGURADO');
     
-    // Inicializar sistema de refresh de token de Facebook
-    try {
-      console.log('Inicializando sistema de refresh de token de Facebook...');
-      await facebookTokenManager.startAutoRefresh();
-      console.log('Sistema de refresh de token inicializado correctamente');
-    } catch (error) {
-      console.error('Error al inicializar sistema de refresh de token:', error);
-    }
     
     console.log('=== SERVER READY ===');
 }); 

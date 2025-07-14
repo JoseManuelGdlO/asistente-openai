@@ -37,12 +37,8 @@ class FacebookTokenManager {
     };
 
     try {
-      // Escribir a un archivo temporal primero
-      const tempFilePath = this.tokenFilePath + '.tmp';
-      await fs.writeFile(tempFilePath, JSON.stringify(tokenData, null, 2));
-      
-      // Luego renombrar el archivo temporal al archivo final
-      await fs.rename(tempFilePath, this.tokenFilePath);
+      // Escribir directamente al archivo (más simple y evita problemas de permisos en Windows)
+      await fs.writeFile(this.tokenFilePath, JSON.stringify(tokenData, null, 2));
       
       console.log('Token guardado exitosamente');
       this.lastRefreshDate = new Date();
@@ -76,8 +72,10 @@ class FacebookTokenManager {
       const daysUntilExpiry = (expiresAt - now) / (1000 * 60 * 60 * 24);
 
       if (daysUntilExpiry < 5) {
-        console.log(`Token expira en ${daysUntilExpiry.toFixed(1)} días, refrescando...`);
-        return await this.refreshAndSaveToken(tokenData.token);
+        console.log(`Token expira en ${daysUntilExpiry.toFixed(1)} días, pero no se refrescará automáticamente`);
+        const newToken = await this.refreshAndSaveToken(tokenData.token);
+        console.log('Token refrescado exitosamente');
+        return newToken;
       }
 
       this.lastRefreshDate = new Date(tokenData.refreshDate);
@@ -128,28 +126,35 @@ class FacebookTokenManager {
     }
   }
 
-  async startAutoRefresh() {
-    // Refrescar token cada 50 días (en milisegundos)
-    const refreshIntervalMs = 50 * 24 * 60 * 60 * 1000;
-    
-    this.refreshInterval = setInterval(async () => {
-      try {
-        console.log('Ejecutando refresh automático del token...');
-        const currentToken = await this.loadToken();
-        await this.refreshAndSaveToken(currentToken);
-      } catch (error) {
-        console.error('Error en refresh automático:', error);
+  async getCurrentToken() {
+    try {
+      const data = await fs.readFile(this.tokenFilePath, 'utf8');
+      
+      // Validar que el archivo no esté vacío
+      if (!data || data.trim() === '') {
+        return process.env.WHATSAPP_TOKEN;
       }
-    }, refreshIntervalMs);
-
-    console.log(`Refresh automático configurado para ejecutarse cada 50 días`);
-  }
-
-  stopAutoRefresh() {
-    if (this.refreshInterval) {
-      clearInterval(this.refreshInterval);
-      this.refreshInterval = null;
-      console.log('Refresh automático detenido');
+      
+      const tokenData = JSON.parse(data);
+      
+      // Validar estructura del token
+      if (!tokenData.token) {
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
+      return tokenData.token;
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
+      if (error instanceof SyntaxError) {
+        console.error('Error de sintaxis JSON en token.json, usando token de entorno');
+        return process.env.WHATSAPP_TOKEN;
+      }
+      
+      console.error('Error al obtener token actual:', error);
+      return process.env.WHATSAPP_TOKEN;
     }
   }
 
@@ -158,6 +163,46 @@ class FacebookTokenManager {
       return await this.loadToken();
     } catch (error) {
       console.error('Error al obtener token válido:', error);
+      // Fallback al token de entorno
+      return process.env.WHATSAPP_TOKEN;
+    }
+  }
+
+  async getValidTokenWithAutoRefresh() {
+    try {
+      // Primero cargar el token actual
+      const currentToken = await this.loadToken();
+      
+      // Verificar si el token está próximo a expirar (menos de 5 días)
+      try {
+        const data = await fs.readFile(this.tokenFilePath, 'utf8');
+        
+        if (data && data.trim() !== '') {
+          const tokenData = JSON.parse(data);
+          
+          if (tokenData.expiresAt) {
+            const expiresAt = new Date(tokenData.expiresAt);
+            const now = new Date();
+            const daysUntilExpiry = (expiresAt - now) / (1000 * 60 * 60 * 24);
+            
+            console.log(`Token expira en ${daysUntilExpiry.toFixed(1)} días`);
+            
+            // Si está por vencer (menos de 5 días), hacer refresh automático
+            if (daysUntilExpiry < 5) {
+              console.log('Token próximo a expirar, aplicando refresh automático...');
+              const newToken = await this.refreshAndSaveToken(currentToken);
+              console.log('Refresh automático completado');
+              return newToken;
+            }
+          }
+        }
+      } catch (error) {
+        console.log('No se pudo verificar la expiración del token, usando token actual');
+      }
+      
+      return currentToken;
+    } catch (error) {
+      console.error('Error al obtener token válido con auto-refresh:', error);
       // Fallback al token de entorno
       return process.env.WHATSAPP_TOKEN;
     }

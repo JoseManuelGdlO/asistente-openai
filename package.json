@@ -11,7 +11,8 @@
     "test-webhook": "node test-webhook.js",
     "create-assistant": "node create-assistant.js",
     "list-assistants": "node list-assistants.js",
-    "refresh-token": "node refresh-token.js"
+    "refresh-token": "node refresh-token.js",
+    "reset-token": "node reset-token.js"
   },
   "keywords": [
     "openai",
