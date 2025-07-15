@@ -198,33 +198,36 @@ app.post('/webhook', async (req, res) => {
   try {
     const { body } = req;
     console.log('=== Nueva petición recibida de UltraMsg ===');
-    // console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    // console.log('Body completo:', JSON.stringify(body, null, 2));
-    // console.log('Timestamp:', new Date().toISOString());
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body completo:', JSON.stringify(body, null, 2));
+    console.log('Timestamp:', new Date().toISOString());
     
     // Verificar si es un mensaje de UltraMsg
-    if (body && body.data && body.data.body) {
-      const message = body.data;
-      console.log('Mensaje recibido de:', message.from);
-      console.log('ID del mensaje:', message.id);
+    if (body && body.key && body.message) {
+      const message = body;
+      console.log('Mensaje recibido de:', message.key.remoteJid);
+      console.log('ID del mensaje:', message.key.id);
+      console.log('Tipo de mensaje:', message.message.messageType);
       
       // Verificar si ya procesamos este mensaje
-      if (processedMessages.has(message.id)) {
-        console.log('Mensaje ya procesado, ignorando:', message.id);
+      if (processedMessages.has(message.key.id)) {
+        console.log('Mensaje ya procesado, ignorando:', message.key.id);
         return res.sendStatus(200);
       }
 
       // Marcar mensaje como procesado ANTES de procesarlo
-      processedMessages.add(message.id);
+      processedMessages.add(message.key.id);
 
       // Verificar si es un mensaje de texto
-      if (body.event_type === 'message_create') {
+      if (message.message.messageType !== 'conversation' && 
+          message.message.messageType !== 'extendedTextMessage') {
         console.log('Mensaje no es de tipo texto, ignorando');
         return res.sendStatus(200);
       }
 
-      const from = message.from.replace('@c.us', '');
-      const msg_body = message.body;
+      const from = message.key.remoteJid.replace('@s.whatsapp.net', '');
+      const msg_body = message.message.conversation || 
+                      message.message.extendedTextMessage?.text || '';
 
       // Limpiar mensajes antiguos (mantener solo los últimos 1000)
       if (processedMessages.size > 1000) {
@@ -352,7 +355,7 @@ app.post('/webhook', async (req, res) => {
           limit: 1
         });
         
-        // console.log('Mensajes obtenidos:', JSON.stringify(messages.data[0], null, 2));
+        console.log('Mensajes obtenidos:', JSON.stringify(messages.data[0], null, 2));
         
         // Verificar que el mensaje sea del asistente y tenga contenido
         const lastMsg = messages.data[0];
@@ -463,7 +466,7 @@ app.listen(port, async () => {
       
       if (isConnected) {
         const info = await ultraMsgManager.getInstanceInfo();
-        console.log('- Número de UltraMsg:', info.name || 'No disponible');
+        console.log('- Número de UltraMsg:', info.wid || 'No disponible');
       }
     } catch (error) {
       console.log('- UltraMsg conectado: ❌ Error verificando conexión');
