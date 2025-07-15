@@ -12,7 +12,9 @@
     "create-assistant": "node create-assistant.js",
     "list-assistants": "node list-assistants.js",
     "refresh-token": "node refresh-token.js",
-    "reset-token": "node reset-token.js"
+    "reset-token": "node reset-token.js",
+    "check-token": "node check-token-type.js",
+    "test-ultramsg": "node test-ultramsg.js"
   },
   "keywords": [
     "openai",

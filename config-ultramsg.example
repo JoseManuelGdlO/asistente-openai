@@ -1,0 +1,14 @@
+# Configuración de variables de entorno para UltraMsg
+# Copia este archivo como .env y llena los valores
+
+# OpenAI Configuration
+OPENAI_API_KEY=sk-your-openai-api-key-here
+ASISTENTE_ID=asst-your-assistant-id-here
+
+# UltraMsg Configuration (reemplaza Meta/WhatsApp)
+ULTRAMSG_TOKEN=your-ultramsg-token-here
+ULTRAMSG_INSTANCE_ID=your-instance-id-here
+ULTRAMSG_WEBHOOK_TOKEN=your-webhook-token-here
+
+# Server Configuration
+PORT=3000 
