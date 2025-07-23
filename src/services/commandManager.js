@@ -55,11 +55,12 @@ class CommandManager {
     
     // Buscar variables de entorno que empiecen con CLIENTE
     Object.keys(process.env).forEach(key => {
-      if (key.startsWith('CLIENTE') && key.includes('_PHONE')) {
-        const clientCode = key.split('_')[0]; // CLIENTE001_PHONE -> CLIENTE001
+      if (key.startsWith('CLIENTE') && key.includes('_ASSISTANT_PHONE')) {
+        const clientCode = key.split('_')[0]; // CLIENTE001_ASSISTANT_PHONE -> CLIENTE001
         
         config[clientCode] = {
-          phone: process.env[key],
+          adminPhone: process.env[`${clientCode}_PHONE`] || '',
+          assistantPhone: process.env[key], // CLIENTE001_ASSISTANT_PHONE
           name: process.env[`${clientCode}_NAME`] || clientCode,
           assistantId: process.env[`${clientCode}_ASSISTANT`] || process.env.ASISTENTE_ID,
           status: 'active'
@@ -80,7 +81,7 @@ class CommandManager {
   isAuthorizedNumber(phoneNumber, clientCode) {
     const client = this.clientConfig[clientCode];
     // Comparar solo el número sin @c.us
-    const clientPhone = client?.phone?.split('@')[0];
+    const clientPhone = client?.adminPhone?.split('@')[0];
     const inputPhone = phoneNumber?.split('@')[0];
     return client && clientPhone === inputPhone;
   }
@@ -212,6 +213,37 @@ class CommandManager {
   }
 
   /**
+   * Obtiene el cliente basándose en el número de teléfono del asistente
+   * @param {string} assistantPhone - Número de teléfono del asistente (destinatario)
+   * @returns {string|null} - Código del cliente o null si no se encuentra
+   */
+  getClientByAssistantPhone(assistantPhone) {
+    const cleanPhone = assistantPhone?.split('@')[0];
+    
+    for (const [clientCode, client] of Object.entries(this.clientConfig)) {
+      const clientAssistantPhone = client.assistantPhone?.split('@')[0];
+      if (clientAssistantPhone === cleanPhone) {
+        return clientCode;
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * Obtiene el ID del asistente para un número de teléfono específico
+   * @param {string} assistantPhone - Número de teléfono del asistente (destinatario)
+   * @returns {string|null} - ID del asistente o null si no se encuentra
+   */
+  getAssistantIdByPhone(assistantPhone) {
+    const clientCode = this.getClientByAssistantPhone(assistantPhone);
+    if (clientCode) {
+      return this.clientConfig[clientCode].assistantId;
+    }
+    return null;
+  }
+
+  /**
    * Obtiene el mensaje de ayuda para un cliente
    * @param {string} clientCode - Código del cliente
    * @returns {string} - Mensaje de ayuda
@@ -240,8 +272,9 @@ class CommandManager {
     const statusText = status === 'active' ? '🟢 ACTIVO' : '🔴 INACTIVO';
     
     return `🏥 Información de ${client.name}:\n\n` +
-           `📞 Número: ${client.phone}\n` +
-           `🤖 Asistente: ${client.assistantId}\n` +
+           `📞 Admin: ${client.adminPhone}\n` +
+           `📱 Asistente: ${client.assistantPhone}\n` +
+           `🤖 ID Asistente: ${client.assistantId}\n` +
            `📊 Estado: ${statusText}\n` +
            `🔑 Código: ${clientCode}`;
   }
@@ -256,6 +289,8 @@ class CommandManager {
       status[clientCode] = {
         name: this.clientConfig[clientCode].name,
         status: this.botStatus.get(clientCode),
+        adminPhone: this.clientConfig[clientCode].adminPhone,
+        assistantPhone: this.clientConfig[clientCode].assistantPhone,
         assistantId: this.clientConfig[clientCode].assistantId
       };
     });

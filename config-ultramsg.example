@@ -11,20 +11,23 @@ ULTRAMSG_INSTANCE_ID=your-instance-id-here
 ULTRAMSG_WEBHOOK_TOKEN=your-webhook-token-here
 
 # ==================== CONFIGURACIÓN DE CLIENTES ====================
-# Formato: CLIENTE001_PHONE, CLIENTE001_NAME, CLIENTE001_ASSISTANT
+# Formato: CLIENTE001_PHONE (admin), CLIENTE001_ASSISTANT_PHONE (número del asistente), CLIENTE001_NAME, CLIENTE001_ASSISTANT
 
 # Cliente 1
-CLIENTE001_PHONE=5216181344331@c.us
+CLIENTE001_PHONE=5216181344331@c.us          # Número del administrador
+CLIENTE001_ASSISTANT_PHONE=6182191002        # Número donde llegan los mensajes del asistente
 CLIENTE001_NAME=Consultorio Dr. García
 CLIENTE001_ASSISTANT=asst-abc123
 
 # Cliente 2
-CLIENTE002_PHONE=5216182191002@c.us
+CLIENTE002_PHONE=5216182191002@c.us          # Número del administrador
+CLIENTE002_ASSISTANT_PHONE=6181344331        # Número donde llegan los mensajes del asistente
 CLIENTE002_NAME=Clínica Dental Sonrisa
 CLIENTE002_ASSISTANT=asst-def456
 
 # Cliente 3 (ejemplo)
-# CLIENTE003_PHONE=5216189999999@c.us
+# CLIENTE003_PHONE=5216189999999@c.us        # Número del administrador
+# CLIENTE003_ASSISTANT_PHONE=6188888888      # Número donde llegan los mensajes del asistente
 # CLIENTE003_NAME=Centro Médico Integral
 # CLIENTE003_ASSISTANT=asst-ghi789
 

@@ -6,7 +6,7 @@ class OpenAIManager {
       apiKey: process.env.OPENAI_API_KEY
     });
     
-    // Store thread IDs per user
+    // Store thread IDs per user and client combination
     this.userThreads = new Map();
     
     // Mapa para guardar el estado de los runs por thread
@@ -14,19 +14,21 @@ class OpenAIManager {
   }
 
   /**
-   * Obtiene o crea un thread para un usuario
+   * Obtiene o crea un thread para un usuario y cliente específico
    * @param {string} userId - ID del usuario
+   * @param {string} clientCode - Código del cliente
    * @returns {string} - ID del thread
    */
-  async getOrCreateThread(userId) {
-    let threadId = this.userThreads.get(userId);
+  async getOrCreateThread(userId, clientCode) {
+    const threadKey = `${userId}_${clientCode}`;
+    let threadId = this.userThreads.get(threadKey);
     if (!threadId) {
-      console.log('Creando nuevo thread para usuario:', userId);
+      console.log('Creando nuevo thread para usuario:', userId, 'cliente:', clientCode);
       const thread = await this.openai.beta.threads.create();
       threadId = thread.id;
-      this.userThreads.set(userId, threadId);
+      this.userThreads.set(threadKey, threadId);
     } else {
-      console.log('Usando thread existente:', threadId);
+      console.log('Usando thread existente:', threadId, 'para cliente:', clientCode);
     }
     return threadId;
   }
@@ -74,12 +76,13 @@ class OpenAIManager {
   /**
    * Crea y ejecuta un run
    * @param {string} threadId - ID del thread
+   * @param {string} assistantId - ID del asistente a usar
    * @returns {Object} - Run creado
    */
-  async createRun(threadId) {
-    console.log('Creando run con asistente:', process.env.ASISTENTE_ID);
+  async createRun(threadId, assistantId) {
+    console.log('Creando run con asistente:', assistantId);
     const run = await this.openai.beta.threads.runs.create(threadId, {
-      assistant_id: process.env.ASISTENTE_ID
+      assistant_id: assistantId
     });
     console.log('Run creado:', run.id);
     
@@ -202,11 +205,13 @@ class OpenAIManager {
    * Procesa un mensaje completo con OpenAI
    * @param {string} userId - ID del usuario
    * @param {string} message - Mensaje del usuario
+   * @param {string} assistantId - ID del asistente a usar
+   * @param {string} clientCode - Código del cliente (opcional, para threads)
    * @returns {string} - Respuesta del asistente
    */
-  async processMessage(userId, message) {
-    // Obtener o crear thread para el usuario
-    const threadId = await this.getOrCreateThread(userId);
+  async processMessage(userId, message, assistantId, clientCode = 'default') {
+    // Obtener o crear thread para el usuario y cliente
+    const threadId = await this.getOrCreateThread(userId, clientCode);
 
     // Verificar si hay un run activo
     if (this.hasActiveRun(threadId)) {
@@ -219,8 +224,8 @@ class OpenAIManager {
     // Obtener mensajes anteriores para contexto
     await this.getPreviousMessages(threadId, 5);
 
-    // Crear y ejecutar el run
-    const run = await this.createRun(threadId);
+    // Crear y ejecutar el run con el asistente específico
+    const run = await this.createRun(threadId, assistantId);
 
     // Esperar a que termine el run
     const runStatusObj = await this.waitForRunCompletion(threadId, run.id);

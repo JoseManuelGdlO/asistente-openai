@@ -43,6 +43,31 @@ El sistema de comandos permite controlar remotamente los bots de cada cliente/co
 - Los comandos `/help` e `/info` están disponibles para cualquier número
 - La autenticación compara solo el número sin `@c.us`
 
+## 🏥 Detección Automática de Clientes
+
+### **Cómo Funciona**
+El sistema detecta automáticamente qué cliente es basándose en el **número de teléfono del asistente** (destinatario):
+
+1. **Mensaje llega** → Sistema extrae el campo `to` del mensaje
+2. **Busca cliente** → Compara con `CLIENTE001_ASSISTANT_PHONE`, `CLIENTE002_ASSISTANT_PHONE`, etc.
+3. **Identifica cliente** → Encuentra el código del cliente (CLIENTE001, CLIENTE002, etc.)
+4. **Usa asistente correcto** → Obtiene el `CLIENTE001_ASSISTANT` correspondiente
+5. **Procesa mensaje** → Usa el asistente específico del cliente
+
+### **Configuración de Números**
+- **`CLIENTE001_PHONE`**: Número del administrador (quien puede enviar comandos)
+- **`CLIENTE001_ASSISTANT_PHONE`**: Número donde llegan los mensajes del asistente
+- **`CLIENTE001_ASSISTANT`**: ID del asistente de OpenAI para este cliente
+
+### **Ejemplo Práctico**
+```
+Mensaje llega a: 6182191002
+Sistema busca: CLIENTE001_ASSISTANT_PHONE=6182191002 ✓
+Cliente detectado: CLIENTE001
+Asistente usado: asst-abc123
+Thread guardado: usuario_CLIENTE001
+```
+
 ## 📱 Envío de Respuestas
 
 ### **Respuestas Automáticas**
@@ -61,12 +86,14 @@ El sistema de comandos permite controlar remotamente los bots de cada cliente/co
 ### **Configuración de Clientes**
 ```env
 # Cliente 1
-CLIENTE001_PHONE=5216181344331@c.us
+CLIENTE001_PHONE=5216181344331@c.us          # Número del administrador
+CLIENTE001_ASSISTANT_PHONE=6182191002        # Número donde llegan los mensajes del asistente
 CLIENTE001_NAME=Consultorio Dr. García
 CLIENTE001_ASSISTANT=asst-abc123
 
 # Cliente 2
-CLIENTE002_PHONE=5216182191002@c.us
+CLIENTE002_PHONE=5216182191002@c.us          # Número del administrador
+CLIENTE002_ASSISTANT_PHONE=6181344331        # Número donde llegan los mensajes del asistente
 CLIENTE002_NAME=Clínica Dental Sonrisa
 CLIENTE002_ASSISTANT=asst-def456
 ```
@@ -123,8 +150,9 @@ Bot: 📋 Comandos disponibles para Consultorio Dr. García:
 Usuario: #CLIENTE001 /info
 Bot: 🏥 Información de Consultorio Dr. García:
 
-     📞 Número: 5216181344331@c.us
-     🤖 Asistente: asst-abc123
+     📞 Admin: 5216181344331@c.us
+     📱 Asistente: 6182191002
+     🤖 ID Asistente: asst-abc123
      📊 Estado: 🟢 ACTIVO
      🔑 Código: CLIENTE001
 ```

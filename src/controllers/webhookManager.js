@@ -164,17 +164,35 @@ class WebhookManager {
       return null; // Ya se procesó como confirmación
     }
 
-    // Verificar si el bot está activo para este cliente
-    // Por ahora, asumimos que todos los mensajes son para el cliente por defecto
-    // En el futuro, esto se puede mejorar para detectar automáticamente el cliente
-    const defaultClientCode = Object.keys(this.commandManager.getClientConfig())[0];
-    if (defaultClientCode && !this.commandManager.isBotActive(defaultClientCode)) {
-      console.log('🤖 Bot inactivo para cliente:', defaultClientCode);
-      return "🤖 Bot está apagado. Escribe #" + defaultClientCode + " /on para encenderlo.";
+    // Detectar automáticamente el cliente basándose en el número de teléfono del asistente
+    // El número de teléfono del asistente es el "to" en el mensaje de UltraMsg
+    const assistantPhone = messageData.to || messageData.from; // Fallback al from si no hay to
+    const clientCode = this.commandManager.getClientByAssistantPhone(assistantPhone);
+    
+    if (!clientCode) {
+      console.log('❌ No se pudo identificar el cliente para el número:', assistantPhone);
+      return "❌ Error: No se pudo identificar el consultorio. Contacta al administrador.";
     }
+    
+    console.log('🏥 Cliente detectado:', clientCode, 'para número:', assistantPhone);
+    
+    // Verificar si el bot está activo para este cliente
+    if (!this.commandManager.isBotActive(clientCode)) {
+      console.log('🤖 Bot inactivo para cliente:', clientCode);
+      return "🤖 Bot está apagado. Escribe #" + clientCode + " /on para encenderlo.";
+    }
+    
+    // Obtener el ID del asistente para este cliente
+    const assistantId = this.commandManager.getAssistantIdByPhone(assistantPhone);
+    if (!assistantId) {
+      console.log('❌ No se encontró el asistente para el cliente:', clientCode);
+      return "❌ Error: No se pudo identificar el asistente. Contacta al administrador.";
+    }
+    
+    console.log('🤖 Usando asistente:', assistantId, 'para cliente:', clientCode);
 
-    // Procesar con OpenAI
-    const aiResponse = await this.openAIManager.processMessage(from, msg_body);
+    // Procesar con OpenAI usando el asistente específico del cliente
+    const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientCode);
     
     // Enviar respuesta via UltraMsg
     try {

@@ -6,7 +6,8 @@ const WEBHOOK_URL = `${BASE_URL}/webhook`;
 
 // Configuración de prueba
 const TEST_CLIENT = 'CLIENTE001';
-const TEST_PHONE = '5216181344331@c.us';
+const TEST_ADMIN_PHONE = '5216181344331@c.us';
+const TEST_ASSISTANT_PHONE = '6182191002';
 
 // Simular mensajes de comando
 const commandMessages = [
@@ -14,7 +15,8 @@ const commandMessages = [
     name: 'Comando de ayuda',
     payload: {
       data: {
-        from: TEST_PHONE,
+        from: TEST_ADMIN_PHONE,
+        to: TEST_ASSISTANT_PHONE,
         body: `#${TEST_CLIENT} /help`,
         id: 'help-' + Date.now()
       }
@@ -24,7 +26,8 @@ const commandMessages = [
     name: 'Comando de estado',
     payload: {
       data: {
-        from: TEST_PHONE,
+        from: TEST_ADMIN_PHONE,
+        to: TEST_ASSISTANT_PHONE,
         body: `#${TEST_CLIENT} /status`,
         id: 'status-' + Date.now()
       }
@@ -34,7 +37,8 @@ const commandMessages = [
     name: 'Comando de información',
     payload: {
       data: {
-        from: TEST_PHONE,
+        from: TEST_ADMIN_PHONE,
+        to: TEST_ASSISTANT_PHONE,
         body: `#${TEST_CLIENT} /info`,
         id: 'info-' + Date.now()
       }
@@ -44,7 +48,8 @@ const commandMessages = [
     name: 'Comando apagar bot',
     payload: {
       data: {
-        from: TEST_PHONE,
+        from: TEST_ADMIN_PHONE,
+        to: TEST_ASSISTANT_PHONE,
         body: `#${TEST_CLIENT} /off`,
         id: 'off-' + Date.now()
       }
@@ -54,7 +59,8 @@ const commandMessages = [
     name: 'Comando encender bot',
     payload: {
       data: {
-        from: TEST_PHONE,
+        from: TEST_ADMIN_PHONE,
+        to: TEST_ASSISTANT_PHONE,
         body: `#${TEST_CLIENT} /on`,
         id: 'on-' + Date.now()
       }
@@ -65,6 +71,7 @@ const commandMessages = [
     payload: {
       data: {
         from: '5216189999999@c.us',
+        to: TEST_ASSISTANT_PHONE,
         body: `#${TEST_CLIENT} /off`,
         id: 'unauthorized-' + Date.now()
       }
@@ -74,7 +81,8 @@ const commandMessages = [
     name: 'Comando cliente inexistente',
     payload: {
       data: {
-        from: TEST_PHONE,
+        from: TEST_ADMIN_PHONE,
+        to: TEST_ASSISTANT_PHONE,
         body: '#CLIENTE999 /status',
         id: 'invalid-client-' + Date.now()
       }
@@ -84,7 +92,8 @@ const commandMessages = [
     name: 'Comando formato incorrecto',
     payload: {
       data: {
-        from: TEST_PHONE,
+        from: TEST_ADMIN_PHONE,
+        to: TEST_ASSISTANT_PHONE,
         body: 'CLIENTE001 /status',
         id: 'wrong-format-' + Date.now()
       }
@@ -141,7 +150,7 @@ async function testCommands() {
       const manualResponse = await axios.post(`${BASE_URL}/bots/command`, {
         clientCode: TEST_CLIENT,
         command: '/status',
-        phoneNumber: TEST_PHONE
+        phoneNumber: TEST_ADMIN_PHONE
       });
       console.log('✅ Comando manual ejecutado:', manualResponse.data);
     } catch (error) {
