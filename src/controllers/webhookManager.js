@@ -139,9 +139,9 @@ class WebhookManager {
     const msg_body = messageData.body;
 
     // Verificar si es un comando
-    const commandResult = this.commandManager.processMessage(msg_body, from);
+    const commandResult = await this.commandManager.processMessage(msg_body, from);
     if (commandResult.isCommand) {
-      console.log('🎮 Comando ejecutado:', commandResult.command, 'para cliente:', commandResult.clientCode);
+      console.log('🎮 Comando ejecutado:', commandResult.command, 'para cliente:', commandResult.clientId);
       
       // Enviar respuesta del comando por WhatsApp
       try {
@@ -167,32 +167,32 @@ class WebhookManager {
     // Detectar automáticamente el cliente basándose en el número de teléfono del asistente
     // El número de teléfono del asistente es el "to" en el mensaje de UltraMsg
     const assistantPhone = messageData.to || messageData.from; // Fallback al from si no hay to
-    const clientCode = this.commandManager.getClientByAssistantPhone(assistantPhone);
+    const clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
     
-    if (!clientCode) {
+    if (!clientId) {
       console.log('❌ No se pudo identificar el cliente para el número:', assistantPhone);
       return "❌ Error: No se pudo identificar el consultorio. Contacta al administrador.";
     }
     
-    console.log('🏥 Cliente detectado:', clientCode, 'para número:', assistantPhone);
+    console.log('🏥 Cliente detectado:', clientId, 'para número:', assistantPhone);
     
     // Verificar si el bot está activo para este cliente
-    if (!this.commandManager.isBotActive(clientCode)) {
-      console.log('🤖 Bot inactivo para cliente:', clientCode);
-      return "🤖 Bot está apagado. Escribe #" + clientCode + " /on para encenderlo.";
+    if (!this.commandManager.isBotActive(clientId)) {
+      console.log('🤖 Bot inactivo para cliente:', clientId);
+      return "🤖 Bot está apagado. Escribe #" + clientId + " /on para encenderlo.";
     }
     
     // Obtener el ID del asistente para este cliente
-    const assistantId = this.commandManager.getAssistantIdByPhone(assistantPhone);
+    const assistantId = await this.commandManager.getAssistantIdByPhone(assistantPhone);
     if (!assistantId) {
-      console.log('❌ No se encontró el asistente para el cliente:', clientCode);
+      console.log('❌ No se encontró el asistente para el cliente:', clientId);
       return "❌ Error: No se pudo identificar el asistente. Contacta al administrador.";
     }
     
-    console.log('🤖 Usando asistente:', assistantId, 'para cliente:', clientCode);
+    console.log('🤖 Usando asistente:', assistantId, 'para cliente:', clientId);
 
     // Procesar con OpenAI usando el asistente específico del cliente
-    const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientCode);
+    const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientId);
     
     // Enviar respuesta via UltraMsg
     try {

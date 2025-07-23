@@ -17,7 +17,10 @@
     "test-ultramsg": "node test-ultramsg.js",
     "test-scheduler": "node test-scheduler.js",
     "test-groups": "node test-group-detection.js",
-    "test-commands": "node test-commands.js"
+    "test-commands": "node test-commands.js",
+    "test-firebase": "node test-firebase.js",
+    "migrate-firebase": "node migrate-to-firebase.js",
+    "test-reload": "node test-reload.js"
   },
   "keywords": [
     "openai",
@@ -33,6 +36,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
+    "firebase-admin": "^13.4.0",
     "node-cron": "^4.2.1",
     "openai": "^4.0.0"
   }

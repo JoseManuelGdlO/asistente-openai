@@ -263,19 +263,19 @@ app.get('/clients', (req, res) => {
 });
 
 // Endpoint para ejecutar comando manualmente
-app.post('/bots/command', (req, res) => {
+app.post('/bots/command', async (req, res) => {
   try {
-    const { clientCode, command, phoneNumber } = req.body;
+    const { clientId, command, phoneNumber } = req.body;
     
-    if (!clientCode || !command) {
+    if (!clientId || !command) {
       return res.status(400).json({
         ok: false,
-        error: 'clientCode y command son requeridos'
+        error: 'clientId y command son requeridos'
       });
     }
     
-    const result = webhookManager.commandManager.executeCommand(
-      clientCode, 
+    const result = await webhookManager.commandManager.executeCommand(
+      clientId, 
       command, 
       phoneNumber || 'admin@system'
     );
@@ -283,7 +283,7 @@ app.post('/bots/command', (req, res) => {
     res.json({
       ok: true,
       result: result,
-      clientCode: clientCode,
+      clientId: clientId,
       command: command
     });
   } catch (error) {
@@ -291,6 +291,232 @@ app.post('/bots/command', (req, res) => {
     res.status(500).json({ 
       ok: false, 
       error: 'Error al ejecutar comando',
+      details: error.message 
+    });
+  }
+});
+
+// ==================== ENDPOINTS DE GESTIÓN DE CLIENTES ====================
+
+// Crear nuevo cliente
+app.post('/clients', async (req, res) => {
+  try {
+    const { name, adminPhone, assistantPhone, assistantId } = req.body;
+    
+    if (!name || !adminPhone || !assistantPhone || !assistantId) {
+      return res.status(400).json({
+        ok: false,
+        error: 'name, adminPhone, assistantPhone y assistantId son requeridos'
+      });
+    }
+    
+    const newClient = await webhookManager.commandManager.createClient({
+      name,
+      adminPhone,
+      assistantPhone,
+      assistantId,
+      botStatus: 'active'
+    });
+    
+    res.json({
+      ok: true,
+      client: newClient,
+      message: 'Cliente creado exitosamente'
+    });
+  } catch (error) {
+    console.error('Error creando cliente:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error creando cliente',
+      details: error.message 
+    });
+  }
+});
+
+// Actualizar cliente
+app.put('/clients/:clientId', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const updateData = req.body;
+    
+    const updatedClient = await webhookManager.commandManager.updateClient(clientId, updateData);
+    
+    res.json({
+      ok: true,
+      client: updatedClient,
+      message: 'Cliente actualizado exitosamente'
+    });
+  } catch (error) {
+    console.error('Error actualizando cliente:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error actualizando cliente',
+      details: error.message 
+    });
+  }
+});
+
+// Eliminar cliente
+app.delete('/clients/:clientId', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    
+    const result = await webhookManager.commandManager.deleteClient(clientId);
+    
+    res.json({
+      ok: true,
+      result: result,
+      message: 'Cliente eliminado exitosamente'
+    });
+  } catch (error) {
+    console.error('Error eliminando cliente:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error eliminando cliente',
+      details: error.message 
+    });
+  }
+});
+
+// Obtener cliente específico
+app.get('/clients/:clientId', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    
+    const client = await webhookManager.commandManager.firebaseService.getClientById(clientId);
+    
+    if (!client) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Cliente no encontrado'
+      });
+    }
+    
+    res.json({
+      ok: true,
+      client: client
+    });
+  } catch (error) {
+    console.error('Error obteniendo cliente:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error obteniendo cliente',
+      details: error.message 
+    });
+  }
+});
+
+// Obtener estadísticas de clientes
+app.get('/clients/stats/overview', async (req, res) => {
+  try {
+    const stats = await webhookManager.commandManager.firebaseService.getClientStats();
+    
+    res.json({
+      ok: true,
+      stats: stats
+    });
+  } catch (error) {
+    console.error('Error obteniendo estadísticas:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error obteniendo estadísticas',
+      details: error.message 
+    });
+  }
+});
+
+// Recargar clientes desde Firebase
+app.post('/clients/reload', async (req, res) => {
+  try {
+    console.log('🔄 Iniciando recarga de clientes desde Firebase...');
+    
+    // Obtener estado antes de la recarga
+    const beforeCount = Object.keys(webhookManager.commandManager.getClientConfig()).length;
+    const beforeClients = Object.keys(webhookManager.commandManager.getClientConfig());
+    
+    // Recargar clientes
+    await webhookManager.commandManager.reloadClients();
+    
+    // Obtener estado después de la recarga
+    const afterCount = Object.keys(webhookManager.commandManager.getClientConfig()).length;
+    const afterClients = Object.keys(webhookManager.commandManager.getClientConfig());
+    
+    // Detectar cambios
+    const addedClients = afterClients.filter(id => !beforeClients.includes(id));
+    const removedClients = beforeClients.filter(id => !afterClients.includes(id));
+    
+    console.log('✅ Recarga completada:');
+    console.log(`- Antes: ${beforeCount} clientes`);
+    console.log(`- Después: ${afterCount} clientes`);
+    console.log(`- Agregados: ${addedClients.length}`);
+    console.log(`- Removidos: ${removedClients.length}`);
+    
+    // Obtener información detallada de los clientes actuales
+    const currentClients = webhookManager.commandManager.getClientConfig();
+    const clientsInfo = Object.entries(currentClients).map(([id, client]) => ({
+      id: id,
+      name: client.name,
+      adminPhone: client.adminPhone,
+      assistantPhone: client.assistantPhone,
+      assistantId: client.assistantId,
+      botStatus: client.botStatus,
+      status: client.status
+    }));
+    
+    res.json({
+      ok: true,
+      message: 'Clientes recargados exitosamente',
+      summary: {
+        beforeCount: beforeCount,
+        afterCount: afterCount,
+        added: addedClients.length,
+        removed: removedClients.length,
+        changes: addedClients.length > 0 || removedClients.length > 0
+      },
+      changes: {
+        added: addedClients,
+        removed: removedClients
+      },
+      clients: clientsInfo,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error recargando clientes:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error recargando clientes',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Endpoint adicional para ver el estado actual sin recargar
+app.get('/clients/status', async (req, res) => {
+  try {
+    const currentClients = webhookManager.commandManager.getClientConfig();
+    const clientsInfo = Object.entries(currentClients).map(([id, client]) => ({
+      id: id,
+      name: client.name,
+      adminPhone: client.adminPhone,
+      assistantPhone: client.assistantPhone,
+      assistantId: client.assistantId,
+      botStatus: client.botStatus,
+      status: client.status,
+      lastUpdated: client.updatedAt
+    }));
+    
+    res.json({
+      ok: true,
+      count: Object.keys(currentClients).length,
+      clients: clientsInfo,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error obteniendo estado de clientes:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error obteniendo estado de clientes',
       details: error.message 
     });
   }

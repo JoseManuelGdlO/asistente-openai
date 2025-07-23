@@ -12,6 +12,8 @@ Un asistente inteligente de WhatsApp que integra OpenAI GPT-4 para responder men
 - **🏗️ Arquitectura Modular**: Código organizado y mantenible
 - **📱 Detección de Grupos**: Ignora automáticamente mensajes de grupos de WhatsApp
 - **🎮 Sistema de Comandos**: Control remoto de bots por cliente con autenticación
+- **🔥 Firebase Integration**: Gestión dinámica de clientes en la nube
+- **📊 Múltiples Clientes**: Soporte para múltiples consultorios con asistentes independientes
 
 ## 📁 Estructura del Proyecto
 
@@ -53,6 +55,12 @@ ULTRAMSG_TOKEN=tu-token-de-ultramsg
 ULTRAMSG_INSTANCE_ID=tu-instance-id
 ULTRAMSG_WEBHOOK_TOKEN=tu-webhook-token
 
+# Firebase Configuration
+FIREBASE_PROJECT_ID=tu-proyecto-id
+FIREBASE_CLIENT_EMAIL=tu-service-account@proyecto.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nTu-clave-privada-aqui\n-----END PRIVATE KEY-----\n"
+FIREBASE_DATABASE_URL=https://tu-proyecto-id.firebaseio.com
+
 # Server Configuration
 PORT=3000
 ```
@@ -63,7 +71,19 @@ PORT=3000
 3. Obtén el **Token** e **Instance ID**
 4. Configura el webhook URL: `https://tu-dominio.com/webhook`
 
-### 4. Crear Asistente de OpenAI
+### 4. Configurar Firebase
+1. Crea un proyecto en [Firebase Console](https://console.firebase.google.com/)
+2. Habilita Firestore Database
+3. Crea un Service Account y descarga las credenciales
+4. Configura las variables de Firebase en tu `.env`
+
+### 5. Migrar Clientes (Opcional)
+Si tienes clientes configurados en variables de entorno:
+```bash
+npm run migrate-firebase
+```
+
+### 6. Crear Asistente de OpenAI
 ```bash
 npm run create-assistant
 ```
@@ -98,6 +118,15 @@ npm run ngrok
 - `POST /mark-agenda-sent` - Marcar agenda enviada a un usuario
 - `GET /user-context/:userId` - Obtener contexto de un usuario
 - `POST /clear-user-context/:userId` - Limpiar contexto de un usuario
+
+### Gestión de Clientes (Firebase)
+- `POST /clients` - Crear nuevo cliente
+- `GET /clients` - Listar todos los clientes
+- `GET /clients/:clientId` - Obtener cliente específico
+- `PUT /clients/:clientId` - Actualizar cliente
+- `DELETE /clients/:clientId` - Eliminar cliente
+- `GET /clients/stats/overview` - Estadísticas de clientes
+- `POST /clients/reload` - Recargar clientes desde Firebase
 
 ### Scheduler
 - `GET /scheduler/status` - Estado de tareas programadas
@@ -182,11 +211,17 @@ npm run test-webhook
 npm run test-groups
 ```
 
+### Probar Firebase
+```bash
+npm run test-firebase
+```
+
 ## 📚 Documentación
 
 - `src/README.md` - Documentación detallada de la estructura
 - `SCHEDULER_GUIDE.md` - Guía completa del sistema de tareas programadas
 - `COMMANDS_GUIDE.md` - Guía completa del sistema de comandos
+- `FIREBASE_MIGRATION_GUIDE.md` - Guía completa de migración a Firebase
 
 ## 🔧 Scripts Disponibles
 
@@ -198,6 +233,8 @@ npm run test-groups
 - `npm run test-webhook` - Probar webhook
 - `npm run test-groups` - Probar detección de grupos
 - `npm run test-commands` - Probar sistema de comandos
+- `npm run test-firebase` - Probar conexión con Firebase
+- `npm run migrate-firebase` - Migrar clientes a Firebase
 - `npm run create-assistant` - Crear nuevo asistente de OpenAI
 - `npm run list-assistants` - Listar asistentes existentes
 

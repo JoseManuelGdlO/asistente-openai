@@ -1,15 +1,15 @@
+const FirebaseService = require('./firebaseService');
+
 class CommandManager {
   constructor() {
-    // Configuración de clientes desde variables de entorno
-    this.clientConfig = this.loadClientConfig();
+    // Servicio de Firebase para gestionar clientes
+    this.firebaseService = new FirebaseService();
     
-    // Estados de los bots por cliente
+    // Configuración de clientes desde Firebase
+    this.clientConfig = {};
+    
+    // Estados de los bots por cliente (cache local)
     this.botStatus = new Map();
-    
-    // Inicializar todos los bots como activos
-    Object.keys(this.clientConfig).forEach(clientCode => {
-      this.botStatus.set(clientCode, 'active');
-    });
     
     // Definición de comandos disponibles
     this.commands = {
@@ -44,42 +44,47 @@ class CommandManager {
         requiresAuth: false
       }
     };
+    
+    // Cargar clientes desde Firebase
+    this.loadClientsFromFirebase();
   }
 
   /**
-   * Carga la configuración de clientes desde variables de entorno
-   * @returns {Object} Configuración de clientes
+   * Carga clientes desde Firebase
    */
-  loadClientConfig() {
-    const config = {};
-    
-    // Buscar variables de entorno que empiecen con CLIENTE
-    Object.keys(process.env).forEach(key => {
-      if (key.startsWith('CLIENTE') && key.includes('_ASSISTANT_PHONE')) {
-        const clientCode = key.split('_')[0]; // CLIENTE001_ASSISTANT_PHONE -> CLIENTE001
-        
-        config[clientCode] = {
-          adminPhone: process.env[`${clientCode}_PHONE`] || '',
-          assistantPhone: process.env[key], // CLIENTE001_ASSISTANT_PHONE
-          name: process.env[`${clientCode}_NAME`] || clientCode,
-          assistantId: process.env[`${clientCode}_ASSISTANT`] || process.env.ASISTENTE_ID,
-          status: 'active'
-        };
-      }
-    });
-    
-    console.log('📋 Clientes configurados:', Object.keys(config));
-    return config;
+  async loadClientsFromFirebase() {
+    try {
+      this.clientConfig = await this.firebaseService.getAllClients();
+      
+      // Inicializar estados de bots desde Firebase
+      Object.keys(this.clientConfig).forEach(clientId => {
+        const client = this.clientConfig[clientId];
+        this.botStatus.set(clientId, client.botStatus || 'active');
+      });
+      
+      console.log('📋 Clientes cargados desde Firebase:', Object.keys(this.clientConfig));
+    } catch (error) {
+      console.error('❌ Error cargando clientes desde Firebase:', error);
+      // Fallback a configuración vacía
+      this.clientConfig = {};
+    }
+  }
+
+  /**
+   * Recarga clientes desde Firebase
+   */
+  async reloadClients() {
+    await this.loadClientsFromFirebase();
   }
 
   /**
    * Verifica si un número está autorizado para un cliente
    * @param {string} phoneNumber - Número de teléfono
-   * @param {string} clientCode - Código del cliente
+   * @param {string} clientId - ID del cliente
    * @returns {boolean} - True si está autorizado
    */
-  isAuthorizedNumber(phoneNumber, clientCode) {
-    const client = this.clientConfig[clientCode];
+  isAuthorizedNumber(phoneNumber, clientId) {
+    const client = this.clientConfig[clientId];
     // Comparar solo el número sin @c.us
     const clientPhone = client?.adminPhone?.split('@')[0];
     const inputPhone = phoneNumber?.split('@')[0];
@@ -106,55 +111,58 @@ class CommandManager {
     
     if (!match) return null;
     
-    const [, clientCode, command] = match;
-    return { clientCode, command };
+    const [, clientId, command] = match;
+    return { clientId, command };
   }
 
   /**
    * Ejecuta un comando específico
-   * @param {string} clientCode - Código del cliente
+   * @param {string} clientId - ID del cliente
    * @param {string} command - Comando a ejecutar
    * @param {string} from - Número que envía el comando
    * @returns {string} - Respuesta del comando
    */
-  executeCommand(clientCode, command, from) {
-    const client = this.clientConfig[clientCode];
+  async executeCommand(clientId, command, from) {
+    const client = this.clientConfig[clientId];
     const commandDef = this.commands[command];
     
     // Verificar si el comando existe
     if (!commandDef) {
-      return `❌ Comando no reconocido: ${command}\nEscribe #${clientCode} /help para ver comandos disponibles.`;
+      return `❌ Comando no reconocido: ${command}\nEscribe #${clientId} /help para ver comandos disponibles.`;
     }
     
     // Verificar autorización si es requerida
-    if (commandDef.requiresAuth && !this.isAuthorizedNumber(from, clientCode)) {
-      return `❌ No autorizado para controlar el bot de ${client.name}.\nSolo el número ${client.phone} puede ejecutar este comando.`;
+    if (commandDef.requiresAuth && !this.isAuthorizedNumber(from, clientId)) {
+      return `❌ No autorizado para controlar el bot de ${client.name}.\nSolo el número ${client.adminPhone} puede ejecutar este comando.`;
     }
     
     // Ejecutar comando
     switch (commandDef.action) {
       case 'disable_bot':
-        this.botStatus.set(clientCode, 'inactive');
+        this.botStatus.set(clientId, 'inactive');
+        await this.firebaseService.updateBotStatus(clientId, 'inactive');
         return `🤖 Bot de ${client.name} APAGADO\nYa no responderá a mensajes normales.`;
         
       case 'enable_bot':
-        this.botStatus.set(clientCode, 'active');
+        this.botStatus.set(clientId, 'active');
+        await this.firebaseService.updateBotStatus(clientId, 'active');
         return `🤖 Bot de ${client.name} ENCENDIDO\nRespondiendo normalmente.`;
         
       case 'get_status':
-        const status = this.botStatus.get(clientCode);
+        const status = this.botStatus.get(clientId);
         const statusText = status === 'active' ? '🟢 ACTIVO' : '🔴 INACTIVO';
         return `📊 Estado del bot de ${client.name}:\n${statusText}\nAsistente: ${client.assistantId}`;
         
       case 'restart_bot':
-        this.botStatus.set(clientCode, 'active');
+        this.botStatus.set(clientId, 'active');
+        await this.firebaseService.updateBotStatus(clientId, 'active');
         return `🔄 Bot de ${client.name} REINICIADO\nEstado: ACTIVO`;
         
       case 'show_help':
-        return this.getHelpMessage(clientCode);
+        return this.getHelpMessage(clientId);
         
       case 'show_info':
-        return this.getInfoMessage(clientCode);
+        return this.getInfoMessage(clientId);
         
       default:
         return `❌ Acción no implementada: ${commandDef.action}`;
@@ -167,7 +175,7 @@ class CommandManager {
    * @param {string} from - Número que envía el mensaje
    * @returns {Object} - Resultado del procesamiento
    */
-  processMessage(message, from) {
+  async processMessage(message, from) {
     // Verificar si es un comando
     if (!this.isCommand(message)) {
       return { isCommand: false };
@@ -182,52 +190,49 @@ class CommandManager {
       };
     }
     
-    const { clientCode, command } = commandInfo;
+    const { clientId, command } = commandInfo;
     
     // Verificar si el cliente existe
-    if (!this.clientConfig[clientCode]) {
+    if (!this.clientConfig[clientId]) {
       return { 
         isCommand: true, 
-        response: `❌ Cliente no encontrado: ${clientCode}\nVerifica el código del cliente.` 
+        response: `❌ Cliente no encontrado: ${clientId}\nVerifica el código del cliente.` 
       };
     }
     
     // Ejecutar comando
-    const response = this.executeCommand(clientCode, command, from);
+    const response = await this.executeCommand(clientId, command, from);
     
     return { 
       isCommand: true, 
       response: response,
-      clientCode: clientCode,
+      clientId: clientId,
       command: command
     };
   }
 
   /**
    * Verifica si un bot está activo
-   * @param {string} clientCode - Código del cliente
+   * @param {string} clientId - ID del cliente
    * @returns {boolean} - True si está activo
    */
-  isBotActive(clientCode) {
-    return this.botStatus.get(clientCode) === 'active';
+  isBotActive(clientId) {
+    return this.botStatus.get(clientId) === 'active';
   }
 
   /**
    * Obtiene el cliente basándose en el número de teléfono del asistente
    * @param {string} assistantPhone - Número de teléfono del asistente (destinatario)
-   * @returns {string|null} - Código del cliente o null si no se encuentra
+   * @returns {string|null} - ID del cliente o null si no se encuentra
    */
-  getClientByAssistantPhone(assistantPhone) {
-    const cleanPhone = assistantPhone?.split('@')[0];
-    
-    for (const [clientCode, client] of Object.entries(this.clientConfig)) {
-      const clientAssistantPhone = client.assistantPhone?.split('@')[0];
-      if (clientAssistantPhone === cleanPhone) {
-        return clientCode;
-      }
+  async getClientByAssistantPhone(assistantPhone) {
+    try {
+      const client = await this.firebaseService.getClientByAssistantPhone(assistantPhone);
+      return client ? client.id : null;
+    } catch (error) {
+      console.error('❌ Error obteniendo cliente por teléfono:', error);
+      return null;
     }
-    
-    return null;
   }
 
   /**
@@ -235,21 +240,23 @@ class CommandManager {
    * @param {string} assistantPhone - Número de teléfono del asistente (destinatario)
    * @returns {string|null} - ID del asistente o null si no se encuentra
    */
-  getAssistantIdByPhone(assistantPhone) {
-    const clientCode = this.getClientByAssistantPhone(assistantPhone);
-    if (clientCode) {
-      return this.clientConfig[clientCode].assistantId;
+  async getAssistantIdByPhone(assistantPhone) {
+    try {
+      const client = await this.firebaseService.getClientByAssistantPhone(assistantPhone);
+      return client ? client.assistantId : null;
+    } catch (error) {
+      console.error('❌ Error obteniendo asistente por teléfono:', error);
+      return null;
     }
-    return null;
   }
 
   /**
    * Obtiene el mensaje de ayuda para un cliente
-   * @param {string} clientCode - Código del cliente
+   * @param {string} clientId - ID del cliente
    * @returns {string} - Mensaje de ayuda
    */
-  getHelpMessage(clientCode) {
-    const client = this.clientConfig[clientCode];
+  getHelpMessage(clientId) {
+    const client = this.clientConfig[clientId];
     let help = `📋 Comandos disponibles para ${client.name}:\n\n`;
     
     Object.entries(this.commands).forEach(([cmd, def]) => {
@@ -257,18 +264,18 @@ class CommandManager {
       help += `${cmd} - ${def.description}${authRequired}\n`;
     });
     
-    help += `\n💡 Uso: #${clientCode} /comando`;
+    help += `\n💡 Uso: #${clientId} /comando`;
     return help;
   }
 
   /**
    * Obtiene información del consultorio
-   * @param {string} clientCode - Código del cliente
+   * @param {string} clientId - ID del cliente
    * @returns {string} - Información del consultorio
    */
-  getInfoMessage(clientCode) {
-    const client = this.clientConfig[clientCode];
-    const status = this.botStatus.get(clientCode);
+  getInfoMessage(clientId) {
+    const client = this.clientConfig[clientId];
+    const status = this.botStatus.get(clientId);
     const statusText = status === 'active' ? '🟢 ACTIVO' : '🔴 INACTIVO';
     
     return `🏥 Información de ${client.name}:\n\n` +
@@ -276,7 +283,7 @@ class CommandManager {
            `📱 Asistente: ${client.assistantPhone}\n` +
            `🤖 ID Asistente: ${client.assistantId}\n` +
            `📊 Estado: ${statusText}\n` +
-           `🔑 Código: ${clientCode}`;
+           `🔑 ID: ${clientId}`;
   }
 
   /**
@@ -285,13 +292,13 @@ class CommandManager {
    */
   getAllBotsStatus() {
     const status = {};
-    Object.keys(this.clientConfig).forEach(clientCode => {
-      status[clientCode] = {
-        name: this.clientConfig[clientCode].name,
-        status: this.botStatus.get(clientCode),
-        adminPhone: this.clientConfig[clientCode].adminPhone,
-        assistantPhone: this.clientConfig[clientCode].assistantPhone,
-        assistantId: this.clientConfig[clientCode].assistantId
+    Object.keys(this.clientConfig).forEach(clientId => {
+      status[clientId] = {
+        name: this.clientConfig[clientId].name,
+        status: this.botStatus.get(clientId),
+        adminPhone: this.clientConfig[clientId].adminPhone,
+        assistantPhone: this.clientConfig[clientId].assistantPhone,
+        assistantId: this.clientConfig[clientId].assistantId
       };
     });
     return status;
@@ -303,6 +310,55 @@ class CommandManager {
    */
   getClientConfig() {
     return this.clientConfig;
+  }
+
+  /**
+   * Crea un nuevo cliente
+   * @param {Object} clientData - Datos del cliente
+   * @returns {Promise<Object>} - Cliente creado
+   */
+  async createClient(clientData) {
+    try {
+      const newClient = await this.firebaseService.createClient(clientData);
+      await this.reloadClients(); // Recargar configuración
+      return newClient;
+    } catch (error) {
+      console.error('❌ Error creando cliente:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Actualiza un cliente existente
+   * @param {string} clientId - ID del cliente
+   * @param {Object} updateData - Datos a actualizar
+   * @returns {Promise<Object>} - Cliente actualizado
+   */
+  async updateClient(clientId, updateData) {
+    try {
+      const updatedClient = await this.firebaseService.updateClient(clientId, updateData);
+      await this.reloadClients(); // Recargar configuración
+      return updatedClient;
+    } catch (error) {
+      console.error('❌ Error actualizando cliente:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Elimina un cliente
+   * @param {string} clientId - ID del cliente
+   * @returns {Promise<boolean>} - True si se eliminó correctamente
+   */
+  async deleteClient(clientId) {
+    try {
+      const result = await this.firebaseService.deleteClient(clientId);
+      await this.reloadClients(); // Recargar configuración
+      return result;
+    } catch (error) {
+      console.error('❌ Error eliminando cliente:', error);
+      throw error;
+    }
   }
 }
 

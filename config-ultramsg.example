@@ -10,26 +10,22 @@ ULTRAMSG_TOKEN=your-ultramsg-token-here
 ULTRAMSG_INSTANCE_ID=your-instance-id-here
 ULTRAMSG_WEBHOOK_TOKEN=your-webhook-token-here
 
-# ==================== CONFIGURACIÓN DE CLIENTES ====================
-# Formato: CLIENTE001_PHONE (admin), CLIENTE001_ASSISTANT_PHONE (número del asistente), CLIENTE001_NAME, CLIENTE001_ASSISTANT
+# ==================== CONFIGURACIÓN DE FIREBASE ====================
+# Obtén estas credenciales desde la consola de Firebase
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_CLIENT_EMAIL=your-service-account-email@project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here\n-----END PRIVATE KEY-----\n"
+FIREBASE_DATABASE_URL=https://your-project-id.firebaseio.com
 
-# Cliente 1
-CLIENTE001_PHONE=5216181344331@c.us          # Número del administrador
-CLIENTE001_ASSISTANT_PHONE=6182191002        # Número donde llegan los mensajes del asistente
-CLIENTE001_NAME=Consultorio Dr. García
-CLIENTE001_ASSISTANT=asst-abc123
+# ==================== CONFIGURACIÓN DE CLIENTES (LEGACY - YA NO SE USA) ====================
+# Los clientes ahora se gestionan desde Firebase
+# Esta configuración se mantiene solo para referencia
 
-# Cliente 2
-CLIENTE002_PHONE=5216182191002@c.us          # Número del administrador
-CLIENTE002_ASSISTANT_PHONE=6181344331        # Número donde llegan los mensajes del asistente
-CLIENTE002_NAME=Clínica Dental Sonrisa
-CLIENTE002_ASSISTANT=asst-def456
-
-# Cliente 3 (ejemplo)
-# CLIENTE003_PHONE=5216189999999@c.us        # Número del administrador
-# CLIENTE003_ASSISTANT_PHONE=6188888888      # Número donde llegan los mensajes del asistente
-# CLIENTE003_NAME=Centro Médico Integral
-# CLIENTE003_ASSISTANT=asst-ghi789
+# Cliente 1 (ejemplo)
+# CLIENTE001_PHONE=5216181344331@c.us          # Número del administrador
+# CLIENTE001_ASSISTANT_PHONE=6182191002        # Número donde llegan los mensajes del asistente
+# CLIENTE001_NAME=Consultorio Dr. García
+# CLIENTE001_ASSISTANT=asst-abc123
 
 # Server Configuration
 PORT=3000 
