@@ -11,6 +11,7 @@ Un asistente inteligente de WhatsApp que integra OpenAI GPT-4 para responder men
 - **⏰ Tareas Programadas**: Envío automático de agenda diaria
 - **🏗️ Arquitectura Modular**: Código organizado y mantenible
 - **📱 Detección de Grupos**: Ignora automáticamente mensajes de grupos de WhatsApp
+- **🎮 Sistema de Comandos**: Control remoto de bots por cliente con autenticación
 
 ## 📁 Estructura del Proyecto
 
@@ -107,6 +108,11 @@ npm run ngrok
 ### Configuración de Grupos
 - `GET /group-settings` - Ver configuración de comportamiento en grupos
 
+### Sistema de Comandos
+- `GET /bots/status` - Ver estado de todos los bots
+- `GET /clients` - Ver configuración de clientes
+- `POST /bots/command` - Ejecutar comando manualmente
+
 ### Utilidad
 - `GET /health` - Health check
 - `POST /test` - Test endpoint
@@ -180,6 +186,7 @@ npm run test-groups
 
 - `src/README.md` - Documentación detallada de la estructura
 - `SCHEDULER_GUIDE.md` - Guía completa del sistema de tareas programadas
+- `COMMANDS_GUIDE.md` - Guía completa del sistema de comandos
 
 ## 🔧 Scripts Disponibles
 
@@ -190,6 +197,7 @@ npm run test-groups
 - `npm run test-scheduler` - Probar sistema de tareas
 - `npm run test-webhook` - Probar webhook
 - `npm run test-groups` - Probar detección de grupos
+- `npm run test-commands` - Probar sistema de comandos
 - `npm run create-assistant` - Crear nuevo asistente de OpenAI
 - `npm run list-assistants` - Listar asistentes existentes
 

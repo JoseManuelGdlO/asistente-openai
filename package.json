@@ -16,7 +16,8 @@
     "check-token": "node check-token-type.js",
     "test-ultramsg": "node test-ultramsg.js",
     "test-scheduler": "node test-scheduler.js",
-    "test-groups": "node test-group-detection.js"
+    "test-groups": "node test-group-detection.js",
+    "test-commands": "node test-commands.js"
   },
   "keywords": [
     "openai",

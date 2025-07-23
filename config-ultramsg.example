@@ -10,5 +10,23 @@ ULTRAMSG_TOKEN=your-ultramsg-token-here
 ULTRAMSG_INSTANCE_ID=your-instance-id-here
 ULTRAMSG_WEBHOOK_TOKEN=your-webhook-token-here
 
+# ==================== CONFIGURACIÓN DE CLIENTES ====================
+# Formato: CLIENTE001_PHONE, CLIENTE001_NAME, CLIENTE001_ASSISTANT
+
+# Cliente 1
+CLIENTE001_PHONE=5216181344331@c.us
+CLIENTE001_NAME=Consultorio Dr. García
+CLIENTE001_ASSISTANT=asst-abc123
+
+# Cliente 2
+CLIENTE002_PHONE=5216182191002@c.us
+CLIENTE002_NAME=Clínica Dental Sonrisa
+CLIENTE002_ASSISTANT=asst-def456
+
+# Cliente 3 (ejemplo)
+# CLIENTE003_PHONE=5216189999999@c.us
+# CLIENTE003_NAME=Centro Médico Integral
+# CLIENTE003_ASSISTANT=asst-ghi789
+
 # Server Configuration
 PORT=3000 

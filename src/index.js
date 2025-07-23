@@ -222,6 +222,80 @@ app.get('/group-settings', (req, res) => {
   }
 });
 
+// ==================== ENDPOINTS DE COMANDOS ====================
+
+// Endpoint para ver estado de todos los bots
+app.get('/bots/status', (req, res) => {
+  try {
+    const status = webhookManager.commandManager.getAllBotsStatus();
+    res.json({
+      ok: true,
+      bots: status,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error al obtener estado de bots:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al obtener estado de bots',
+      details: error.message 
+    });
+  }
+});
+
+// Endpoint para ver configuración de clientes
+app.get('/clients', (req, res) => {
+  try {
+    const clients = webhookManager.commandManager.getClientConfig();
+    res.json({
+      ok: true,
+      clients: clients,
+      count: Object.keys(clients).length
+    });
+  } catch (error) {
+    console.error('Error al obtener configuración de clientes:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al obtener configuración de clientes',
+      details: error.message 
+    });
+  }
+});
+
+// Endpoint para ejecutar comando manualmente
+app.post('/bots/command', (req, res) => {
+  try {
+    const { clientCode, command, phoneNumber } = req.body;
+    
+    if (!clientCode || !command) {
+      return res.status(400).json({
+        ok: false,
+        error: 'clientCode y command son requeridos'
+      });
+    }
+    
+    const result = webhookManager.commandManager.executeCommand(
+      clientCode, 
+      command, 
+      phoneNumber || 'admin@system'
+    );
+    
+    res.json({
+      ok: true,
+      result: result,
+      clientCode: clientCode,
+      command: command
+    });
+  } catch (error) {
+    console.error('Error al ejecutar comando:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al ejecutar comando',
+      details: error.message 
+    });
+  }
+});
+
 // ==================== ENDPOINTS DE UTILIDAD ====================
 
 // Health check endpoint

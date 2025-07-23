@@ -1,9 +1,12 @@
+const CommandManager = require('../services/commandManager');
+
 class WebhookManager {
   constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager) {
     this.ultraMsgManager = ultraMsgManager;
     this.openAIManager = openAIManager;
     this.confirmationManager = confirmationManager;
     this.userContextManager = userContextManager;
+    this.commandManager = new CommandManager();
     
     // Cache para mensajes procesados
     this.processedMessages = new Set();
@@ -135,10 +138,39 @@ class WebhookManager {
     const from = messageData.from.replace('@c.us', '');
     const msg_body = messageData.body;
 
+    // Verificar si es un comando
+    const commandResult = this.commandManager.processMessage(msg_body, from);
+    if (commandResult.isCommand) {
+      console.log('🎮 Comando ejecutado:', commandResult.command, 'para cliente:', commandResult.clientCode);
+      
+      // Enviar respuesta del comando por WhatsApp
+      try {
+        console.log('Enviando respuesta de comando via UltraMsg a:', from);
+        console.log('Respuesta:', commandResult.response);
+        
+        const response = await this.ultraMsgManager.sendMessage(from, commandResult.response);
+        console.log('Respuesta de comando enviada:', response);
+        
+        return commandResult.response;
+      } catch (error) {
+        console.error('Error al enviar respuesta de comando:', error.response?.data || error.message);
+        throw error;
+      }
+    }
+
     // Verificar si es un mensaje de confirmación
     const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body);
     if (isConfirmationProcessed) {
       return null; // Ya se procesó como confirmación
+    }
+
+    // Verificar si el bot está activo para este cliente
+    // Por ahora, asumimos que todos los mensajes son para el cliente por defecto
+    // En el futuro, esto se puede mejorar para detectar automáticamente el cliente
+    const defaultClientCode = Object.keys(this.commandManager.getClientConfig())[0];
+    if (defaultClientCode && !this.commandManager.isBotActive(defaultClientCode)) {
+      console.log('🤖 Bot inactivo para cliente:', defaultClientCode);
+      return "🤖 Bot está apagado. Escribe #" + defaultClientCode + " /on para encenderlo.";
     }
 
     // Procesar con OpenAI
