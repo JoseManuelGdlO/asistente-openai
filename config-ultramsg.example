@@ -10,5 +10,22 @@ ULTRAMSG_TOKEN=your-ultramsg-token-here
 ULTRAMSG_INSTANCE_ID=your-instance-id-here
 ULTRAMSG_WEBHOOK_TOKEN=your-webhook-token-here
 
+# ==================== CONFIGURACIÓN DE FIREBASE ====================
+# Obtén estas credenciales desde la consola de Firebase
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_CLIENT_EMAIL=your-service-account-email@project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here\n-----END PRIVATE KEY-----\n"
+FIREBASE_DATABASE_URL=https://your-project-id.firebaseio.com
+
+# ==================== CONFIGURACIÓN DE CLIENTES (LEGACY - YA NO SE USA) ====================
+# Los clientes ahora se gestionan desde Firebase
+# Esta configuración se mantiene solo para referencia
+
+# Cliente 1 (ejemplo)
+# CLIENTE001_PHONE=5216181344331@c.us          # Número del administrador
+# CLIENTE001_ASSISTANT_PHONE=6182191002        # Número donde llegan los mensajes del asistente
+# CLIENTE001_NAME=Consultorio Dr. García
+# CLIENTE001_ASSISTANT=asst-abc123
+
 # Server Configuration
 PORT=3000 
