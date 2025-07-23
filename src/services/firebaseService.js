@@ -1,18 +1,18 @@
 const admin = require('firebase-admin');
-const serviceAccount = require('../../firebase-credentials.json');
+// const serviceAccount = require('../../firebase-credentials.json');
 
 class FirebaseService {
   constructor() {
     // Inicializar Firebase Admin SDK
-    if (!admin.apps.length) {
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`
-      });
-    }
+    // if (!admin.apps.length) {
+    //   admin.initializeApp({
+    //     credential: admin.credential.cert(serviceAccount),
+    //     databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`
+    //   });
+    // }
     
-    this.db = admin.firestore();
-    this.clientsCollection = this.db.collection('clients');
+    // this.db = admin.firestore();
+    // this.clientsCollection = this.db.collection('clients');
   }
 
   /**
