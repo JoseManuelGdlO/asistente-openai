@@ -132,20 +132,20 @@ class Scheduler {
     }
     
     return [
-      {
-        name: 'Juan Pérez',
-        phone: '34612345678',
-        time: '10:00',
-        service: 'Consulta médica',
-        date: today.toISOString().split('T')[0]
-      },
-      {
-        name: 'María García',
-        phone: '34687654321',
-        time: '14:30',
-        service: 'Revisión',
-        date: today.toISOString().split('T')[0]
-      }
+      // {
+      //   name: 'Juan Pérez',
+      //   phone: '34612345678',
+      //   time: '10:00',
+      //   service: 'Consulta médica',
+      //   date: today.toISOString().split('T')[0]
+      // },
+      // {
+      //   name: 'María García',
+      //   phone: '34687654321',
+      //   time: '14:30',
+      //   service: 'Revisión',
+      //   date: today.toISOString().split('T')[0]
+      // }
     ];
   }
 
