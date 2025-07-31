@@ -18,7 +18,32 @@ class WebhookManager {
    * @returns {boolean} - True si el token es válido
    */
   verifyWebhookToken(token) {
-    return token === process.env.ULTRAMSG_WEBHOOK_TOKEN;
+    // Verificar token por defecto desde variables de entorno
+    if (token === process.env.ULTRAMSG_WEBHOOK_TOKEN) {
+      return true;
+    }
+    
+    // Verificar tokens de las instancias configuradas
+    for (const [instanceId, instance] of this.ultraMsgManager.instances) {
+      if (instance.webhookToken && token === instance.webhookToken) {
+        return true;
+      }
+    }
+    
+    // Verificar tokens de instancias adicionales desde variables de entorno (fallback)
+    let instanceIndex = 1;
+    while (true) {
+      const webhookToken = process.env[`ULTRAMSG_INSTANCE_${instanceIndex}_WEBHOOK_TOKEN`];
+      if (!webhookToken) {
+        break;
+      }
+      if (token === webhookToken) {
+        return true;
+      }
+      instanceIndex++;
+    }
+    
+    return false;
   }
 
   /**
@@ -67,6 +92,7 @@ class WebhookManager {
       try {
         console.log('Enviando respuesta de confirmación a UltraMsg');
         
+        // Usar la instancia por defecto para confirmaciones
         const response = await this.ultraMsgManager.sendMessage(userId, confirmationResponse);
         console.log('Respuesta de confirmación enviada:', response);
         
@@ -86,6 +112,38 @@ class WebhookManager {
     }
 
     return false;
+  }
+
+  /**
+   * Identifica qué instancia de UltraMsg envió el mensaje
+   * @param {Object} messageData - Datos del mensaje de UltraMsg
+   * @param {string} webhookToken - Token del webhook recibido
+   * @returns {string|null} - ID de la instancia o null si no se puede identificar
+   */
+  identifyInstanceFromMessage(messageData, webhookToken = null) {
+    // Si tenemos el token del webhook, identificar por él
+    if (webhookToken) {
+      for (const [instanceId, instance] of this.ultraMsgManager.instances) {
+        if (instance.webhookToken && webhookToken === instance.webhookToken) {
+          return instanceId;
+        }
+      }
+    }
+    
+    // Intentar identificar por el número de teléfono del asistente
+    const assistantPhone = messageData.to || messageData.from;
+    
+    // Buscar en todas las instancias configuradas
+    for (const [instanceId, instance] of this.ultraMsgManager.instances) {
+      // Aquí podrías implementar lógica más específica para identificar la instancia
+      // Por ahora, usaremos la instancia por defecto
+      if (instance.name === 'default') {
+        return instanceId;
+      }
+    }
+    
+    // Si no se puede identificar, usar la instancia por defecto
+    return this.ultraMsgManager.getDefaultInstance()?.instanceId || null;
   }
 
   /**
@@ -123,9 +181,10 @@ class WebhookManager {
   /**
    * Procesa un mensaje completo
    * @param {Object} messageData - Datos del mensaje de UltraMsg
+   * @param {string} webhookToken - Token del webhook (opcional)
    * @returns {string} - Respuesta del asistente
    */
-  async processMessage(messageData) {
+  async processMessage(messageData, webhookToken = null) {
     // Verificar si es un mensaje de grupo
     if (this.isGroupMessage(messageData)) {
       const groupInfo = this.extractGroupInfo(messageData);
@@ -194,12 +253,16 @@ class WebhookManager {
     // Procesar con OpenAI usando el asistente específico del cliente
     const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientId);
     
-    // Enviar respuesta via UltraMsg
+    // Identificar qué instancia usar para responder
+    const instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
+    console.log('📱 Usando instancia UltraMsg:', instanceId);
+    
+    // Enviar respuesta via UltraMsg usando la instancia correcta
     try {
       console.log('Enviando mensaje via UltraMsg a:', from);
       console.log('Mensaje:', aiResponse);
       
-      const response = await this.ultraMsgManager.sendMessage(from, aiResponse);
+      const response = await this.ultraMsgManager.sendMessage(from, aiResponse, instanceId);
       console.log('Respuesta de UltraMsg:', response);
       
       return aiResponse;
@@ -212,9 +275,10 @@ class WebhookManager {
   /**
    * Maneja una petición de webhook
    * @param {Object} body - Cuerpo de la petición
+   * @param {string} webhookToken - Token del webhook (opcional)
    * @returns {Object} - Resultado del procesamiento
    */
-  async handleWebhook(body) {
+  async handleWebhook(body, webhookToken = null) {
     console.log('=== Nueva petición recibida de UltraMsg ===');
     
     // Verificar si es un mensaje de UltraMsg
@@ -238,8 +302,8 @@ class WebhookManager {
         return { processed: false, reason: 'not_text_message' };
       }
 
-      // Procesar el mensaje
-      const response = await this.processMessage(message);
+      // Procesar el mensaje con el token del webhook para identificación
+      const response = await this.processMessage(message, webhookToken);
       
       // Si el mensaje fue ignorado (grupo), marcar como procesado pero sin respuesta
       if (response === null && this.isGroupMessage(message)) {

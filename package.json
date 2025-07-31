@@ -20,7 +20,8 @@
     "test-commands": "node test-commands.js",
     "test-firebase": "node test-firebase.js",
     "migrate-firebase": "node migrate-to-firebase.js",
-    "test-reload": "node test-reload.js"
+    "test-reload": "node test-reload.js",
+    "test-firebase-ultramsg": "node test-firebase-ultramsg.js"
   },
   "keywords": [
     "openai",
