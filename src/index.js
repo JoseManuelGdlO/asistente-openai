@@ -45,7 +45,10 @@ app.get('/webhook', (req, res) => {
 // UltraMsg Webhook for receiving messages
 app.post('/webhook', async (req, res) => {
   try {
-    const result = await webhookManager.handleWebhook(req.body);
+    // Obtener el token del webhook desde los headers o query params
+    const webhookToken = req.headers['x-webhook-token'] || req.query.token;
+    
+    const result = await webhookManager.handleWebhook(req.body, webhookToken);
     
     if (result.processed) {
       if (result.reason === 'group_message_ignored') {
@@ -522,6 +525,110 @@ app.get('/clients/status', async (req, res) => {
   }
 });
 
+// ==================== ENDPOINTS DE GESTIÓN DE INSTANCIAS ULTRAMSG ====================
+
+// Obtener estado de todas las instancias de UltraMsg
+app.get('/ultramsg/instances', async (req, res) => {
+  try {
+    const instances = ultraMsgManager.getAllInstances();
+    const statuses = await ultraMsgManager.getAllInstancesStatus();
+    
+    const instancesInfo = instances.map(instance => ({
+      instanceId: instance.instanceId,
+      name: instance.name,
+      status: statuses[instance.instanceId] || { error: 'No se pudo obtener estado' }
+    }));
+    
+    res.json({
+      ok: true,
+      instances: instancesInfo,
+      total: instances.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error obteniendo estado de instancias:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error obteniendo estado de instancias',
+      details: error.message 
+    });
+  }
+});
+
+// Obtener información de una instancia específica
+app.get('/ultramsg/instances/:instanceId', async (req, res) => {
+  try {
+    const { instanceId } = req.params;
+    
+    const instance = ultraMsgManager.getInstance(instanceId);
+    if (!instance) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Instancia no encontrada'
+      });
+    }
+    
+    const info = await ultraMsgManager.getInstanceInfo(instanceId);
+    const status = await ultraMsgManager.getInstanceStatus(instanceId);
+    const isConnected = await ultraMsgManager.isConnected(instanceId);
+    
+    res.json({
+      ok: true,
+      instance: {
+        ...instance,
+        info: info,
+        status: status,
+        connected: isConnected
+      }
+    });
+  } catch (error) {
+    console.error('Error obteniendo información de instancia:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error obteniendo información de instancia',
+      details: error.message 
+    });
+  }
+});
+
+// Enviar mensaje usando una instancia específica
+app.post('/ultramsg/instances/:instanceId/send', async (req, res) => {
+  try {
+    const { instanceId } = req.params;
+    const { to, message } = req.body;
+    
+    if (!to || !message) {
+      return res.status(400).json({
+        ok: false,
+        error: 'to y message son requeridos'
+      });
+    }
+    
+    const instance = ultraMsgManager.getInstance(instanceId);
+    if (!instance) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Instancia no encontrada'
+      });
+    }
+    
+    const response = await ultraMsgManager.sendMessage(to, message, instanceId);
+    
+    res.json({
+      ok: true,
+      response: response,
+      instanceName: instance.name
+    });
+  } catch (error) {
+    console.error('Error enviando mensaje:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error enviando mensaje',
+      details: error.message 
+    });
+  }
+});
+
 // ==================== ENDPOINTS DE UTILIDAD ====================
 
 // Health check endpoint
@@ -557,14 +664,23 @@ app.listen(port, async () => {
     console.log('- ULTRAMSG_INSTANCE_ID:', process.env.ULTRAMSG_INSTANCE_ID ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- ULTRAMSG_WEBHOOK_TOKEN:', process.env.ULTRAMSG_WEBHOOK_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
     
-    // Verificar conexión con UltraMsg
+    // Inicializar instancias de UltraMsg desde Firebase
     try {
-      const isConnected = await ultraMsgManager.isConnected();
-      console.log('- UltraMsg conectado:', isConnected ? '✅ SÍ' : '❌ NO');
+      console.log('🔄 Inicializando instancias UltraMsg desde Firebase...');
+      await ultraMsgManager.initializeInstances();
       
-      if (isConnected) {
-        const info = await ultraMsgManager.getInstanceInfo();
-        console.log('- Número de UltraMsg:', info.name || 'No disponible');
+      // Verificar conexión con todas las instancias de UltraMsg
+      const allStatuses = await ultraMsgManager.getAllInstancesStatus();
+      console.log('- Estado de instancias UltraMsg:');
+      
+      for (const [instanceId, status] of Object.entries(allStatuses)) {
+        const statusIcon = status.connected ? '✅' : '❌';
+        const instanceName = status.instanceName || 'Sin nombre';
+        console.log(`  ${statusIcon} ${instanceName} (${instanceId}): ${status.connected ? 'Conectado' : 'Desconectado'}`);
+        
+        if (status.connected && status.name) {
+          console.log(`    📱 Número: ${status.name}`);
+        }
       }
     } catch (error) {
       console.log('- UltraMsg conectado: ❌ Error verificando conexión');
