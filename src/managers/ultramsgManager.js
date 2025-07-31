@@ -30,7 +30,8 @@ class UltraMsgManager {
             instanceId: client.ULTRAMSG_INSTANCE_ID,
             name: client.name || `Cliente_${clientId}`,
             clientId: clientId,
-            webhookToken: client.ULTRAMSG_WEBHOOK_TOKEN || client.ULTRAMSG_TOKEN
+            webhookToken: client.ULTRAMSG_WEBHOOK_TOKEN || client.ULTRAMSG_TOKEN,
+            assistantPhone: client.assistantPhone
           };
           
           this.instances.set(client.ULTRAMSG_INSTANCE_ID, instance);
