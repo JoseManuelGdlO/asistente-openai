@@ -137,7 +137,7 @@ class WebhookManager {
     for (const [instanceId, instance] of this.ultraMsgManager.instances) {
       // Aquí podrías implementar lógica más específica para identificar la instancia
       // Por ahora, usaremos la instancia por defecto
-      if (instance.name === 'default') {
+      if (assistantPhone.split('@')[0] === instance.assistantPhone.split('@')[0]) {
         return instanceId;
       }
     }
