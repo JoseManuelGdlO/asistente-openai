@@ -27,6 +27,26 @@ const openAIManager = new OpenAIManager();
 const webhookManager = new WebhookManager(ultraMsgManager, openAIManager, confirmationManager, userContextManager);
 const schedulerController = new SchedulerController(scheduler);
 
+// ==================== RECARGA AUTOMÁTICA DE CLIENTES ====================
+
+// Función para recargar clientes automáticamente
+async function autoReloadClients() {
+  try {
+    console.log('🔄 Recarga automática de clientes iniciada...');
+    await webhookManager.commandManager.reloadClients();
+    console.log('✅ Recarga automática completada');
+  } catch (error) {
+    console.error('❌ Error en recarga automática:', error);
+  }
+}
+
+// Recargar clientes cada 30 minutos (1800000 ms)
+const AUTO_RELOAD_INTERVAL = 30 * 60 * 1000; // 30 minutos
+setInterval(autoReloadClients, AUTO_RELOAD_INTERVAL);
+
+// Recargar clientes al iniciar el servidor
+autoReloadClients();
+
 // ==================== ENDPOINTS DE WEBHOOK ====================
 
 // UltraMsg Webhook verification
