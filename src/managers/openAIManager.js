@@ -249,6 +249,73 @@ class OpenAIManager {
     this.userThreads.clear();
     console.log('=== Threads reseteados ===');
   }
+
+  /**
+   * Resetea el thread de un usuario específico para un cliente específico
+   * @param {string} userId - ID del usuario (número de teléfono)
+   * @param {string} clientCode - Código del cliente
+   * @returns {boolean} - True si se encontró y reseteó el thread
+   */
+  resetUserThread(userId, clientCode) {
+    const threadKey = `${userId}_${clientCode}`;
+    const hadThread = this.userThreads.has(threadKey);
+    
+    if (hadThread) {
+      this.userThreads.delete(threadKey);
+      console.log(`=== Thread reseteado para usuario: ${userId}, cliente: ${clientCode} ===`);
+    } else {
+      console.log(`=== No se encontró thread para usuario: ${userId}, cliente: ${clientCode} ===`);
+    }
+    
+    return hadThread;
+  }
+
+  /**
+   * Resetea todos los threads de un usuario específico (para todos los clientes)
+   * @param {string} userId - ID del usuario (número de teléfono)
+   * @returns {number} - Número de threads reseteados
+   */
+  resetAllUserThreads(userId) {
+    let resetCount = 0;
+    const threadsToDelete = [];
+    
+    // Encontrar todos los threads del usuario
+    for (const [threadKey, threadId] of this.userThreads.entries()) {
+      if (threadKey.startsWith(`${userId}_`)) {
+        threadsToDelete.push(threadKey);
+      }
+    }
+    
+    // Eliminar los threads encontrados
+    threadsToDelete.forEach(threadKey => {
+      this.userThreads.delete(threadKey);
+      resetCount++;
+    });
+    
+    console.log(`=== ${resetCount} threads reseteados para usuario: ${userId} ===`);
+    return resetCount;
+  }
+
+  /**
+   * Obtiene información de todos los threads activos
+   * @returns {Array} - Lista de threads con información
+   */
+  getAllThreadsInfo() {
+    const threadsInfo = [];
+    
+    for (const [threadKey, threadId] of this.userThreads.entries()) {
+      const [userId, clientCode] = threadKey.split('_');
+      threadsInfo.push({
+        threadKey,
+        threadId,
+        userId,
+        clientCode,
+        hasActiveRun: this.hasActiveRun(threadId)
+      });
+    }
+    
+    return threadsInfo;
+  }
 }
 
 module.exports = OpenAIManager; 

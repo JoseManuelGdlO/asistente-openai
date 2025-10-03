@@ -10,6 +10,7 @@ const UserContextManager = require('./services/userContextManager');
 const OpenAIManager = require('./managers/openAIManager');
 const WebhookManager = require('./controllers/webhookManager');
 const SchedulerController = require('./controllers/schedulerController');
+const ThreadResetService = require('./services/threadResetService');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -26,6 +27,7 @@ const userContextManager = new UserContextManager();
 const openAIManager = new OpenAIManager();
 const webhookManager = new WebhookManager(ultraMsgManager, openAIManager, confirmationManager, userContextManager);
 const schedulerController = new SchedulerController(scheduler);
+const threadResetService = new ThreadResetService(openAIManager, userContextManager);
 
 // ==================== RECARGA AUTOMÁTICA DE CLIENTES ====================
 
@@ -88,11 +90,188 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+
+
 // ==================== ENDPOINTS DE GESTIÓN DE THREADS ====================
 
 app.post('/reset_threads', (req, res) => {
   openAIManager.resetThreads();
   res.json({ ok: true, message: 'Todos los threads de usuario han sido reseteados.' });
+});
+
+// Resetear thread específico de un usuario para un cliente específico
+app.post('/reset_thread/:userId/:clientCode', async (req, res) => {
+  try {
+    const { userId, clientCode } = req.params;
+    const options = req.body || {};
+    
+    const result = await threadResetService.resetUserThread(userId, clientCode, options);
+    
+    if (result.success) {
+      res.json({ 
+        ok: true, 
+        message: 'Thread reseteado exitosamente',
+        result: result
+      });
+    } else {
+      res.status(400).json({ 
+        ok: false, 
+        error: result.error,
+        code: result.code
+      });
+    }
+  } catch (error) {
+    console.error('Error al resetear thread específico:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al resetear thread específico',
+      details: error.message 
+    });
+  }
+});
+
+// Resetear todos los threads de un usuario específico
+app.post('/reset_user_threads/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const options = req.body || {};
+    
+    const result = await threadResetService.resetAllUserThreads(userId, options);
+    
+    if (result.success) {
+      res.json({ 
+        ok: true, 
+        message: 'Threads del usuario reseteados exitosamente',
+        result: result
+      });
+    } else {
+      res.status(400).json({ 
+        ok: false, 
+        error: result.error,
+        code: result.code
+      });
+    }
+  } catch (error) {
+    console.error('Error al resetear threads del usuario:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al resetear threads del usuario',
+      details: error.message 
+    });
+  }
+});
+
+// Obtener información de todos los threads activos
+app.get('/threads/info', async (req, res) => {
+  try {
+    const result = await threadResetService.getThreadsInfo();
+    
+    if (result.success) {
+      res.json({
+        ok: true,
+        ...result
+      });
+    } else {
+      res.status(500).json({ 
+        ok: false, 
+        error: result.error,
+        code: result.code
+      });
+    }
+  } catch (error) {
+    console.error('Error al obtener información de threads:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al obtener información de threads',
+      details: error.message 
+    });
+  }
+});
+
+// ==================== ENDPOINTS ADICIONALES DEL SERVICIO DE THREAD RESET ====================
+
+// Buscar threads por criterios
+app.post('/threads/search', async (req, res) => {
+  try {
+    const criteria = req.body || {};
+    const result = await threadResetService.findThreads(criteria);
+    
+    if (result.success) {
+      res.json({
+        ok: true,
+        ...result
+      });
+    } else {
+      res.status(500).json({ 
+        ok: false, 
+        error: result.error,
+        code: result.code
+      });
+    }
+  } catch (error) {
+    console.error('Error al buscar threads:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al buscar threads',
+      details: error.message 
+    });
+  }
+});
+
+// Obtener estadísticas del servicio
+app.get('/threads/stats', async (req, res) => {
+  try {
+    const result = await threadResetService.getServiceStats();
+    
+    if (result.success) {
+      res.json({
+        ok: true,
+        ...result
+      });
+    } else {
+      res.status(500).json({ 
+        ok: false, 
+        error: result.error,
+        code: result.code
+      });
+    }
+  } catch (error) {
+    console.error('Error al obtener estadísticas:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al obtener estadísticas',
+      details: error.message 
+    });
+  }
+});
+
+// Resetear todos los threads usando el servicio
+app.post('/reset_all_threads', async (req, res) => {
+  try {
+    const options = req.body || {};
+    const result = await threadResetService.resetAllThreads(options);
+    
+    if (result.success) {
+      res.json({ 
+        ok: true, 
+        message: 'Todos los threads han sido reseteados exitosamente',
+        result: result
+      });
+    } else {
+      res.status(500).json({ 
+        ok: false, 
+        error: result.error,
+        code: result.code
+      });
+    }
+  } catch (error) {
+    console.error('Error al resetear todos los threads:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error al resetear todos los threads',
+      details: error.message 
+    });
+  }
 });
 
 // ==================== ENDPOINTS DE CONTEXTO DE USUARIO ====================
