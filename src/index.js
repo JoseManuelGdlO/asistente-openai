@@ -67,6 +67,9 @@ app.get('/webhook', (req, res) => {
 // UltraMsg Webhook for receiving messages
 app.post('/webhook', async (req, res) => {
   try {
+    console.log('=== Nueva petición recibida de UltraMsg ===');
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
     // Obtener el token del webhook desde los headers o query params
     const webhookToken = req.headers['x-webhook-token'] || req.query.token;
     
@@ -85,6 +88,33 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200);
   } catch (error) {
     console.error('Error processing webhook:', error);
+    console.error('Error details:', error.response?.data || error.message);
+    return res.sendStatus(500);
+  }
+});
+
+// Own System Webhook for receiving messages (tu plataforma)
+app.post('/webhook-own', async (req, res) => {
+  try {
+    console.log('=== Nueva petición recibida de OWN SYSTEM ===');
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    
+    const result = await webhookManager.handleOwnWebhook(req.body);
+    
+    if (result.processed) {
+      if (result.reason === 'group_message_ignored') {
+        console.log('📱 Mensaje de grupo ignorado exitosamente (own system)');
+      } else {
+        console.log('Mensaje procesado exitosamente (own system)');
+      }
+    } else {
+      console.log('Mensaje no procesado (own system):', result.reason);
+    }
+    
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('Error processing own webhook:', error);
     console.error('Error details:', error.response?.data || error.message);
     return res.sendStatus(500);
   }

@@ -135,18 +135,18 @@ class UltraMsgManager {
         msgId: ''
       };
 
-      const response = await axios.post(url, data, {
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
+      // const response = await axios.post(url, data, {
+      //   headers: {
+      //     'Content-Type': 'application/json'
+      //   }
+      // });
 
-      console.log(`✅ Mensaje enviado via UltraMsg (${instance.name}):`, response.data);
-      return {
-        ...response.data,
-        instanceName: instance.name,
-        instanceId: instance.instanceId
-      };
+      // console.log(`✅ Mensaje enviado via UltraMsg (${instance.name}):`, response.data);
+      // return {
+      //   ...response.data,
+      //   instanceName: instance.name,
+      //   instanceId: instance.instanceId
+      // };
     } catch (error) {
       console.error('❌ Error enviando mensaje via UltraMsg:', error.response?.data || error.message);
       throw error;

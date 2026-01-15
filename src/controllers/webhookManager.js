@@ -1,8 +1,10 @@
 const CommandManager = require('../services/commandManager');
+const OwnSystemManager = require('../managers/ownSystemManager');
 
 class WebhookManager {
   constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager) {
     this.ultraMsgManager = ultraMsgManager;
+    this.ownSystemManager = new OwnSystemManager();
     this.openAIManager = openAIManager;
     this.confirmationManager = confirmationManager;
     this.userContextManager = userContextManager;
@@ -69,13 +71,29 @@ class WebhookManager {
     }
   }
 
+  normalizeAssistantPhoneFromOwnTo(toJidWithDevice = '') {
+    // Ej: "5216181020927:21@s.whatsapp.net" -> "5216181020927"
+    const beforeColon = String(toJidWithDevice).split(':')[0];
+    return beforeColon.split('@')[0];
+  }
+
+  normalizeFromPhoneFromJid(jid = '') {
+    // Ej: "5216188329894@s.whatsapp.net" -> "5216188329894"
+    return String(jid).split('@')[0];
+  }
+
+  isGroupJid(jid = '') {
+    return String(jid).endsWith('@g.us');
+  }
+
   /**
    * Procesa un mensaje de confirmación
    * @param {string} userId - ID del usuario
    * @param {string} message - Mensaje del usuario
+   * @param {Function} sendReply - Función para enviar reply: (text) => Promise<void>
    * @returns {boolean} - True si se procesó como confirmación
    */
-  async processConfirmationMessage(userId, message) {
+  async processConfirmationMessage(userId, message, sendReply) {
     const userCtx = this.userContextManager.getUserContext(userId);
     const isConfirmation = this.confirmationManager.isConfirmationMessage(message);
     
@@ -90,11 +108,7 @@ class WebhookManager {
       const confirmationResponse = this.confirmationManager.getConfirmationResponse();
       
       try {
-        console.log('Enviando respuesta de confirmación a UltraMsg');
-        
-        // Usar la instancia por defecto para confirmaciones
-        const response = await this.ultraMsgManager.sendMessage(userId, confirmationResponse);
-        console.log('Respuesta de confirmación enviada:', response);
+        await sendReply(confirmationResponse);
         
         // Actualizar contexto del usuario
         this.userContextManager.updateUserContext(userId, 'confirmation', message);
@@ -197,6 +211,21 @@ class WebhookManager {
     const from = messageData.from.replace('@c.us', '');
     const msg_body = messageData.body;
 
+    // Detectar automáticamente el cliente basándose en el número de teléfono del asistente
+    // El número de teléfono del asistente es el "to" en el mensaje de UltraMsg
+    const assistantPhone = messageData.to || messageData.from; // Fallback al from si no hay to
+    const clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
+
+    const sendReplyUltra = async (text) => {
+      // Identificar qué instancia usar para responder
+      const instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
+      console.log('📱 Usando instancia UltraMsg:', instanceId);
+      console.log('Enviando mensaje via UltraMsg a:', from);
+      console.log('Mensaje:', text);
+      const response = await this.ultraMsgManager.sendMessage(from, text, instanceId);
+      console.log('Respuesta de UltraMsg:', response);
+    };
+
     // Verificar si es un comando
     const commandResult = await this.commandManager.processMessage(msg_body, from);
     if (commandResult.isCommand) {
@@ -204,11 +233,7 @@ class WebhookManager {
       
       // Enviar respuesta del comando por WhatsApp
       try {
-        console.log('Enviando respuesta de comando via UltraMsg a:', from);
-        console.log('Respuesta:', commandResult.response);
-        
-        const response = await this.ultraMsgManager.sendMessage(from, commandResult.response);
-        console.log('Respuesta de comando enviada:', response);
+        await sendReplyUltra(commandResult.response);
         
         return commandResult.response;
       } catch (error) {
@@ -218,16 +243,11 @@ class WebhookManager {
     }
 
     // Verificar si es un mensaje de confirmación
-    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body);
+    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body, sendReplyUltra);
     if (isConfirmationProcessed) {
       return null; // Ya se procesó como confirmación
     }
 
-    // Detectar automáticamente el cliente basándose en el número de teléfono del asistente
-    // El número de teléfono del asistente es el "to" en el mensaje de UltraMsg
-    const assistantPhone = messageData.to || messageData.from; // Fallback al from si no hay to
-    const clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
-    
     if (!clientId) {
       console.log('❌ No se pudo identificar el cliente para el número:', assistantPhone);
       return "❌ Error: No se pudo identificar el consultorio. Contacta al administrador.";
@@ -253,23 +273,152 @@ class WebhookManager {
     // Procesar con OpenAI usando el asistente específico del cliente
     const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientId);
     
-    // Identificar qué instancia usar para responder
-    const instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
-    console.log('📱 Usando instancia UltraMsg:', instanceId);
-    
     // Enviar respuesta via UltraMsg usando la instancia correcta
     try {
-      console.log('Enviando mensaje via UltraMsg a:', from);
-      console.log('Mensaje:', aiResponse);
-      
-      const response = await this.ultraMsgManager.sendMessage(from, aiResponse, instanceId);
-      console.log('Respuesta de UltraMsg:', response);
+      await sendReplyUltra(aiResponse);
       
       return aiResponse;
     } catch (error) {
       console.error('Error al enviar mensaje via UltraMsg:', error.response?.data || error.message);
       throw error;
     }
+  }
+
+  /**
+   * Maneja una petición de webhook desde tu plataforma propia
+   * @param {Object} body - Cuerpo de la petición (type=message.inbound)
+   * @returns {Object} - Resultado del procesamiento
+   */
+  async handleOwnWebhook(body) {
+    // Formato esperado (ejemplo):
+    // {
+    //   type: "message.inbound",
+    //   tenantId, deviceId,
+    //   normalized: { to, from, content: { text, type }, messageId }
+    // }
+    if (!body || body.type !== 'message.inbound' || !body.normalized) {
+      return { processed: false, reason: 'invalid_message_format' };
+    }
+
+    const messageId = body.normalized.messageId;
+    if (!messageId) {
+      return { processed: false, reason: 'missing_message_id' };
+    }
+
+    const dedupeKey = `own:${messageId}`;
+    if (this.isMessageProcessed(dedupeKey)) {
+      console.log('Mensaje own ya procesado, ignorando:', messageId);
+      return { processed: false, reason: 'already_processed' };
+    }
+
+    this.markMessageAsProcessed(dedupeKey);
+
+    const tenantId = body.tenantId;
+    const deviceId = body.deviceId;
+    const normalized = body.normalized;
+
+    const fromJid = normalized.from;
+    const toRaw = normalized.to;
+    const assistantPhone = this.normalizeAssistantPhoneFromOwnTo(toRaw);
+    const fromPhone = this.normalizeFromPhoneFromJid(fromJid);
+    const text = normalized?.content?.text;
+    const contentType = normalized?.content?.type;
+
+    if (!tenantId || !deviceId) {
+      return { processed: false, reason: 'missing_tenant_or_device' };
+    }
+
+    // Solo soporta texto por ahora
+    if (contentType !== 'text' || !text) {
+      return { processed: false, reason: 'not_text_message' };
+    }
+
+    // Ignorar grupos
+    if (this.isGroupJid(fromJid)) {
+      return {
+        processed: true,
+        response: null,
+        userId: fromPhone,
+        reason: 'group_message_ignored'
+      };
+    }
+
+    // Resolver cliente por el número del asistente (normalized.to -> antes de :)
+    const clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
+    if (!clientId) {
+      console.log('❌ No se pudo identificar el cliente para assistantPhone:', assistantPhone, 'to:', toRaw);
+      return { processed: false, reason: 'client_not_found' };
+    }
+
+    const client = this.commandManager.clientConfig?.[clientId];
+    if (!client) {
+      return { processed: false, reason: 'client_config_missing' };
+    }
+
+    if (!client.OWN_SYSTEM) {
+      // Este endpoint se usa solo para clientes migrados; si llega aquí, no hacemos fallback.
+      return { processed: false, reason: 'client_not_own_system' };
+    }
+
+    const apiKey = client.OWN_API_KEY;
+    if (!apiKey) {
+      return { processed: false, reason: 'missing_own_api_key' };
+    }
+
+    const sendReplyOwn = async (replyText) => {
+      console.log('Enviando mensaje via OwnSystem a:', fromJid);
+      console.log('Mensaje:', replyText);
+      const resp = await this.ownSystemManager.sendMessage({
+        deviceId,
+        tenantId,
+        apiKey,
+        to: fromJid,
+        text: replyText
+      });
+      console.log('Respuesta OwnSystem:', resp);
+    };
+
+    // Verificar si es un comando
+    const commandResult = await this.commandManager.processMessage(text, fromPhone);
+    if (commandResult.isCommand) {
+      try {
+        await sendReplyOwn(commandResult.response);
+        return { processed: true, response: commandResult.response, userId: fromPhone };
+      } catch (error) {
+        console.error('Error al enviar respuesta de comando (own):', error.response?.data || error.message);
+        throw error;
+      }
+    }
+
+    // Verificar si es confirmación
+    const isConfirmationProcessed = await this.processConfirmationMessage(fromPhone, text, sendReplyOwn);
+    if (isConfirmationProcessed) {
+      return { processed: true, response: null, userId: fromPhone };
+    }
+
+    console.log('🏥 Cliente detectado (own):', clientId, 'para assistantPhone:', assistantPhone);
+
+    // Verificar si el bot está activo para este cliente
+    if (!this.commandManager.isBotActive(clientId)) {
+      const offMsg = "🤖 Bot está apagado. Escribe #" + clientId + " /on para encenderlo.";
+      await sendReplyOwn(offMsg);
+      return { processed: true, response: offMsg, userId: fromPhone };
+    }
+
+    // Obtener el ID del asistente para este cliente
+    const assistantId = await this.commandManager.getAssistantIdByPhone(assistantPhone);
+    if (!assistantId) {
+      const errMsg = "❌ Error: No se pudo identificar el asistente. Contacta al administrador.";
+      await sendReplyOwn(errMsg);
+      return { processed: true, response: errMsg, userId: fromPhone };
+    }
+
+    console.log('🤖 Usando asistente (own):', assistantId, 'para cliente:', clientId);
+
+    const aiResponse = await this.openAIManager.processMessage(fromPhone, text, assistantId, clientId);
+    await sendReplyOwn(aiResponse);
+
+    return { processed: true, response: aiResponse, userId: fromPhone };
   }
 
   /**
@@ -288,13 +437,14 @@ class WebhookManager {
       console.log('ID del mensaje:', message.id);
       
       // Verificar si ya procesamos este mensaje
-      if (this.isMessageProcessed(message.id)) {
+      const dedupeKey = `ultra:${message.id}`;
+      if (this.isMessageProcessed(dedupeKey)) {
         console.log('Mensaje ya procesado, ignorando:', message.id);
         return { processed: false, reason: 'already_processed' };
       }
 
       // Marcar mensaje como procesado ANTES de procesarlo
-      this.markMessageAsProcessed(message.id);
+      this.markMessageAsProcessed(dedupeKey);
 
       // Verificar si es un mensaje de texto
       if (body.event_type === 'message_create') {
