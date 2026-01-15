@@ -8,6 +8,7 @@ src/
 ├── managers/                   # 🔌 Gestores de servicios externos
 │   ├── openAIManager.js       # 🤖 Gestor de OpenAI
 │   ├── ultramsgManager.js     # 📱 Gestor de UltraMsg
+│   ├── ownSystemManager.js    # 🏗️ Gestor de tu backend WhatsApp (OWN_SYSTEM)
 │   └── facebookTokenManager.js # 🔑 Gestor de tokens Facebook
 ├── services/                   # ⚙️ Servicios de negocio
 │   ├── confirmationManager.js  # ✅ Gestor de confirmaciones
@@ -31,6 +32,7 @@ src/
 - **Contenido**:
   - `openAIManager.js`: Maneja todas las interacciones con OpenAI
   - `ultramsgManager.js`: Gestiona la comunicación con UltraMsg
+  - `ownSystemManager.js`: Gestiona el envío de mensajes vía tu API (endpoint `/devices/:deviceId/messages/send`)
   - `facebookTokenManager.js`: Maneja tokens de Facebook (legacy)
 
 ### ⚙️ `services/`
@@ -45,6 +47,20 @@ src/
 - **Contenido**:
   - `webhookManager.js`: Procesa webhooks de UltraMsg
   - `schedulerController.js`: Maneja endpoints del scheduler
+
+## 🔑 Variables / Config necesarias para OWN_SYSTEM
+
+### Variables de entorno
+- `OWN_API_BASE_URL`: Base URL de tu backend WhatsApp (ej: `https://api-tu-backend.com`)
+
+### Campos por cliente en Firebase (`clients/<id>`)
+- `OWN_SYSTEM` (boolean): `true` si el cliente usa tu plataforma propia.
+- `OWN_API_KEY` (string): API key para autenticar el envío con tu backend WhatsApp.
+
+### Endpoint de inbound (tu plataforma)
+- `POST /webhook-own`
+- Se espera `type=message.inbound` y `normalized.to` en formato `telefono:device@s.whatsapp.net`.
+- Para detectar el cliente se usa `assistantPhone = normalized.to.split(':')[0]`.
 
 ### 🛠️ `utils/`
 - **Propósito**: Utilidades y helpers (preparado para futuro)
