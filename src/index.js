@@ -91,8 +91,8 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   try {
     console.log('=== Nueva petición recibida de UltraMsg ===');
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('Body:', JSON.stringify(req.body, null, 2));
+    // console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    // console.log('Body:', JSON.stringify(req.body, null, 2));
     // Obtener el token del webhook desde los headers o query params
     const webhookToken = req.headers['x-webhook-token'] || req.query.token;
     
@@ -120,8 +120,8 @@ app.post('/webhook', async (req, res) => {
 app.post('/webhook-own', async (req, res) => {
   try {
     console.log('=== Nueva petición recibida de OWN SYSTEM ===');
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('Body:', JSON.stringify(req.body, null, 2));
+    // console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    // console.log('Body:', JSON.stringify(req.body, null, 2));
     
     const result = await webhookManager.handleOwnWebhook(req.body);
     
