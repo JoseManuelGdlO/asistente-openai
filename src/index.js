@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+const pkg = require('../package.json');
+const APP_VERSION = pkg.version;
+
 // Importar todas las clases
 const UltraMsgManager = require('./managers/ultramsgManager');
 const Scheduler = require('./services/scheduler');
@@ -890,6 +893,7 @@ app.post('/test', (req, res) => {
 
 app.listen(port, async () => {
     console.log('=== SERVER STARTED ===');
+    console.log(`Versión: ${APP_VERSION}`);
     console.log(`Server is running on port ${port}`);
     console.log(`Webhook URL: http://localhost:${port}/webhook`);
     console.log(`Test URL: http://localhost:${port}/test`);
