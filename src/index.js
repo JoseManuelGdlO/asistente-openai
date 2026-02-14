@@ -67,10 +67,11 @@ app.get('/webhook', (req, res) => {
 // UltraMsg Webhook for receiving messages
 app.post('/webhook', async (req, res) => {
   try {
-    console.log('=== Nueva petición recibida de UltraMsg ===');
-    // console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    // console.log('Body:', JSON.stringify(req.body, null, 2));
-    // Obtener el token del webhook desde los headers o query params
+    const data = req.body?.data || {};
+    const from = (data.from || '?').toString().replace('@c.us', '');
+    const to = (data.to || '?').toString().replace('@c.us', '');
+    const bodyPreview = typeof data.body === 'string' ? (data.body.length > 60 ? data.body.slice(0, 60) + '…' : data.body) : '';
+    console.log(`Origen: UltraMsg | De: ${from} | Para: ${to} | Mensaje: "${bodyPreview}"`);
     const webhookToken = req.headers['x-webhook-token'] || req.query.token;
     
     const result = await webhookManager.handleWebhook(req.body, webhookToken);
@@ -87,8 +88,9 @@ app.post('/webhook', async (req, res) => {
     
     res.sendStatus(200);
   } catch (error) {
-    console.error('Error processing webhook:', error);
-    console.error('Error details:', error.response?.data || error.message);
+    const errMsg = error.response?.data?.message || error.message || (typeof error.response?.data === 'object' ? JSON.stringify(error.response?.data) : error.response?.data);
+    const code = error.response?.status ? ` [${error.response.status}]` : '';
+    console.error('Error processing webhook:', errMsg + code);
     return res.sendStatus(500);
   }
 });
@@ -96,9 +98,12 @@ app.post('/webhook', async (req, res) => {
 // Own System Webhook for receiving messages (tu plataforma)
 app.post('/webhook-own', async (req, res) => {
   try {
-    console.log('=== Nueva petición recibida de OWN SYSTEM ===');
-    // console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    // console.log('Body:', JSON.stringify(req.body, null, 2));
+    const norm = req.body?.normalized || {};
+    const from = (norm.from || '?').toString().replace('@s.whatsapp.net', '').split('@')[0];
+    const to = (norm.to || '?').toString().replace('@s.whatsapp.net', '').split('@')[0];
+    const text = norm.content?.text || '';
+    const bodyPreview = typeof text === 'string' ? (text.length > 60 ? text.slice(0, 60) + '…' : text) : '';
+    console.log(`Origen: Mi sistema | De: ${from} | Para: ${to} | Mensaje: "${bodyPreview}"`);
     
     const result = await webhookManager.handleOwnWebhook(req.body);
     
@@ -114,8 +119,9 @@ app.post('/webhook-own', async (req, res) => {
     
     res.sendStatus(200);
   } catch (error) {
-    console.error('Error processing own webhook:', error);
-    console.error('Error details:', error.response?.data || error.message);
+    const errMsg = error.response?.data?.message || error.message || (typeof error.response?.data === 'object' ? JSON.stringify(error.response?.data) : error.response?.data);
+    const code = error.response?.status ? ` [${error.response.status}]` : '';
+    console.error('Error processing own webhook:', errMsg + code);
     return res.sendStatus(500);
   }
 });

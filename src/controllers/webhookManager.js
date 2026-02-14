@@ -82,6 +82,14 @@ class WebhookManager {
     return String(jid).split('@')[0];
   }
 
+  _formatSendErrorLog(origin, to, messagePreview, error) {
+    const maxLen = 60;
+    const msg = typeof messagePreview === 'string' && messagePreview.length > maxLen ? messagePreview.slice(0, maxLen) + '…' : (messagePreview || '');
+    const toStr = (to || '?').toString().replace('@c.us', '');
+    const errMsg = typeof error === 'string' ? error : (error?.response?.data?.message || error?.message || error?.response?.data || JSON.stringify(error));
+    return `Origen: ${origin} | Para: ${toStr} | Mensaje: "${msg}" | Estado: Error | Error: ${errMsg}`;
+  }
+
   isGroupJid(jid = '') {
     return String(jid).endsWith('@g.us');
   }
@@ -93,7 +101,7 @@ class WebhookManager {
    * @param {Function} sendReply - Función para enviar reply: (text) => Promise<void>
    * @returns {boolean} - True si se procesó como confirmación
    */
-  async processConfirmationMessage(userId, message, sendReply) {
+  async processConfirmationMessage(userId, message, sendReply, origin = 'UltraMsg') {
     const userCtx = this.userContextManager.getUserContext(userId);
     const isConfirmation = this.confirmationManager.isConfirmationMessage(message);
     
@@ -115,7 +123,7 @@ class WebhookManager {
         
         return true;
       } catch (error) {
-        console.error('Error al enviar respuesta de confirmación:', error.response?.data || error.message);
+        console.error('❌ ' + this._formatSendErrorLog(origin, userId, confirmationResponse, error));
         throw error;
       }
     }
@@ -217,13 +225,8 @@ class WebhookManager {
     const clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
 
     const sendReplyUltra = async (text) => {
-      // Identificar qué instancia usar para responder
       const instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
-      console.log('📱 Usando instancia UltraMsg:', instanceId);
-      console.log('Enviando mensaje via UltraMsg a:', from);
-      console.log('Mensaje:', text);
-      const response = await this.ultraMsgManager.sendMessage(from, text, instanceId);
-      console.log('Respuesta de UltraMsg:', response);
+      const response = await this.ultraMsgManager.sendMessage(from, text, instanceId, { requestOrigin: 'UltraMsg' });
     };
 
     // Verificar si es un comando
@@ -237,13 +240,13 @@ class WebhookManager {
         
         return commandResult.response;
       } catch (error) {
-        console.error('Error al enviar respuesta de comando:', error.response?.data || error.message);
+        console.error('❌ ' + this._formatSendErrorLog('UltraMsg', from, commandResult.response, error));
         throw error;
       }
     }
 
     // Verificar si es un mensaje de confirmación
-    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body, sendReplyUltra);
+    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body, sendReplyUltra, 'UltraMsg');
     if (isConfirmationProcessed) {
       return null; // Ya se procesó como confirmación
     }
@@ -279,7 +282,7 @@ class WebhookManager {
       
       return aiResponse;
     } catch (error) {
-      console.error('Error al enviar mensaje via UltraMsg:', error.response?.data || error.message);
+      console.error('❌ ' + this._formatSendErrorLog('UltraMsg', from, aiResponse, error));
       throw error;
     }
   }
@@ -385,13 +388,13 @@ class WebhookManager {
         await sendReplyOwn(commandResult.response);
         return { processed: true, response: commandResult.response, userId: fromPhone };
       } catch (error) {
-        console.error('Error al enviar respuesta de comando (own):', error.response?.data || error.message);
+        console.error('❌ ' + this._formatSendErrorLog('Mi sistema', fromPhone, commandResult.response, error));
         throw error;
       }
     }
 
     // Verificar si es confirmación
-    const isConfirmationProcessed = await this.processConfirmationMessage(fromPhone, text, sendReplyOwn);
+    const isConfirmationProcessed = await this.processConfirmationMessage(fromPhone, text, sendReplyOwn, 'Mi sistema');
     if (isConfirmationProcessed) {
       return { processed: true, response: null, userId: fromPhone };
     }
@@ -428,8 +431,6 @@ class WebhookManager {
    * @returns {Object} - Resultado del procesamiento
    */
   async handleWebhook(body, webhookToken = null) {
-    console.log('=== Nueva petición recibida de UltraMsg ===');
-    
     // Verificar si es un mensaje de UltraMsg
     if (body && body.data && body.data.body) {
       const message = body.data;
