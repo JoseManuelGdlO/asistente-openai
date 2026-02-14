@@ -331,11 +331,6 @@ class WebhookManager {
       return { processed: false, reason: 'missing_tenant_or_device' };
     }
 
-    // Solo soporta texto por ahora
-    if (contentType !== 'text' || !text) {
-      return { processed: false, reason: 'not_text_message' };
-    }
-
     // Ignorar grupos
     if (this.isGroupJid(fromJid)) {
       return {
@@ -380,6 +375,17 @@ class WebhookManager {
       });
       console.log('Respuesta OwnSystem:', resp);
     };
+
+    // Solo soporta texto por ahora: si es imagen/audio/documento/etc., avisar y marcar como procesado
+    if (contentType !== 'text' || !text) {
+      console.log('📎 Mensaje no textual (own system) — body completo para revisión:', JSON.stringify(body, null, 2));
+      try {
+        await sendReplyOwn('Por ahora solo puedo responder a mensajes de texto. Escribe tu consulta.');
+      } catch (err) {
+        console.error('Error enviando aviso de mensaje no textual:', err.message);
+      }
+      return { processed: true, response: null, userId: fromPhone, reason: 'not_text_message' };
+    }
 
     // Verificar si es un comando
     const commandResult = await this.commandManager.processMessage(text, fromPhone);
