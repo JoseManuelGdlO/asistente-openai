@@ -132,8 +132,31 @@ class UltraMsgManager {
     return null;
   }
 
+  /**
+   * Formatea una línea de log legible para envío de mensajes.
+   * @param {Object} opts - from (instancia), to, message, status ('sent'|'error'), error (opcional)
+   * @param {string} origin - Origen: 'UltraMsg' | 'Mi sistema'
+   * @returns {string}
+   */
+  _formatMessageLog(opts, origin = 'UltraMsg') {
+    const maxLen = 60;
+    const msgPreview = typeof opts.message === 'string'
+      ? (opts.message.length > maxLen ? opts.message.slice(0, maxLen) + '…' : opts.message)
+      : '';
+    const from = opts.from || '?';
+    const to = (opts.to || '?').toString().replace('@c.us', '');
+    const parts = [`Origen: ${origin}`, `De: ${from}`, `Para: ${to}`, `Mensaje: "${msgPreview}"`, `Estado: ${opts.status === 'sent' ? 'Enviado' : 'Error'}`];
+    if (opts.error) {
+      const errMsg = typeof opts.error === 'string' ? opts.error : (opts.error?.message || opts.error?.response?.data?.message || JSON.stringify(opts.error?.response?.data || opts.error));
+      parts.push(`Error: ${errMsg}`);
+    }
+    return parts.join(' | ');
+  }
+
   // Enviar mensaje usando una instancia específica
-  async sendMessage(to, message, instanceId = null) {
+  // options: { requestOrigin?: 'UltraMsg' | 'Mi sistema' }
+  async sendMessage(to, message, instanceId = null, options = {}) {
+    const origin = options.requestOrigin || 'UltraMsg';
     try {
       const instance = instanceId ? this.getInstance(instanceId) : this.getDefaultInstance();
       
@@ -157,14 +180,22 @@ class UltraMsgManager {
         }
       });
 
-      console.log(`✅ Mensaje enviado via UltraMsg (${instance.name}):`, response.data);
+      console.log('✅ ' + this._formatMessageLog({ from: instance.name, to, message, status: 'sent' }, origin));
       return {
         ...response.data,
         instanceName: instance.name,
         instanceId: instance.instanceId
       };
     } catch (error) {
-      console.error('❌ Error enviando mensaje via UltraMsg:', error.response?.data || error.message);
+      const instance = instanceId ? this.getInstance(instanceId) : this.getDefaultInstance();
+      const errMsg = error.response?.data?.message || (typeof error.response?.data === 'object' ? (error.response?.data?.error || error.message) : (error.response?.data || error.message));
+      console.error('❌ ' + this._formatMessageLog({
+        from: instance?.name,
+        to,
+        message,
+        status: 'error',
+        error: errMsg
+      }, origin));
       throw error;
     }
   }
