@@ -253,9 +253,13 @@ class WebhookManager {
     // Procesar con OpenAI usando el asistente específico del cliente
     const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientId);
     
-    // Identificar qué instancia usar para responder
-    const instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
-    console.log('📱 Usando instancia UltraMsg:', instanceId);
+    // Usar la instancia del cliente ya detectado (mismo número que recibió el mensaje),
+    // no el token del webhook, para que cada bot responda por su propio teléfono
+    let instanceId = this.ultraMsgManager.getInstanceIdByClientId(clientId);
+    if (!instanceId) {
+      instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
+    }
+    console.log('📱 Usando instancia UltraMsg:', instanceId, '(cliente:', clientId + ')');
     
     // Enviar respuesta via UltraMsg usando la instancia correcta
     try {
