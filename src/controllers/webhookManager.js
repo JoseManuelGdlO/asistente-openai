@@ -306,7 +306,7 @@ class WebhookManager {
       console.log('🎮 Comando ejecutado:', commandResult.command, 'para cliente:', commandResult.clientId);
 
       try {
-        await sendReplyUltra(commandResult.response, commandResult.clientId);
+        await sendReplyUltra(commandResult.response, commandResult.clientId || clientId);
         return commandResult.response;
       } catch (error) {
         console.error('❌ ' + this._formatSendErrorLog('UltraMsg', from, commandResult.response, error));
@@ -327,7 +327,8 @@ class WebhookManager {
     }
 
     // Verificar si es un mensaje de confirmación
-    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body, sendReplyUltra, 'UltraMsg');
+    const sendReplyUltraWithClient = (text) => sendReplyUltra(text, clientId);
+    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body, sendReplyUltraWithClient, 'UltraMsg');
     if (isConfirmationProcessed) {
       return null; // Ya se procesó como confirmación
     }
