@@ -224,8 +224,11 @@ class WebhookManager {
     const assistantPhone = messageData.to || messageData.from; // Fallback al from si no hay to
     const clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
 
-    const sendReplyUltra = async (text) => {
-      const instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
+    // Usar la instancia del cliente detectado (mismo número que recibió el mensaje),
+    // no el token del webhook, para que cada bot responda por su propio teléfono
+    const sendReplyUltra = async (text, preferredClientId = null) => {
+      const instanceId = (preferredClientId && this.ultraMsgManager.getInstanceIdByClientId(preferredClientId))
+        || this.identifyInstanceFromMessage(messageData, webhookToken);
       const response = await this.ultraMsgManager.sendMessage(from, text, instanceId, { requestOrigin: 'UltraMsg' });
     };
 
@@ -236,7 +239,7 @@ class WebhookManager {
       
       // Enviar respuesta del comando por WhatsApp
       try {
-        await sendReplyUltra(commandResult.response);
+        await sendReplyUltra(commandResult.response, clientId);
         
         return commandResult.response;
       } catch (error) {
@@ -246,7 +249,8 @@ class WebhookManager {
     }
 
     // Verificar si es un mensaje de confirmación
-    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body, sendReplyUltra, 'UltraMsg');
+    const sendReplyUltraWithClient = (text) => sendReplyUltra(text, clientId);
+    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body, sendReplyUltraWithClient, 'UltraMsg');
     if (isConfirmationProcessed) {
       return null; // Ya se procesó como confirmación
     }
@@ -278,7 +282,7 @@ class WebhookManager {
     
     // Enviar respuesta via UltraMsg usando la instancia correcta
     try {
-      await sendReplyUltra(aiResponse);
+      await sendReplyUltra(aiResponse, clientId);
       
       return aiResponse;
     } catch (error) {

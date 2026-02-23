@@ -117,6 +117,22 @@ class UltraMsgManager {
   }
 
   /**
+   * Obtiene el ID de instancia UltraMsg asociado a un cliente (por clientId de Firebase).
+   * Así la respuesta siempre se envía por el mismo número que recibió el mensaje.
+   * @param {string} clientId - ID del cliente en Firebase
+   * @returns {string|null} - instanceId o null si no existe
+   */
+  getInstanceIdByClientId(clientId) {
+    if (!clientId) return null;
+    for (const [instanceId, instance] of this.instances) {
+      if (instance.clientId === clientId) {
+        return instanceId;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Formatea una línea de log legible para envío de mensajes.
    * @param {Object} opts - from (instancia), to, message, status ('sent'|'error'), error (opcional)
    * @param {string} origin - Origen: 'UltraMsg' | 'Mi sistema'
