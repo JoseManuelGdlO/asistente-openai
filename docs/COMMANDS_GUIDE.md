@@ -59,6 +59,27 @@ Los archivos se guardan en `uploads/{clientId}/{documento_id}.pdf` (volumen Dock
 - En las Instructions del assistant indica **cuándo** llamar la tool (ej. al pedir precios → `documento_id="lista_precios"`).
 - Registra la tool con: `node scripts/add-enviar-pdf-tool.js asst_xxxxxxxx`
 
+### **🛑 Lista de bloqueados (blacklist)**
+
+| Comando | Descripción | Autorización |
+|---------|-------------|--------------|
+| `/blacklist` | Gestionar números a los que el bot no responde | ✅ Requerida (solo admin) |
+
+Los números en la blacklist de un cliente no reciben respuesta del bot (ni siquiera a comandos). Solo el número administrador del cliente puede gestionar la lista.
+
+**Subcomandos:**
+
+- `#ID /blacklist list` — Ver todos los números bloqueados.
+- `#ID /blacklist add 521234567890` — Añadir un número a la lista.
+- `#ID /blacklist remove 521234567890` — Quitar un número de la lista.
+
+**Ejemplos:**
+```
+#CLIENTE001 /blacklist list
+#CLIENTE001 /blacklist add 5216189999999
+#CLIENTE001 /blacklist remove 5216189999999
+```
+
 ## 🔐 Sistema de Autorización
 
 ### **Números Autorizados**

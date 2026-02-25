@@ -61,6 +61,11 @@ class CommandManager {
         action: 'delete_document',
         requiresAuth: true,
         requiresArg: true
+      },
+      '/blacklist': {
+        description: 'Gestionar lista de números bloqueados (solo admin)',
+        action: 'blacklist',
+        requiresAuth: true
       }
     };
     
@@ -97,6 +102,16 @@ class CommandManager {
   }
 
   /**
+   * Verifica si un número está en la blacklist de un cliente
+   * @param {string} clientId - ID del cliente (id_empresa)
+   * @param {string} phone - Número de teléfono
+   * @returns {Promise<boolean>} - True si está bloqueado
+   */
+  async isPhoneBlacklisted(clientId, phone) {
+    return this.firebaseService.isPhoneBlacklisted(clientId, phone);
+  }
+
+  /**
    * Verifica si un número está autorizado para un cliente
    * @param {string} phoneNumber - Número de teléfono
    * @param {string} clientId - ID del cliente
@@ -125,13 +140,15 @@ class CommandManager {
    * @returns {Object|null} - Información del comando o null
    */
   extractCommandInfo(message) {
-    // Formato: #CLIENTE001 /off  o  #CLIENTE001 /upload lista_precios
-    const match = message.match(/#(\w+)\s+(\/\w+)(?:\s+(\S+))?/);
+    // Formato: #CLIENTE001 /off  o  #CLIENTE001 /upload lista_precios  o  #CLIENTE001 /blacklist add 52...
+    const match = message.match(/#(\w+)\s+(\/\w+)(?:\s+(.+))?/);
     
     if (!match) return null;
     
-    const [, clientId, command, arg] = match;
-    return { clientId, command, arg: arg || null };
+    const [, clientId, command, rest] = match;
+    const args = rest ? rest.trim() : '';
+    const arg = args ? args.split(/\s+/)[0] : null;
+    return { clientId, command, args, arg };
   }
 
   /**
@@ -139,11 +156,12 @@ class CommandManager {
    * @param {string} clientId - ID del cliente
    * @param {string} command - Comando a ejecutar
    * @param {string} from - Número que envía el comando
-   * @param {string|null} arg - Argumento opcional (documento_id)
+   * @param {string} [args] - Argumentos opcionales del comando
    * @param {Object} mediaContext - Contexto de media para /upload
    * @returns {string} - Respuesta del comando
    */
-  async executeCommand(clientId, command, from, arg = null, mediaContext = {}) {
+  async executeCommand(clientId, command, from, args = '', mediaContext = {}) {
+    const arg = args ? String(args).trim().split(/\s+/)[0] : null;
     const client = this.clientConfig[clientId];
     const commandDef = this.commands[command];
     
@@ -198,6 +216,40 @@ class CommandManager {
       case 'delete_document':
         return await this.handleDeleteDocument(clientId, arg);
         
+      case 'blacklist': {
+        const sub = args.toLowerCase().split(/\s+/)[0];
+        if (sub === 'list') {
+          const list = await this.firebaseService.getBlacklist(clientId);
+          if (!list.length) {
+            return `📋 Lista de números bloqueados de ${client.name}:\n(ninguno)`;
+          }
+          const lines = list.map((item, i) => `${i + 1}. ${item.phone}`);
+          return `📋 Lista de números bloqueados de ${client.name}:\n${lines.join('\n')}`;
+        }
+        if (sub === 'add') {
+          const phone = args.slice(3).trim(); // "add 521234..." -> "521234..."
+          if (!phone) {
+            return `❌ Indica el número.\nUso: #${clientId} /blacklist add 521234567890`;
+          }
+          const result = await this.firebaseService.addToBlacklist(clientId, phone);
+          if (result.added) {
+            return `✅ Número ${phone} añadido a la lista de bloqueados.`;
+          }
+          return `ℹ️ ${result.message}`;
+        }
+        if (sub === 'remove') {
+          const phone = args.slice(6).trim(); // "remove 521234..." -> "521234..."
+          if (!phone) {
+            return `❌ Indica el número.\nUso: #${clientId} /blacklist remove 521234567890`;
+          }
+          const removed = await this.firebaseService.removeFromBlacklist(clientId, phone);
+          return removed
+            ? `✅ Número ${phone} quitado de la lista de bloqueados.`
+            : `ℹ️ El número ${phone} no estaba en la lista.`;
+        }
+        return `📋 Blacklist - Uso:\n#${clientId} /blacklist list\n#${clientId} /blacklist add 521234567890\n#${clientId} /blacklist remove 521234567890`;
+      }
+
       default:
         return `❌ Acción no implementada: ${commandDef.action}`;
     }
@@ -285,7 +337,7 @@ class CommandManager {
       };
     }
     
-    const { clientId, command, arg } = commandInfo;
+    const { clientId, command, args = '', arg = null } = commandInfo;
     
     // Verificar si el cliente existe
     if (!this.clientConfig[clientId]) {
@@ -296,8 +348,7 @@ class CommandManager {
     }
     
     // Ejecutar comando
-    const response = await this.executeCommand(clientId, command, from, arg, mediaContext);
-    
+    const response = await this.executeCommand(clientId, command, from, args, mediaContext);    
     return { 
       isCommand: true, 
       response: response,
