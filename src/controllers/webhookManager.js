@@ -228,7 +228,7 @@ class WebhookManager {
     if (clientId) {
       const blacklisted = await this.commandManager.isPhoneBlacklisted(clientId, from);
       if (blacklisted) {
-        console.log('🚫 Mensaje ignorado (blacklist):', from, 'cliente:', clientId);
+        console.log('[BLACKLIST] Mensaje ignorado por contacto bloqueado | origen: UltraMsg | teléfono:', from, '| id_empresa:', clientId);
         return null;
       }
     }
@@ -364,7 +364,7 @@ class WebhookManager {
     // Comprobar blacklist: no responder a números bloqueados
     const blacklisted = await this.commandManager.isPhoneBlacklisted(clientId, fromPhone);
     if (blacklisted) {
-      console.log('🚫 Mensaje ignorado (blacklist):', fromPhone, 'cliente:', clientId);
+      console.log('[BLACKLIST] Mensaje ignorado por contacto bloqueado | origen: OwnSystem | teléfono:', fromPhone, '| id_empresa:', clientId);
       return { processed: true, response: null, userId: fromPhone, reason: 'blacklisted' };
     }
 
@@ -482,13 +482,21 @@ class WebhookManager {
       // Procesar el mensaje con el token del webhook para identificación
       const response = await this.processMessage(message, webhookToken);
       
-      // Si el mensaje fue ignorado (grupo), marcar como procesado pero sin respuesta
+      // Si el mensaje fue ignorado (grupo o blacklist), marcar como procesado pero sin respuesta
       if (response === null && this.isGroupMessage(message)) {
         return { 
           processed: true, 
           response: null,
           userId: message.from.replace('@c.us', ''),
           reason: 'group_message_ignored'
+        };
+      }
+      if (response === null) {
+        return { 
+          processed: true, 
+          response: null,
+          userId: message.from.replace('@c.us', ''),
+          reason: 'blacklisted'
         };
       }
       

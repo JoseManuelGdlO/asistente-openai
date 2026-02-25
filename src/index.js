@@ -82,6 +82,8 @@ app.post('/webhook', async (req, res) => {
     if (result.processed) {
       if (result.reason === 'group_message_ignored') {
         console.log('📱 Mensaje de grupo ignorado exitosamente');
+      } else if (result.reason === 'blacklisted') {
+        console.log('[BLACKLIST] Mensaje ignorado por contacto bloqueado (UltraMsg)');
       } else {
         console.log('Mensaje procesado exitosamente');
       }
@@ -113,6 +115,8 @@ app.post('/webhook-own', async (req, res) => {
     if (result.processed) {
       if (result.reason === 'group_message_ignored') {
         console.log('📱 Mensaje de grupo ignorado exitosamente (own system)');
+      } else if (result.reason === 'blacklisted') {
+        console.log('[BLACKLIST] Mensaje ignorado por contacto bloqueado (own system)');
       } else if (result.reason === 'not_text_message') {
         console.log('📎 Mensaje no textual (imagen/audio/etc.) — se envió aviso al usuario (own system)');
       } else {
