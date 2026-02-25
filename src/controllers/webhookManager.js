@@ -224,6 +224,15 @@ class WebhookManager {
     const assistantPhone = messageData.to || messageData.from; // Fallback al from si no hay to
     const clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
 
+    // Si tenemos cliente, comprobar blacklist: no responder a números bloqueados
+    if (clientId) {
+      const blacklisted = await this.commandManager.isPhoneBlacklisted(clientId, from);
+      if (blacklisted) {
+        console.log('🚫 Mensaje ignorado (blacklist):', from, 'cliente:', clientId);
+        return null;
+      }
+    }
+
     // Usar la instancia del cliente detectado (mismo número que recibió el mensaje),
     // no el token del webhook, para que cada bot responda por su propio teléfono
     const sendReplyUltra = async (text, preferredClientId = null) => {
@@ -350,6 +359,13 @@ class WebhookManager {
     if (!clientId) {
       console.log('❌ No se pudo identificar el cliente para assistantPhone:', assistantPhone, 'to:', toRaw);
       return { processed: false, reason: 'client_not_found' };
+    }
+
+    // Comprobar blacklist: no responder a números bloqueados
+    const blacklisted = await this.commandManager.isPhoneBlacklisted(clientId, fromPhone);
+    if (blacklisted) {
+      console.log('🚫 Mensaje ignorado (blacklist):', fromPhone, 'cliente:', clientId);
+      return { processed: true, response: null, userId: fromPhone, reason: 'blacklisted' };
     }
 
     const client = this.commandManager.clientConfig?.[clientId];

@@ -13,6 +13,107 @@ class FirebaseService {
     
     this.db = admin.firestore();
     this.clientsCollection = this.db.collection('clients');
+    this.blacklistCollection = this.db.collection('blacklist-phone');
+  }
+
+  /**
+   * Normaliza un número de teléfono (quita @c.us, espacios)
+   * @param {string} phone - Número a normalizar
+   * @returns {string} - Número normalizado
+   */
+  _normalizePhone(phone) {
+    if (!phone || typeof phone !== 'string') return '';
+    return phone.replace('@c.us', '').trim();
+  }
+
+  /**
+   * Comprueba si un número está en la blacklist de una empresa
+   * @param {string} id_empresa - ID del cliente (colección clients)
+   * @param {string} phone - Número de teléfono
+   * @returns {Promise<boolean>} - True si está bloqueado
+   */
+  async isPhoneBlacklisted(id_empresa, phone) {
+    try {
+      const normalized = this._normalizePhone(phone);
+      if (!normalized || !id_empresa) return false;
+      const snapshot = await this.blacklistCollection
+        .where('id_empresa', '==', id_empresa)
+        .where('phone', '==', normalized)
+        .limit(1)
+        .get();
+      return !snapshot.empty;
+    } catch (error) {
+      console.error('❌ Error comprobando blacklist:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Obtiene la lista de números bloqueados de una empresa
+   * @param {string} id_empresa - ID del cliente
+   * @returns {Promise<Array<{id: string, phone: string}>>} - Lista de { id, phone }
+   */
+  async getBlacklist(id_empresa) {
+    try {
+      const snapshot = await this.blacklistCollection
+        .where('id_empresa', '==', id_empresa)
+        .get();
+      return snapshot.docs.map(doc => ({ id: doc.id, phone: doc.data().phone }));
+    } catch (error) {
+      console.error('❌ Error obteniendo blacklist:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Añade un número a la blacklist de una empresa (evita duplicados)
+   * @param {string} id_empresa - ID del cliente
+   * @param {string} phone - Número a bloquear
+   * @returns {Promise<Object>} - Documento creado o existente
+   */
+  async addToBlacklist(id_empresa, phone) {
+    try {
+      const normalized = this._normalizePhone(phone);
+      if (!normalized || !id_empresa) {
+        throw new Error('id_empresa y phone son requeridos');
+      }
+      const already = await this.isPhoneBlacklisted(id_empresa, normalized);
+      if (already) {
+        return { added: false, message: 'El número ya estaba en la lista' };
+      }
+      const docRef = await this.blacklistCollection.add({ id_empresa, phone: normalized });
+      console.log('✅ Número añadido a blacklist:', id_empresa, normalized);
+      return { added: true, id: docRef.id };
+    } catch (error) {
+      console.error('❌ Error añadiendo a blacklist:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Quita un número de la blacklist de una empresa
+   * @param {string} id_empresa - ID del cliente
+   * @param {string} phone - Número a desbloquear
+   * @returns {Promise<boolean>} - True si se eliminó al menos un documento
+   */
+  async removeFromBlacklist(id_empresa, phone) {
+    try {
+      const normalized = this._normalizePhone(phone);
+      if (!normalized || !id_empresa) return false;
+      const snapshot = await this.blacklistCollection
+        .where('id_empresa', '==', id_empresa)
+        .where('phone', '==', normalized)
+        .get();
+      const batch = this.db.batch();
+      snapshot.docs.forEach(doc => batch.delete(doc.ref));
+      if (snapshot.empty) return false;
+      await batch.commit();
+      console.log('✅ Número quitado de blacklist:', id_empresa, normalized);
+      return true;
+    } catch (error) {
+      console.error('❌ Error quitando de blacklist:', error);
+      throw error;
+    }
   }
 
   /**
