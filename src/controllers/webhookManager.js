@@ -1,12 +1,14 @@
 const CommandManager = require('../services/commandManager');
+const DocumentStore = require('../services/documentStore');
 
 class WebhookManager {
-  constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager) {
+  constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager, documentStore = null) {
     this.ultraMsgManager = ultraMsgManager;
     this.openAIManager = openAIManager;
     this.confirmationManager = confirmationManager;
     this.userContextManager = userContextManager;
-    this.commandManager = new CommandManager();
+    this.documentStore = documentStore || new DocumentStore();
+    this.commandManager = new CommandManager(this.documentStore);
     
     // Cache para mensajes procesados
     this.processedMessages = new Set();
@@ -179,6 +181,42 @@ class WebhookManager {
   }
 
   /**
+   * Detecta si el mensaje trae un documento/media
+   * @param {Object} messageData
+   * @returns {boolean}
+   */
+  isDocumentMessage(messageData) {
+    const type = (messageData.type || messageData.message_type || '').toLowerCase();
+    return type === 'document' || Boolean(messageData.media && messageData.filename);
+  }
+
+  /**
+   * Extrae URL/filename/mime del adjunto UltraMsg
+   * @param {Object} messageData
+   * @returns {{mediaUrl: string|null, mediaFilename: string, mediaMime: string}}
+   */
+  extractMediaInfo(messageData) {
+    return {
+      mediaUrl: messageData.media || messageData.document || null,
+      mediaFilename: messageData.filename || messageData.fileName || '',
+      mediaMime: messageData.mimetype || messageData.mime_type || messageData.mediaType || ''
+    };
+  }
+
+  /**
+   * Resuelve instanceId para un clientId / mensaje
+   */
+  resolveInstanceId(clientId, messageData, webhookToken) {
+    let instanceId = clientId
+      ? this.ultraMsgManager.getInstanceIdByClientId(clientId)
+      : null;
+    if (!instanceId) {
+      instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
+    }
+    return instanceId;
+  }
+
+  /**
    * Procesa un mensaje completo
    * @param {Object} messageData - Datos del mensaje de UltraMsg
    * @param {string} webhookToken - Token del webhook (opcional)
@@ -195,26 +233,62 @@ class WebhookManager {
     }
 
     const from = messageData.from.replace('@c.us', '');
-    const msg_body = messageData.body;
+    const msg_body = messageData.body || '';
+    const hasDocument = this.isDocumentMessage(messageData);
+    const mediaInfo = this.extractMediaInfo(messageData);
 
-    // Verificar si es un comando
-    const commandResult = await this.commandManager.processMessage(msg_body, from);
+    // Preparar contexto de media para comandos /upload
+    let mediaContext = {};
+    if (hasDocument && mediaInfo.mediaUrl) {
+      try {
+        console.log('📎 Descargando documento adjunto:', mediaInfo.mediaFilename || mediaInfo.mediaUrl);
+        const mediaBuffer = await this.ultraMsgManager.downloadMedia(mediaInfo.mediaUrl);
+        mediaContext = {
+          mediaBuffer,
+          mediaFilename: mediaInfo.mediaFilename,
+          mediaMime: mediaInfo.mediaMime
+        };
+      } catch (error) {
+        console.error('❌ Error descargando adjunto:', error.message);
+        if (this.commandManager.isCommand(msg_body)) {
+          const failMsg = '❌ No se pudo descargar el archivo adjunto. Intenta de nuevo.';
+          await this.ultraMsgManager.sendMessage(from, failMsg);
+          return failMsg;
+        }
+      }
+    }
+
+    // Verificar si es un comando (texto o caption de documento)
+    const commandResult = await this.commandManager.processMessage(msg_body, from, mediaContext);
     if (commandResult.isCommand) {
       console.log('🎮 Comando ejecutado:', commandResult.command, 'para cliente:', commandResult.clientId);
-      
-      // Enviar respuesta del comando por WhatsApp
+
+      const instanceId = this.resolveInstanceId(commandResult.clientId, messageData, webhookToken);
+
       try {
         console.log('Enviando respuesta de comando via UltraMsg a:', from);
         console.log('Respuesta:', commandResult.response);
-        
-        const response = await this.ultraMsgManager.sendMessage(from, commandResult.response);
+
+        const response = await this.ultraMsgManager.sendMessage(from, commandResult.response, instanceId);
         console.log('Respuesta de comando enviada:', response);
-        
+
         return commandResult.response;
       } catch (error) {
         console.error('Error al enviar respuesta de comando:', error.response?.data || error.message);
         throw error;
       }
+    }
+
+    // Documentos sin comando de admin: no se procesan con IA en esta fase
+    if (hasDocument) {
+      console.log('📎 Documento recibido sin comando /upload; ignorando para el asistente');
+      return null;
+    }
+
+    // Sin cuerpo de texto no hay nada que procesar
+    if (!msg_body || !String(msg_body).trim()) {
+      console.log('Mensaje vacío, ignorando');
+      return null;
     }
 
     // Verificar si es un mensaje de confirmación
@@ -250,16 +324,15 @@ class WebhookManager {
     
     console.log('🤖 Usando asistente:', assistantId, 'para cliente:', clientId);
 
-    // Procesar con OpenAI usando el asistente específico del cliente
-    const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientId);
-    
-    // Usar la instancia del cliente ya detectado (mismo número que recibió el mensaje),
-    // no el token del webhook, para que cada bot responda por su propio teléfono
-    let instanceId = this.ultraMsgManager.getInstanceIdByClientId(clientId);
-    if (!instanceId) {
-      instanceId = this.identifyInstanceFromMessage(messageData, webhookToken);
-    }
+    const instanceId = this.resolveInstanceId(clientId, messageData, webhookToken);
     console.log('📱 Usando instancia UltraMsg:', instanceId, '(cliente:', clientId + ')');
+
+    // Procesar con OpenAI (tools pueden enviar PDFs via UltraMsg)
+    const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientId, {
+      instanceId,
+      ultraMsgManager: this.ultraMsgManager,
+      documentStore: this.documentStore
+    });
     
     // Enviar respuesta via UltraMsg usando la instancia correcta
     try {
@@ -285,11 +358,13 @@ class WebhookManager {
   async handleWebhook(body, webhookToken = null) {
     console.log('=== Nueva petición recibida de UltraMsg ===');
     
-    // Verificar si es un mensaje de UltraMsg
-    if (body && body.data && body.data.body) {
+    // Aceptar mensajes con body (texto/caption) o con media (documento)
+    const hasPayload = body && body.data && (body.data.body || body.data.media || body.data.type);
+    if (hasPayload) {
       const message = body.data;
       console.log('Mensaje recibido de:', message.from);
       console.log('ID del mensaje:', message.id);
+      console.log('Tipo:', message.type || 'text');
       
       // Verificar si ya procesamos este mensaje
       if (this.isMessageProcessed(message.id)) {

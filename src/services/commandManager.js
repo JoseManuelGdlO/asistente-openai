@@ -1,9 +1,11 @@
 const FirebaseService = require('./firebaseService');
+const DocumentStore = require('./documentStore');
 
 class CommandManager {
-  constructor() {
+  constructor(documentStore = null) {
     // Servicio de Firebase para gestionar clientes
     this.firebaseService = new FirebaseService();
+    this.documentStore = documentStore || new DocumentStore();
     
     // Configuración de clientes desde Firebase
     this.clientConfig = {};
@@ -42,6 +44,23 @@ class CommandManager {
         description: 'Información del consultorio',
         action: 'show_info',
         requiresAuth: false
+      },
+      '/upload': {
+        description: 'Subir PDF (adjuntar archivo + caption con id)',
+        action: 'upload_document',
+        requiresAuth: true,
+        requiresArg: true
+      },
+      '/docs': {
+        description: 'Listar PDFs guardados',
+        action: 'list_documents',
+        requiresAuth: true
+      },
+      '/delete': {
+        description: 'Eliminar un PDF por id',
+        action: 'delete_document',
+        requiresAuth: true,
+        requiresArg: true
       }
     };
     
@@ -106,13 +125,13 @@ class CommandManager {
    * @returns {Object|null} - Información del comando o null
    */
   extractCommandInfo(message) {
-    // Formato: #CLIENTE001 /off
-    const match = message.match(/#(\w+)\s+(\/\w+)/);
+    // Formato: #CLIENTE001 /off  o  #CLIENTE001 /upload lista_precios
+    const match = message.match(/#(\w+)\s+(\/\w+)(?:\s+(\S+))?/);
     
     if (!match) return null;
     
-    const [, clientId, command] = match;
-    return { clientId, command };
+    const [, clientId, command, arg] = match;
+    return { clientId, command, arg: arg || null };
   }
 
   /**
@@ -120,9 +139,11 @@ class CommandManager {
    * @param {string} clientId - ID del cliente
    * @param {string} command - Comando a ejecutar
    * @param {string} from - Número que envía el comando
+   * @param {string|null} arg - Argumento opcional (documento_id)
+   * @param {Object} mediaContext - Contexto de media para /upload
    * @returns {string} - Respuesta del comando
    */
-  async executeCommand(clientId, command, from) {
+  async executeCommand(clientId, command, from, arg = null, mediaContext = {}) {
     const client = this.clientConfig[clientId];
     const commandDef = this.commands[command];
     
@@ -134,6 +155,10 @@ class CommandManager {
     // Verificar autorización si es requerida
     if (commandDef.requiresAuth && !this.isAuthorizedNumber(from, clientId)) {
       return `❌ No autorizado para controlar el bot de ${client.name}.\nSolo el número ${client.adminPhone} puede ejecutar este comando.`;
+    }
+
+    if (commandDef.requiresArg && !arg) {
+      return `❌ Falta el id del documento.\nUso: #${clientId} ${command} documento_id`;
     }
     
     // Ejecutar comando
@@ -163,6 +188,15 @@ class CommandManager {
         
       case 'show_info':
         return this.getInfoMessage(clientId);
+
+      case 'upload_document':
+        return await this.handleUploadDocument(clientId, arg, mediaContext);
+
+      case 'list_documents':
+        return await this.handleListDocuments(clientId);
+
+      case 'delete_document':
+        return await this.handleDeleteDocument(clientId, arg);
         
       default:
         return `❌ Acción no implementada: ${commandDef.action}`;
@@ -170,12 +204,73 @@ class CommandManager {
   }
 
   /**
+   * Sube un PDF al DocumentStore
+   */
+  async handleUploadDocument(clientId, documentoId, mediaContext = {}) {
+    const { mediaBuffer, mediaFilename, mediaMime } = mediaContext;
+
+    if (!mediaBuffer) {
+      return `❌ Para subir un PDF, adjunta el archivo y pon en el caption:\n#${clientId} /upload documento_id\n\nEjemplo: #${clientId} /upload lista_precios`;
+    }
+
+    try {
+      const saved = await this.documentStore.save(
+        clientId,
+        documentoId,
+        mediaBuffer,
+        mediaFilename || '',
+        mediaMime || ''
+      );
+      return `✅ PDF guardado como "${saved.documentoId}"\nArchivo: ${saved.filename}\nTamaño: ${Math.round(saved.size / 1024)} KB\n\nÚsalo en el prompt con documento_id="${saved.documentoId}"`;
+    } catch (error) {
+      return `❌ No se pudo guardar el PDF: ${error.message}`;
+    }
+  }
+
+  /**
+   * Lista PDFs del cliente
+   */
+  async handleListDocuments(clientId) {
+    try {
+      const docs = await this.documentStore.list(clientId);
+      if (docs.length === 0) {
+        return `📂 No hay PDFs guardados para ${clientId}.\nSube uno con: #${clientId} /upload documento_id (adjuntando el PDF)`;
+      }
+
+      let msg = `📂 PDFs de ${clientId}:\n\n`;
+      docs.forEach((doc) => {
+        msg += `• ${doc.documentoId} (${Math.round(doc.size / 1024)} KB)\n`;
+      });
+      msg += `\nEliminar: #${clientId} /delete documento_id`;
+      return msg;
+    } catch (error) {
+      return `❌ Error listando documentos: ${error.message}`;
+    }
+  }
+
+  /**
+   * Elimina un PDF del cliente
+   */
+  async handleDeleteDocument(clientId, documentoId) {
+    try {
+      const deleted = await this.documentStore.delete(clientId, documentoId);
+      if (!deleted) {
+        return `❌ No existe el documento "${documentoId}" para ${clientId}.\nUsa #${clientId} /docs para ver los disponibles.`;
+      }
+      return `🗑️ Documento "${documentoId}" eliminado.`;
+    } catch (error) {
+      return `❌ Error eliminando documento: ${error.message}`;
+    }
+  }
+
+  /**
    * Procesa un mensaje y verifica si es un comando
    * @param {string} message - Mensaje a procesar
    * @param {string} from - Número que envía el mensaje
+   * @param {Object} mediaContext - Contexto opcional de media
    * @returns {Object} - Resultado del procesamiento
    */
-  async processMessage(message, from) {
+  async processMessage(message, from, mediaContext = {}) {
     // Verificar si es un comando
     if (!this.isCommand(message)) {
       return { isCommand: false };
@@ -190,7 +285,7 @@ class CommandManager {
       };
     }
     
-    const { clientId, command } = commandInfo;
+    const { clientId, command, arg } = commandInfo;
     
     // Verificar si el cliente existe
     if (!this.clientConfig[clientId]) {
@@ -201,13 +296,14 @@ class CommandManager {
     }
     
     // Ejecutar comando
-    const response = await this.executeCommand(clientId, command, from);
+    const response = await this.executeCommand(clientId, command, from, arg, mediaContext);
     
     return { 
       isCommand: true, 
       response: response,
       clientId: clientId,
-      command: command
+      command: command,
+      arg: arg
     };
   }
 
@@ -264,7 +360,8 @@ class CommandManager {
       help += `${cmd} - ${def.description}${authRequired}\n`;
     });
     
-    help += `\n💡 Uso: #${clientId} /comando`;
+    help += `\n💡 Uso: #${clientId} /comando\n`;
+    help += `📎 Subir PDF: adjunta el archivo con caption "#${clientId} /upload documento_id"`;
     return help;
   }
 

@@ -74,16 +74,46 @@ class OpenAIManager {
   }
 
   /**
+   * Construye additional_instructions con documentos disponibles
+   * @param {string} clientCode
+   * @param {Object} documentStore
+   * @returns {Promise<string>}
+   */
+  async buildDocumentsInstructions(clientCode, documentStore) {
+    if (!documentStore) {
+      return 'No hay DocumentStore configurado. No llames enviar_pdf.';
+    }
+
+    try {
+      const docs = await documentStore.list(clientCode);
+      if (!docs.length) {
+        return 'Documentos disponibles para este consultorio: ninguno. No llames enviar_pdf hasta que haya PDFs subidos.';
+      }
+      const ids = docs.map((d) => d.documentoId).join(', ');
+      return `Documentos disponibles para este consultorio: ${ids}. Usa solo estos documento_id al llamar enviar_pdf.`;
+    } catch (error) {
+      console.error('Error listando documentos para instructions:', error.message);
+      return 'No se pudieron listar documentos. Si llamas enviar_pdf y falla, informa al usuario.';
+    }
+  }
+
+  /**
    * Crea y ejecuta un run
    * @param {string} threadId - ID del thread
    * @param {string} assistantId - ID del asistente a usar
+   * @param {string} [additionalInstructions]
    * @returns {Object} - Run creado
    */
-  async createRun(threadId, assistantId) {
+  async createRun(threadId, assistantId, additionalInstructions = '') {
     console.log('Creando run con asistente:', assistantId);
-    const run = await this.openai.beta.threads.runs.create(threadId, {
+    const payload = {
       assistant_id: assistantId
-    });
+    };
+    if (additionalInstructions) {
+      payload.additional_instructions = additionalInstructions;
+    }
+
+    const run = await this.openai.beta.threads.runs.create(threadId, payload);
     console.log('Run creado:', run.id);
     
     // Guardar estado del run como in_progress
@@ -96,9 +126,10 @@ class OpenAIManager {
    * Espera a que termine un run
    * @param {string} threadId - ID del thread
    * @param {string} runId - ID del run
+   * @param {Object|null} runContext - Contexto del request (aislado por llamada)
    * @returns {Object} - Estado final del run
    */
-  async waitForRunCompletion(threadId, runId) {
+  async waitForRunCompletion(threadId, runId, runContext = null) {
     let runStatusObj;
     let retryCount = 0;
     const maxRetries = 150; // 5 minutos total
@@ -118,7 +149,7 @@ class OpenAIManager {
       if (runStatusObj.status === "requires_action") {
         console.log('El run requiere acción, procesando tool_calls...');
         console.log('Tool calls:', JSON.stringify(runStatusObj.required_action.submit_tool_outputs.tool_calls, null, 2));
-        await this.handleRequiredAction(runStatusObj, threadId, runId);
+        await this.handleRequiredAction(runStatusObj, threadId, runId, runContext);
       }
 
       retryCount++;
@@ -140,10 +171,11 @@ class OpenAIManager {
    * @param {Object} runStatus - Estado del run
    * @param {string} threadId - ID del thread
    * @param {string} runId - ID del run
+   * @param {Object|null} runContext - Contexto del request (aislado por llamada)
    */
-  async handleRequiredAction(runStatus, threadId, runId) {
+  async handleRequiredAction(runStatus, threadId, runId, runContext = null) {
     const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
-    const tool_outputs = await this.processToolCalls(toolCalls);
+    const tool_outputs = await this.processToolCalls(toolCalls, runContext);
 
     // Enviar los resultados a OpenAI
     await this.openai.beta.threads.runs.submitToolOutputs(
@@ -154,19 +186,77 @@ class OpenAIManager {
   }
 
   /**
+   * Ejecuta enviar_pdf
+   * @param {Object} args
+   * @param {Object|null} runContext - Contexto del request actual
+   * @returns {Promise<Object>}
+   */
+  async executeEnviarPdf(args, runContext = null) {
+    const ctx = runContext;
+    if (!ctx || !ctx.documentStore || !ctx.ultraMsgManager) {
+      return { error: 'Contexto de envío no disponible' };
+    }
+
+    const documentoId = args.documento_id || args.documentoId;
+    if (!documentoId) {
+      return { error: 'documento_id es requerido' };
+    }
+
+    const doc = await ctx.documentStore.get(ctx.clientId, documentoId);
+    if (!doc) {
+      return {
+        error: `Documento "${documentoId}" no encontrado`,
+        disponibles: (await ctx.documentStore.list(ctx.clientId)).map((d) => d.documentoId)
+      };
+    }
+
+    const documentBase64 = doc.buffer.toString('base64');
+    await ctx.ultraMsgManager.sendDocument(
+      ctx.userId,
+      {
+        filename: doc.filename,
+        document: documentBase64,
+        caption: args.caption || ''
+      },
+      ctx.instanceId
+    );
+
+    return {
+      success: true,
+      documento_id: doc.documentoId,
+      filename: doc.filename
+    };
+  }
+
+  /**
    * Procesa tool_calls
    * @param {Array} toolCalls - Lista de tool calls
+   * @param {Object|null} runContext - Contexto del request actual
    * @returns {Array} - Tool outputs
    */
-  async processToolCalls(toolCalls) {
+  async processToolCalls(toolCalls, runContext = null) {
     const tool_outputs = [];
     for (const toolCall of toolCalls) {
       const functionName = toolCall.function.name;
-      const args = JSON.parse(toolCall.function.arguments);
+      let args = {};
+      try {
+        args = JSON.parse(toolCall.function.arguments || '{}');
+      } catch (error) {
+        args = {};
+      }
       let output = null;
 
-      // Por ahora no hay funciones implementadas
-      output = { error: `Función ${functionName} no implementada.` };
+      if (functionName === 'enviar_pdf') {
+        try {
+          console.log('📄 Ejecutando enviar_pdf:', args);
+          output = await this.executeEnviarPdf(args, runContext);
+        } catch (error) {
+          console.error('❌ Error en enviar_pdf:', error.message);
+          output = { error: error.message || 'Error enviando PDF' };
+        }
+      } else {
+        output = { error: `Función ${functionName} no implementada.` };
+      }
 
       tool_outputs.push({
         tool_call_id: toolCall.id,
@@ -207,9 +297,10 @@ class OpenAIManager {
    * @param {string} message - Mensaje del usuario
    * @param {string} assistantId - ID del asistente a usar
    * @param {string} clientCode - Código del cliente (opcional, para threads)
+   * @param {Object} context - Contexto para tools (instanceId, ultraMsgManager, documentStore)
    * @returns {string} - Respuesta del asistente
    */
-  async processMessage(userId, message, assistantId, clientCode = 'default') {
+  async processMessage(userId, message, assistantId, clientCode = 'default', context = {}) {
     // Obtener o crear thread para el usuario y cliente
     const threadId = await this.getOrCreateThread(userId, clientCode);
 
@@ -217,18 +308,32 @@ class OpenAIManager {
     if (this.hasActiveRun(threadId)) {
       throw new Error('Por favor espera a que termine la respuesta anterior.');
     }
-    
+
+    // Contexto local por request: evita que peticiones concurrentes se pisen
+    const runContext = {
+      userId,
+      clientId: clientCode,
+      instanceId: context.instanceId || null,
+      ultraMsgManager: context.ultraMsgManager || null,
+      documentStore: context.documentStore || null
+    };
+
     // Agregar el mensaje al thread
     await this.addMessageToThread(threadId, message);
 
     // Obtener mensajes anteriores para contexto
     await this.getPreviousMessages(threadId, 5);
 
-    // Crear y ejecutar el run con el asistente específico
-    const run = await this.createRun(threadId, assistantId);
+    const additionalInstructions = await this.buildDocumentsInstructions(
+      clientCode,
+      context.documentStore
+    );
 
-    // Esperar a que termine el run
-    const runStatusObj = await this.waitForRunCompletion(threadId, run.id);
+    // Crear y ejecutar el run con el asistente específico
+    const run = await this.createRun(threadId, assistantId, additionalInstructions);
+
+    // Esperar a que termine el run (pasa runContext a tool calls)
+    const runStatusObj = await this.waitForRunCompletion(threadId, run.id, runContext);
 
     // Obtener respuesta del asistente
     if (runStatusObj.status === "completed") {
@@ -251,4 +356,4 @@ class OpenAIManager {
   }
 }
 
-module.exports = OpenAIManager; 
+module.exports = OpenAIManager;

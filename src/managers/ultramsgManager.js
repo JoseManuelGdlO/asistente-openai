@@ -169,6 +169,81 @@ class UltraMsgManager {
     }
   }
 
+  /**
+   * Envía un documento (PDF) por WhatsApp via UltraMsg
+   * @param {string} to - Destinatario
+   * @param {Object} options
+   * @param {string} options.filename - Nombre del archivo (ej. lista_precios.pdf)
+   * @param {string} options.document - URL HTTPS o base64 del archivo
+   * @param {string} [options.caption] - Texto bajo el archivo
+   * @param {string|null} instanceId
+   */
+  async sendDocument(to, { filename, document, caption = '' }, instanceId = null) {
+    try {
+      const instance = instanceId ? this.getInstance(instanceId) : this.getDefaultInstance();
+
+      if (!instance) {
+        throw new Error(`No se encontró la instancia UltraMsg: ${instanceId || 'default'}`);
+      }
+
+      if (!filename || !document) {
+        throw new Error('filename y document son requeridos para enviar un documento');
+      }
+
+      const url = `https://api.ultramsg.com/${instance.instanceId}/messages/document?token=${instance.token}`;
+
+      const data = {
+        to,
+        filename,
+        document,
+        caption: caption || '',
+        priority: 10,
+        referenceId: '',
+        msgId: ''
+      };
+
+      const response = await axios.post(url, data, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      console.log(`✅ Documento enviado via UltraMsg (${instance.name}):`, response.data);
+      return {
+        ...response.data,
+        instanceName: instance.name,
+        instanceId: instance.instanceId
+      };
+    } catch (error) {
+      console.error('❌ Error enviando documento via UltraMsg:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Descarga media desde una URL (adjunto de UltraMsg)
+   * @param {string} mediaUrl
+   * @returns {Promise<Buffer>}
+   */
+  async downloadMedia(mediaUrl) {
+    if (!mediaUrl || typeof mediaUrl !== 'string') {
+      throw new Error('URL de media inválida');
+    }
+
+    try {
+      const response = await axios.get(mediaUrl, {
+        responseType: 'arraybuffer',
+        timeout: 60000,
+        maxContentLength: 30 * 1024 * 1024
+      });
+
+      return Buffer.from(response.data);
+    } catch (error) {
+      console.error('❌ Error descargando media:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
   // Verificar estado de una instancia específica
   async getInstanceStatus(instanceId = null) {
     try {

@@ -10,6 +10,7 @@ const UserContextManager = require('./services/userContextManager');
 const OpenAIManager = require('./managers/openAIManager');
 const WebhookManager = require('./controllers/webhookManager');
 const SchedulerController = require('./controllers/schedulerController');
+const DocumentStore = require('./services/documentStore');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -23,8 +24,15 @@ const ultraMsgManager = new UltraMsgManager();
 const scheduler = new Scheduler();
 const confirmationManager = new ConfirmationManager();
 const userContextManager = new UserContextManager();
+const documentStore = new DocumentStore();
 const openAIManager = new OpenAIManager();
-const webhookManager = new WebhookManager(ultraMsgManager, openAIManager, confirmationManager, userContextManager);
+const webhookManager = new WebhookManager(
+  ultraMsgManager,
+  openAIManager,
+  confirmationManager,
+  userContextManager,
+  documentStore
+);
 const schedulerController = new SchedulerController(scheduler);
 
 // ==================== RECARGA AUTOMÁTICA DE CLIENTES ====================

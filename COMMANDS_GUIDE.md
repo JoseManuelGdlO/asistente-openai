@@ -16,6 +16,9 @@ El sistema de comandos permite controlar remotamente los bots de cada cliente/co
 #CLIENTE001 /off      - Apagar bot del Cliente 001
 #CLIENTE002 /on       - Encender bot del Cliente 002
 #CLIENTE001 /status   - Ver estado del bot del Cliente 001
+#CLIENTE001 /docs     - Listar PDFs guardados
+#CLIENTE001 /upload lista_precios  - Subir PDF (con archivo adjunto)
+#CLIENTE001 /delete lista_precios  - Eliminar un PDF
 ```
 
 ## 📱 Comandos Disponibles
@@ -35,6 +38,26 @@ El sistema de comandos permite controlar remotamente los bots de cada cliente/co
 |---------|-------------|--------------|
 | `/help` | Ver comandos disponibles | ❌ No requerida |
 | `/info` | Información del consultorio | ❌ No requerida |
+
+### **📄 Documentos PDF**
+
+| Comando | Descripción | Autorización |
+|---------|-------------|--------------|
+| `/upload {documento_id}` | Subir un PDF (adjuntar archivo + caption con el comando) | ✅ Requerida |
+| `/docs` | Listar PDFs guardados del cliente | ✅ Requerida |
+| `/delete {documento_id}` | Eliminar un PDF por id | ✅ Requerida |
+
+#### Cómo subir un PDF
+1. Desde el número admin, adjunta el PDF en WhatsApp.
+2. En el caption (texto del mensaje) escribe: `#CLIENTE001 /upload lista_precios`
+3. El bot responde confirmando el id guardado.
+
+Los archivos se guardan en `uploads/{clientId}/{documento_id}.pdf` (volumen Docker).
+
+#### Envío automático por el asistente
+- La tool OpenAI `enviar_pdf` permite al asistente mandar un PDF al usuario.
+- En las Instructions del assistant indica **cuándo** llamar la tool (ej. al pedir precios → `documento_id="lista_precios"`).
+- Registra la tool con: `node scripts/add-enviar-pdf-tool.js asst_xxxxxxxx`
 
 ## 🔐 Sistema de Autorización
 
@@ -140,10 +163,35 @@ Bot: 📋 Comandos disponibles para Consultorio Dr. García:
      /restart - Reiniciar bot (Solo autorizados)
      /help - Ver comandos disponibles
      /info - Información del consultorio
+     /upload - Subir PDF (adjuntar archivo + caption con id) (Solo autorizados)
+     /docs - Listar PDFs guardados (Solo autorizados)
+     /delete - Eliminar un PDF por id (Solo autorizados)
 
      💡 Uso: #CLIENTE001 /comando
+     📎 Subir PDF: adjunta el archivo con caption "#CLIENTE001 /upload documento_id"
 ```
 *La respuesta se envía automáticamente por WhatsApp*
+
+### **Subir PDF**
+```
+Admin: (adjunta lista.pdf) caption: #CLIENTE001 /upload lista_precios
+Bot: ✅ PDF guardado como "lista_precios"
+     Archivo: lista_precios.pdf
+```
+
+### **Listar PDFs**
+```
+Admin: #CLIENTE001 /docs
+Bot: 📂 PDFs de CLIENTE001:
+     • lista_precios (120 KB)
+     • consentimiento (85 KB)
+```
+
+### **Eliminar PDF**
+```
+Admin: #CLIENTE001 /delete lista_precios
+Bot: 🗑️ Documento "lista_precios" eliminado.
+```
 
 ### **Información del Consultorio**
 ```
