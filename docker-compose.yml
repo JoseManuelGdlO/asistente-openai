@@ -1,0 +1,39 @@
+# Compose para EasyPanel (o Docker local).
+# Configura las variables de entorno en EasyPanel → Environment
+# (no hardcodees secretos aquí).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ASISTENTE_ID: ${ASISTENTE_ID}
+      ULTRAMSG_TOKEN: ${ULTRAMSG_TOKEN}
+      ULTRAMSG_INSTANCE_ID: ${ULTRAMSG_INSTANCE_ID}
+      ULTRAMSG_WEBHOOK_TOKEN: ${ULTRAMSG_WEBHOOK_TOKEN}
+      FIREBASE_CREDENTIALS: ${FIREBASE_CREDENTIALS}
+      FIREBASE_DATABASE_URL: ${FIREBASE_DATABASE_URL:-}
+      OWN_API_BASE_URL: ${OWN_API_BASE_URL:-}
+      FB_APP_ID: ${FB_APP_ID:-}
+      FB_APP_SECRET: ${FB_APP_SECRET:-}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

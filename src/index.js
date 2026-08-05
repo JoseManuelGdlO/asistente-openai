@@ -712,5 +712,5 @@ app.listen(port, async () => {
     
     console.log('=== SERVER READY ===');
     console.log('📱 Configuración de grupos: Los mensajes de grupos son ignorados automáticamente');
-    console.log('🔗 Endpoint de configuración: http://localhost:${port}/group-settings');
+    console.log(`🔗 Endpoint de configuración: http://localhost:${port}/group-settings`);
 }); 
