@@ -13,6 +13,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
+      UPLOADS_DIR: /app/uploads
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ASISTENTE_ID: ${ASISTENTE_ID}
       ULTRAMSG_TOKEN: ${ULTRAMSG_TOKEN}
@@ -25,6 +26,8 @@ services:
       FB_APP_SECRET: ${FB_APP_SECRET:-}
       WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
       WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+    volumes:
+      - ./uploads:/app/uploads
     healthcheck:
       test:
         [

@@ -76,3 +76,7 @@ Thumbs.db
 token.json
 credentials.json
 firebase-credentials.json
+
+# Uploaded PDFs (persisted via Docker volume)
+uploads/*
+!uploads/.gitkeep

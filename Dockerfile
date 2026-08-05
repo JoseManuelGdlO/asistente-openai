@@ -20,6 +20,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY src ./src
 
+RUN mkdir -p /app/uploads && chown -R app:app /app/uploads
+
 USER app
 
 EXPOSE 3000
