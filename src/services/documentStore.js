@@ -69,13 +69,26 @@ class DocumentStore {
       throw new Error('Archivo vacío o inválido');
     }
 
+    // Validación principal: magic bytes. curl/Postman a menudo mandan
+    // application/octet-stream aunque el archivo sea PDF.
+    const hasPdfMagic = buffer.slice(0, 5).toString('ascii') === '%PDF-';
+    if (!hasPdfMagic) {
+      throw new Error('Solo se permiten archivos PDF');
+    }
+
     const mime = (mediaMime || '').toLowerCase();
     const filename = (originalFilename || '').toLowerCase();
-    const isPdfMime = !mime || mime === 'application/pdf' || mime.includes('pdf');
-    const isPdfExt = !filename || filename.endsWith('.pdf');
-    const hasPdfMagic = buffer.slice(0, 5).toString('ascii') === '%PDF-';
+    // MIME vacío u octet-stream se toleran (clientes HTTP genéricos);
+    // cualquier otro MIME no-PDF o extensión distinta de .pdf se rechaza.
+    const mimeLooksNonPdf =
+      mime &&
+      mime !== 'application/pdf' &&
+      !mime.includes('pdf') &&
+      mime !== 'application/octet-stream' &&
+      mime !== 'binary/octet-stream';
+    const extLooksNonPdf = filename && !filename.endsWith('.pdf');
 
-    if (!isPdfMime || !isPdfExt || !hasPdfMagic) {
+    if (mimeLooksNonPdf || extLooksNonPdf) {
       throw new Error('Solo se permiten archivos PDF');
     }
   }

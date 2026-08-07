@@ -27,5 +27,10 @@ FIREBASE_DATABASE_URL=https://your-project-id.firebaseio.com
 # CLIENTE001_NAME=Consultorio Dr. García
 # CLIENTE001_ASSISTANT=asst-abc123
 
+# ==================== ADMIN API (documentos) ====================
+# Token para GET/POST /clients/:clientId/documents
+# Header: Authorization: Bearer <token>  o  x-admin-token: <token>
+ADMIN_API_TOKEN=change-me-to-a-long-random-secret
+
 # Server Configuration
 PORT=3000 

@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 require('dotenv').config();
 
 // Importar todas las clases
@@ -11,6 +12,7 @@ const OpenAIManager = require('./managers/openAIManager');
 const WebhookManager = require('./controllers/webhookManager');
 const SchedulerController = require('./controllers/schedulerController');
 const DocumentStore = require('./services/documentStore');
+const requireAdminAuth = require('./middleware/requireAdminAuth');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -18,6 +20,19 @@ const port = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+const uploadPdf = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+  fileFilter: (_req, file, cb) => {
+    const mime = (file.mimetype || '').toLowerCase();
+    const name = (file.originalname || '').toLowerCase();
+    if (mime.includes('pdf') || name.endsWith('.pdf')) {
+      return cb(null, true);
+    }
+    return cb(new Error('Solo se permiten archivos PDF'));
+  }
+});
 
 // Inicializar todas las clases
 const ultraMsgManager = new UltraMsgManager();
@@ -437,6 +452,112 @@ app.get('/clients/:clientId', async (req, res) => {
   }
 });
 
+// ==================== ENDPOINTS DE DOCUMENTOS (ADMIN) ====================
+
+// Listar PDFs de un cliente
+app.get('/clients/:clientId/documents', requireAdminAuth, async (req, res) => {
+  try {
+    const { clientId } = req.params;
+
+    const client = await webhookManager.commandManager.firebaseService.getClientById(clientId);
+    if (!client) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Cliente no encontrado'
+      });
+    }
+
+    const documents = await documentStore.list(clientId);
+
+    res.json({
+      ok: true,
+      clientId,
+      count: documents.length,
+      documents
+    });
+  } catch (error) {
+    console.error('Error listando documentos:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Error listando documentos',
+      details: error.message
+    });
+  }
+});
+
+// Subir PDF de un cliente (multipart: file + documento_id)
+app.post(
+  '/clients/:clientId/documents',
+  requireAdminAuth,
+  (req, res, next) => {
+    uploadPdf.single('file')(req, res, (err) => {
+      if (err) {
+        const status = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({
+          ok: false,
+          error: err.message || 'Error al procesar el archivo'
+        });
+      }
+      return next();
+    });
+  },
+  async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const documentoId = req.body?.documento_id || req.body?.documentoId;
+
+      if (!documentoId) {
+        return res.status(400).json({
+          ok: false,
+          error: 'documento_id es requerido (campo form)'
+        });
+      }
+
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Archivo PDF requerido (campo multipart "file")'
+        });
+      }
+
+      const client = await webhookManager.commandManager.firebaseService.getClientById(clientId);
+      if (!client) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Cliente no encontrado'
+        });
+      }
+
+      const saved = await documentStore.save(
+        clientId,
+        documentoId,
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: 'Documento subido exitosamente',
+        clientId,
+        document: {
+          documentoId: saved.documentoId,
+          filename: saved.filename,
+          size: saved.size
+        }
+      });
+    } catch (error) {
+      console.error('Error subiendo documento:', error);
+      const status = /inválido|Solo se permiten|vacío/i.test(error.message) ? 400 : 500;
+      res.status(status).json({
+        ok: false,
+        error: 'Error subiendo documento',
+        details: error.message
+      });
+    }
+  }
+);
+
 // Obtener estadísticas de clientes
 app.get('/clients/stats/overview', async (req, res) => {
   try {
@@ -691,6 +812,8 @@ app.listen(port, async () => {
     console.log('- ULTRAMSG_TOKEN:', process.env.ULTRAMSG_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- ULTRAMSG_INSTANCE_ID:', process.env.ULTRAMSG_INSTANCE_ID ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- ULTRAMSG_WEBHOOK_TOKEN:', process.env.ULTRAMSG_WEBHOOK_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- ADMIN_API_TOKEN:', process.env.ADMIN_API_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
+    console.log(`📄 Documentos: GET/POST http://localhost:${port}/clients/:clientId/documents`);
     
     // Inicializar instancias de UltraMsg desde Firebase
     try {
