@@ -1,4 +1,4 @@
-const FirebaseService = require('./src/services/firebaseService');
+const FirebaseService = require('../src/services/firebaseService');
 
 async function testFirebase() {
   try {

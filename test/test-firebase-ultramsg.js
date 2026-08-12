@@ -1,5 +1,5 @@
-const UltraMsgManager = require('./src/managers/ultramsgManager');
-const FirebaseService = require('./src/services/firebaseService');
+const UltraMsgManager = require('../src/managers/ultramsgManager');
+const FirebaseService = require('../src/services/firebaseService');
 require('dotenv').config();
 
 // Colores para la consola

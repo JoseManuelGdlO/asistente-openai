@@ -96,7 +96,7 @@ Cuando llega un mensaje al webhook:
 
 ```bash
 # Probar configuración desde Firebase
-node test-firebase-ultramsg.js
+node test/test-firebase-ultramsg.js
 ```
 
 ### Ver Estado del Servidor
@@ -240,7 +240,7 @@ identifyInstanceFromMessage(messageData, webhookToken = null) {
 
 Si tienes problemas con la configuración:
 
-1. Ejecuta `node test-firebase-ultramsg.js` para diagnosticar
+1. Ejecuta `node test/test-firebase-ultramsg.js` para diagnosticar
 2. Revisa los logs del servidor
 3. Usa los endpoints de diagnóstico
 4. Verifica la configuración en Firebase y UltraMsg

@@ -19,9 +19,7 @@ logs
 token.json
 credentials.json
 firebase-credentials.json
-test-*.js
-create-assistant.js
-list-assistants.js
-migrate-to-firebase.js
+test/
+scripts/
 agent-tools
 .cursor

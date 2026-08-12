@@ -1,4 +1,4 @@
-const Scheduler = require('./src/scheduler');
+const Scheduler = require('../src/services/scheduler');
 require('dotenv').config();
 
 async function testScheduler() {

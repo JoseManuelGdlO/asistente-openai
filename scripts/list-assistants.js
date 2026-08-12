@@ -13,7 +13,7 @@ async function listAssistants() {
     
     if (assistants.data.length === 0) {
       console.log('❌ No se encontraron assistants.');
-      console.log('Ejecuta: node create-assistant.js para crear uno nuevo.');
+      console.log('Ejecuta: node scripts/create-assistant.js para crear uno nuevo.');
       return;
     }
     
