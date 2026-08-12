@@ -3,6 +3,7 @@ const axios = require('axios');
 // URL de tu servidor (ajusta según tu configuración de ngrok)
 const WEBHOOK_URL = 'http://localhost:3000/webhook';
 const TEST_URL = 'http://localhost:3000/reset_threads';
+const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || '';
 
 // Simular una petición de WhatsApp
 const whatsappPayload = {
@@ -48,7 +49,11 @@ const whatsappPayload = {
 async function testWebhook() {
   try {
     console.log('=== Probando endpoint de test ===');
-    const testResponse = await axios.post(TEST_URL, { test: 'data' });
+    const testResponse = await axios.post(TEST_URL, { test: 'data' }, {
+      headers: {
+        'x-admin-token': ADMIN_API_TOKEN
+      }
+    });
     console.log('Test endpoint funciona:', testResponse.data);
     
     console.log('\n=== Probando webhook de WhatsApp ===');

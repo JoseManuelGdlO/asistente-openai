@@ -1,6 +1,15 @@
 const admin = require('firebase-admin');
 const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
 
+const DEFAULT_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    reply: { type: 'string' }
+  },
+  required: ['reply'],
+  additionalProperties: false
+};
+
 class FirebaseService {
   constructor() {
     // Inicializar Firebase Admin SDK
@@ -13,6 +22,8 @@ class FirebaseService {
     
     this.db = admin.firestore();
     this.clientsCollection = this.db.collection('clients');
+    this.assistantsCollection = this.db.collection('Assistants');
+    this.botSessionsCollection = this.db.collection('bot_sessions');
     this.blacklistCollection = this.db.collection('blacklist-phone');
   }
 
@@ -237,6 +248,11 @@ class FirebaseService {
    */
   async updateClient(clientId, updateData) {
     try {
+      const existing = await this.getClientById(clientId);
+      if (!existing) {
+        throw new Error(`Cliente no encontrado: ${clientId}`);
+      }
+
       const update = {
         ...updateData,
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -321,6 +337,491 @@ class FirebaseService {
     }
   }
 
+  // ==================== Assistants (1:1 con clients) ====================
+
+  /**
+   * Obtiene la config del Assistant de un consultorio
+   * @param {string} clientId
+   * @returns {Promise<Object|null>}
+   */
+  async getAssistantByClientId(clientId) {
+    try {
+      const doc = await this.assistantsCollection.doc(clientId).get();
+      if (!doc.exists) {
+        return null;
+      }
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      };
+    } catch (error) {
+      console.error('❌ Error obteniendo Assistant:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Normaliza datos de Assistant con defaults
+   * @param {string} clientId
+   * @param {Object} assistantData
+   * @returns {Object}
+   */
+  _buildAssistantDoc(clientId, assistantData = {}) {
+    return {
+      clientId,
+      prompt: assistantData.prompt || '',
+      tools: Array.isArray(assistantData.tools) ? assistantData.tools : [],
+      config: assistantData.config || {},
+      responseSchema: assistantData.responseSchema || DEFAULT_RESPONSE_SCHEMA,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+  }
+
+  /**
+   * Crea Assistants/{clientId} si falta (idempotente; no sobrescribe).
+   * @param {string} clientId
+   * @param {Object} [assistantData] - prompt, tools, config, responseSchema
+   * @returns {Promise<{created: boolean, assistant: Object}>}
+   */
+  async ensureAssistantForClient(clientId, assistantData = {}) {
+    try {
+      const client = await this.getClientById(clientId);
+      if (!client) {
+        const err = new Error(`Cliente no encontrado: ${clientId}`);
+        err.code = 'CLIENT_NOT_FOUND';
+        throw err;
+      }
+
+      const existing = await this.getAssistantByClientId(clientId);
+      if (existing) {
+        return { created: false, assistant: existing };
+      }
+
+      const assistantRef = this.assistantsCollection.doc(clientId);
+      const assistantDoc = this._buildAssistantDoc(clientId, assistantData);
+      await assistantRef.set(assistantDoc);
+
+      const assistant = await this.getAssistantByClientId(clientId);
+      console.log('✅ Assistant creado para cliente existente:', clientId);
+      return { created: true, assistant };
+    } catch (error) {
+      console.error('❌ Error en ensureAssistantForClient:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Crea client + Assistant en batch atómico (mismo ID)
+   * @param {Object} clientData - Datos del consultorio (puede incluir id opcional)
+   * @param {Object} assistantData - prompt, tools, config, responseSchema
+   * @returns {Promise<{client: Object, assistant: Object}>}
+   */
+  async createClientWithAssistant(clientData, assistantData = {}) {
+    try {
+      const { id: requestedId, prompt, tools, config, responseSchema, ...restClient } = clientData;
+      const assistantPayload = {
+        prompt: assistantData.prompt ?? prompt,
+        tools: assistantData.tools ?? tools,
+        config: assistantData.config ?? config,
+        responseSchema: assistantData.responseSchema ?? responseSchema
+      };
+
+      const clientRef = requestedId
+        ? this.clientsCollection.doc(requestedId)
+        : this.clientsCollection.doc();
+      const clientId = clientRef.id;
+      const assistantRef = this.assistantsCollection.doc(clientId);
+
+      const existingClient = await clientRef.get();
+      if (existingClient.exists) {
+        throw new Error(`Ya existe un cliente con id ${clientId}`);
+      }
+
+      const clientDoc = {
+        ...restClient,
+        status: restClient.status || 'active',
+        botStatus: restClient.botStatus || 'active',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+
+      const assistantDoc = this._buildAssistantDoc(clientId, assistantPayload);
+
+      const batch = this.db.batch();
+      batch.set(clientRef, clientDoc);
+      batch.set(assistantRef, assistantDoc);
+      await batch.commit();
+
+      const client = await this.getClientById(clientId);
+      const assistant = await this.getAssistantByClientId(clientId);
+      console.log('✅ Par client+Assistant creado:', clientId);
+      return { client, assistant };
+    } catch (error) {
+      console.error('❌ Error creando par client+Assistant:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Actualiza Assistant; exige que exista el cliente
+   * @param {string} clientId
+   * @param {Object} data
+   * @returns {Promise<Object>}
+   */
+  async updateAssistant(clientId, data) {
+    try {
+      const client = await this.getClientById(clientId);
+      if (!client) {
+        const err = new Error(`Cliente no encontrado: ${clientId}`);
+        err.code = 'CLIENT_NOT_FOUND';
+        throw err;
+      }
+
+      const assistantRef = this.assistantsCollection.doc(clientId);
+      const existing = await assistantRef.get();
+      if (!existing.exists) {
+        const err = new Error(`Assistant no encontrado para cliente: ${clientId}`);
+        err.code = 'ASSISTANT_NOT_FOUND';
+        throw err;
+      }
+
+      const allowed = {};
+      if (data.prompt !== undefined) allowed.prompt = data.prompt;
+      if (data.tools !== undefined) allowed.tools = data.tools;
+      if (data.config !== undefined) allowed.config = data.config;
+      if (data.responseSchema !== undefined) allowed.responseSchema = data.responseSchema;
+      allowed.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+
+      await assistantRef.update(allowed);
+      const updated = await this.getAssistantByClientId(clientId);
+      console.log('✅ Assistant actualizado:', clientId);
+      return updated;
+    } catch (error) {
+      console.error('❌ Error actualizando Assistant:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Soft-delete del par client + Assistant
+   * @param {string} clientId
+   * @returns {Promise<boolean>}
+   */
+  async deleteClientWithAssistant(clientId) {
+    try {
+      const clientRef = this.clientsCollection.doc(clientId);
+      const assistantRef = this.assistantsCollection.doc(clientId);
+      const clientSnap = await clientRef.get();
+      if (!clientSnap.exists) {
+        throw new Error(`Cliente no encontrado: ${clientId}`);
+      }
+
+      const batch = this.db.batch();
+      batch.update(clientRef, {
+        status: 'deleted',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      const assistantSnap = await assistantRef.get();
+      if (assistantSnap.exists) {
+        batch.update(assistantRef, {
+          status: 'deleted',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      }
+
+      await batch.commit();
+      console.log('✅ Par client+Assistant eliminado:', clientId);
+      return true;
+    } catch (error) {
+      console.error('❌ Error eliminando par client+Assistant:', error);
+      throw error;
+    }
+  }
+
+  // ==================== bot_sessions ====================
+
+  sessionId(userId, clientCode) {
+    return `${userId}_${clientCode}`;
+  }
+
+  /**
+   * Obtiene una sesión de conversación
+   * @param {string} userId
+   * @param {string} clientCode
+   * @returns {Promise<Object|null>}
+   */
+  async getBotSession(userId, clientCode) {
+    try {
+      const id = this.sessionId(userId, clientCode);
+      const doc = await this.botSessionsCollection.doc(id).get();
+      if (!doc.exists) {
+        return null;
+      }
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+        lockedUntil: data.lockedUntil?.toDate?.() || data.lockedUntil
+      };
+    } catch (error) {
+      console.error('❌ Error obteniendo bot_session:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Crea o obtiene sesión
+   * @param {string} userId
+   * @param {string} clientCode
+   * @returns {Promise<Object>}
+   */
+  async getOrCreateBotSession(userId, clientCode) {
+    const existing = await this.getBotSession(userId, clientCode);
+    if (existing) {
+      return existing;
+    }
+
+    const id = this.sessionId(userId, clientCode);
+    const doc = {
+      userId,
+      clientCode,
+      items: [],
+      lockedUntil: null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    await this.botSessionsCollection.doc(id).set(doc);
+    console.log('✅ bot_session creada:', id);
+    return this.getBotSession(userId, clientCode);
+  }
+
+  /**
+   * Guarda items y metadatos de sesión
+   * @param {string} userId
+   * @param {string} clientCode
+   * @param {Object} data
+   * @returns {Promise<Object>}
+   */
+  async saveBotSession(userId, clientCode, data) {
+    try {
+      const id = this.sessionId(userId, clientCode);
+      const update = {
+        ...data,
+        userId,
+        clientCode,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+      await this.botSessionsCollection.doc(id).set(update, { merge: true });
+      return this.getBotSession(userId, clientCode);
+    } catch (error) {
+      console.error('❌ Error guardando bot_session:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Intenta adquirir lock de sesión
+   * @param {string} userId
+   * @param {string} clientCode
+   * @param {number} lockMs
+   * @returns {Promise<boolean>}
+   */
+  async tryLockBotSession(userId, clientCode, lockMs = 120000) {
+    const id = this.sessionId(userId, clientCode);
+    const ref = this.botSessionsCollection.doc(id);
+    const now = Date.now();
+    const lockedUntil = new Date(now + lockMs);
+
+    try {
+      await this.db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) {
+          tx.set(ref, {
+            userId,
+            clientCode,
+            items: [],
+            lockedUntil,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+          return;
+        }
+        const data = snap.data();
+        const currentLock = data.lockedUntil?.toDate?.() || data.lockedUntil;
+        if (currentLock && new Date(currentLock).getTime() > now) {
+          throw new Error('SESSION_LOCKED');
+        }
+        tx.update(ref, {
+          lockedUntil,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      });
+      return true;
+    } catch (error) {
+      if (error.message === 'SESSION_LOCKED') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Libera lock de sesión
+   * @param {string} userId
+   * @param {string} clientCode
+   */
+  async unlockBotSession(userId, clientCode) {
+    const id = this.sessionId(userId, clientCode);
+    await this.botSessionsCollection.doc(id).set(
+      {
+        lockedUntil: null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+  }
+
+  /**
+   * Resume una sesión para listados (sin items completos)
+   * @param {FirebaseFirestore.QueryDocumentSnapshot|FirebaseFirestore.DocumentSnapshot} doc
+   * @returns {Object}
+   */
+  summarizeBotSession(doc) {
+    const data = doc.data() || {};
+    const lockedUntil = data.lockedUntil?.toDate?.() || data.lockedUntil || null;
+    const lockedUntilMs = lockedUntil ? new Date(lockedUntil).getTime() : 0;
+    return {
+      id: doc.id,
+      userId: data.userId || null,
+      clientCode: data.clientCode || null,
+      itemsCount: Array.isArray(data.items) ? data.items.length : 0,
+      lockedUntil,
+      isLocked: Boolean(lockedUntilMs && lockedUntilMs > Date.now()),
+      createdAt: data.createdAt?.toDate?.() || data.createdAt || null,
+      updatedAt: data.updatedAt?.toDate?.() || data.updatedAt || null
+    };
+  }
+
+  /**
+   * Lista sesiones (resumen). Filtros opcionales: userId, clientCode.
+   * @param {{ userId?: string, clientCode?: string }} [filters]
+   * @returns {Promise<Object[]>}
+   */
+  async listBotSessions(filters = {}) {
+    try {
+      let query = this.botSessionsCollection;
+      if (filters.userId) {
+        query = query.where('userId', '==', filters.userId);
+      }
+      if (filters.clientCode) {
+        query = query.where('clientCode', '==', filters.clientCode);
+      }
+      const snapshot = await query.get();
+      return snapshot.docs.map((doc) => this.summarizeBotSession(doc));
+    } catch (error) {
+      console.error('❌ Error listando bot_sessions:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Borra una sesión concreta
+   * @param {string} userId
+   * @param {string} clientCode
+   * @returns {Promise<boolean>}
+   */
+  async deleteBotSession(userId, clientCode) {
+    try {
+      const id = this.sessionId(userId, clientCode);
+      await this.botSessionsCollection.doc(id).delete();
+      console.log('✅ bot_session eliminada:', id);
+      return true;
+    } catch (error) {
+      console.error('❌ Error eliminando bot_session:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Borra todas las sesiones de un usuario (todos los clientCode)
+   * @param {string} userId
+   * @returns {Promise<number>}
+   */
+  async deleteBotSessionsByUserId(userId) {
+    try {
+      const snapshot = await this.botSessionsCollection.where('userId', '==', userId).get();
+      if (snapshot.empty) {
+        return 0;
+      }
+      const batchSize = 400;
+      let deleted = 0;
+      let batch = this.db.batch();
+      let ops = 0;
+
+      for (const doc of snapshot.docs) {
+        batch.delete(doc.ref);
+        ops += 1;
+        deleted += 1;
+        if (ops >= batchSize) {
+          await batch.commit();
+          batch = this.db.batch();
+          ops = 0;
+        }
+      }
+      if (ops > 0) {
+        await batch.commit();
+      }
+      console.log(`✅ bot_sessions eliminadas para usuario ${userId}: ${deleted}`);
+      return deleted;
+    } catch (error) {
+      console.error('❌ Error eliminando bot_sessions por userId:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Borra todas las sesiones
+   * @returns {Promise<number>} - Cantidad borrada
+   */
+  async resetAllBotSessions() {
+    try {
+      const snapshot = await this.botSessionsCollection.get();
+      if (snapshot.empty) {
+        return 0;
+      }
+      const batchSize = 400;
+      let deleted = 0;
+      let batch = this.db.batch();
+      let ops = 0;
+
+      for (const doc of snapshot.docs) {
+        batch.delete(doc.ref);
+        ops += 1;
+        deleted += 1;
+        if (ops >= batchSize) {
+          await batch.commit();
+          batch = this.db.batch();
+          ops = 0;
+        }
+      }
+      if (ops > 0) {
+        await batch.commit();
+      }
+      console.log(`✅ bot_sessions reseteadas: ${deleted}`);
+      return deleted;
+    } catch (error) {
+      console.error('❌ Error reseteando bot_sessions:', error);
+      throw error;
+    }
+  }
+
   /**
    * Verifica la conexión con Firebase
    * @returns {Promise<boolean>} - True si la conexión es exitosa
@@ -337,4 +838,6 @@ class FirebaseService {
   }
 }
 
-module.exports = FirebaseService; 
+FirebaseService.DEFAULT_RESPONSE_SCHEMA = DEFAULT_RESPONSE_SCHEMA;
+
+module.exports = FirebaseService;

@@ -355,20 +355,20 @@ class WebhookManager {
       return "🤖 Bot está apagado. Escribe #" + clientId + " /on para encenderlo.";
     }
     
-    // Obtener el ID del asistente para este cliente
-    const assistantId = await this.commandManager.getAssistantIdByPhone(assistantPhone);
-    if (!assistantId) {
-      console.log('❌ No se encontró el asistente para el cliente:', clientId);
-      return "❌ Error: No se pudo identificar el asistente. Contacta al administrador.";
+    // Verificar par 1:1 Assistants/{clientId}
+    const assistantConfig = await this.commandManager.getAssistantConfig(clientId);
+    if (!assistantConfig) {
+      console.log('❌ No se encontró Assistant Firestore para el cliente:', clientId);
+      return "❌ Error: Configuración del asistente incompleta. Contacta al administrador.";
     }
     
-    console.log('🤖 Usando asistente:', assistantId, 'para cliente:', clientId);
+    console.log('🤖 Usando Assistant Firestore para cliente:', clientId);
 
     const instanceId = this.resolveInstanceId(clientId, messageData, webhookToken);
     console.log('📱 Usando instancia UltraMsg:', instanceId, '(cliente:', clientId + ')');
 
-    // Procesar con OpenAI (tools pueden enviar PDFs via UltraMsg)
-    const aiResponse = await this.openAIManager.processMessage(from, msg_body, assistantId, clientId, {
+    // Procesar con Responses API (tools pueden enviar PDFs via UltraMsg)
+    const aiResponse = await this.openAIManager.processMessage(from, msg_body, clientId, {
       instanceId,
       ultraMsgManager: this.ultraMsgManager,
       documentStore: this.documentStore
@@ -518,17 +518,21 @@ class WebhookManager {
       return { processed: true, response: offMsg, userId: fromPhone };
     }
 
-    // Obtener el ID del asistente para este cliente
-    const assistantId = await this.commandManager.getAssistantIdByPhone(assistantPhone);
-    if (!assistantId) {
-      const errMsg = "❌ Error: No se pudo identificar el asistente. Contacta al administrador.";
+    // Verificar par 1:1 Assistants/{clientId}
+    const assistantConfig = await this.commandManager.getAssistantConfig(clientId);
+    if (!assistantConfig) {
+      console.log('❌ No se encontró Assistant Firestore para el cliente (own):', clientId);
+      const errMsg = "❌ Error: Configuración del asistente incompleta. Contacta al administrador.";
       await sendReplyOwn(errMsg);
       return { processed: true, response: errMsg, userId: fromPhone };
     }
 
-    console.log('🤖 Usando asistente (own):', assistantId, 'para cliente:', clientId);
+    console.log('🤖 Usando Assistant Firestore (own) para cliente:', clientId);
 
-    const aiResponse = await this.openAIManager.processMessage(fromPhone, text, assistantId, clientId);
+    const aiResponse = await this.openAIManager.processMessage(fromPhone, text, clientId, {
+      ultraMsgManager: this.ultraMsgManager,
+      documentStore: this.documentStore
+    });
     await sendReplyOwn(aiResponse);
 
     return { processed: true, response: aiResponse, userId: fromPhone };

@@ -111,8 +111,11 @@ npm run ngrok
 - `GET /webhook` - Verificación de webhook UltraMsg
 - `POST /webhook` - Recepción de mensajes de WhatsApp
 
-### Gestión de Threads
-- `POST /reset_threads` - Resetear todos los threads de OpenAI
+### Gestión de sesiones (requieren `ADMIN_API_TOKEN`)
+- `GET /sessions` - Listar sesiones (`?userId=` / `?clientCode=` opcionales)
+- `POST /reset_threads` - Borrar todas las sesiones (`bot_sessions`)
+- `DELETE /sessions/user/:userId` - Borrar todas las sesiones de un usuario
+- `DELETE /sessions/:userId/:clientCode` - Borrar una sesión concreta
 
 ### Contexto de Usuario
 - `POST /mark-agenda-sent` - Marcar agenda enviada a un usuario

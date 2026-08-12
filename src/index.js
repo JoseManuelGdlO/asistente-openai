@@ -16,7 +16,6 @@ const WebhookManager = require('./controllers/webhookManager');
 const SchedulerController = require('./controllers/schedulerController');
 const DocumentStore = require('./services/documentStore');
 const requireAdminAuth = require('./middleware/requireAdminAuth');
-const ThreadResetService = require('./services/threadResetService');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -53,7 +52,6 @@ const webhookManager = new WebhookManager(
   documentStore
 );
 const schedulerController = new SchedulerController(scheduler);
-const threadResetService = new ThreadResetService(openAIManager, userContextManager);
 
 // ==================== RECARGA AUTOMÁTICA DE CLIENTES ====================
 
@@ -159,185 +157,83 @@ app.post('/webhook-own', async (req, res) => {
 });
 
 
+// ==================== ENDPOINTS DE GESTIÓN DE SESIONES ====================
 
-// ==================== ENDPOINTS DE GESTIÓN DE THREADS ====================
-
-app.post('/reset_threads', (req, res) => {
-  openAIManager.resetThreads();
-  res.json({ ok: true, message: 'Todos los threads de usuario han sido reseteados.' });
-});
-
-// Resetear thread específico de un usuario para un cliente específico
-app.post('/reset_thread/:userId/:clientCode', async (req, res) => {
+app.post('/reset_threads', requireAdminAuth, async (req, res) => {
   try {
-    const { userId, clientCode } = req.params;
-    const options = req.body || {};
-    
-    const result = await threadResetService.resetUserThread(userId, clientCode, options);
-    
-    if (result.success) {
-      res.json({ 
-        ok: true, 
-        message: 'Thread reseteado exitosamente',
-        result: result
-      });
-    } else {
-      res.status(400).json({ 
-        ok: false, 
-        error: result.error,
-        code: result.code
-      });
-    }
+    const deleted = await openAIManager.resetThreads();
+    res.json({
+      ok: true,
+      message: 'Todas las sesiones de usuario han sido reseteadas.',
+      deleted
+    });
   } catch (error) {
-    console.error('Error al resetear thread específico:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error al resetear thread específico',
-      details: error.message 
+    console.error('Error reseteando sesiones:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Error reseteando sesiones',
+      details: error.message
     });
   }
 });
 
-// Resetear todos los threads de un usuario específico
-app.post('/reset_user_threads/:userId', async (req, res) => {
+// Listar sesiones (resumen). Query opcional: ?userId=&clientCode=
+app.get('/sessions', requireAdminAuth, async (req, res) => {
+  try {
+    const filters = {};
+    if (req.query.userId) filters.userId = String(req.query.userId);
+    if (req.query.clientCode) filters.clientCode = String(req.query.clientCode);
+
+    const sessions = await openAIManager.listSessions(filters);
+    res.json({
+      ok: true,
+      count: sessions.length,
+      sessions
+    });
+  } catch (error) {
+    console.error('Error listando sesiones:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Error listando sesiones',
+      details: error.message
+    });
+  }
+});
+
+// Borrar todas las sesiones de un usuario (debe ir antes de /sessions/:userId/:clientCode)
+app.delete('/sessions/user/:userId', requireAdminAuth, async (req, res) => {
   try {
     const { userId } = req.params;
-    const options = req.body || {};
-    
-    const result = await threadResetService.resetAllUserThreads(userId, options);
-    
-    if (result.success) {
-      res.json({ 
-        ok: true, 
-        message: 'Threads del usuario reseteados exitosamente',
-        result: result
-      });
-    } else {
-      res.status(400).json({ 
-        ok: false, 
-        error: result.error,
-        code: result.code
-      });
-    }
+    const deleted = await openAIManager.deleteSessionsByUserId(userId);
+    res.json({
+      ok: true,
+      message: `Sesiones eliminadas para usuario: ${userId}`,
+      deleted
+    });
   } catch (error) {
-    console.error('Error al resetear threads del usuario:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error al resetear threads del usuario',
-      details: error.message 
+    console.error('Error eliminando sesiones del usuario:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Error eliminando sesiones del usuario',
+      details: error.message
     });
   }
 });
 
-// Obtener información de todos los threads activos
-app.get('/threads/info', async (req, res) => {
+app.delete('/sessions/:userId/:clientCode', requireAdminAuth, async (req, res) => {
   try {
-    const result = await threadResetService.getThreadsInfo();
-    
-    if (result.success) {
-      res.json({
-        ok: true,
-        ...result
-      });
-    } else {
-      res.status(500).json({ 
-        ok: false, 
-        error: result.error,
-        code: result.code
-      });
-    }
-  } catch (error) {
-    console.error('Error al obtener información de threads:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error al obtener información de threads',
-      details: error.message 
+    const { userId, clientCode } = req.params;
+    await openAIManager.deleteSession(userId, clientCode);
+    res.json({
+      ok: true,
+      message: `Sesión eliminada: ${userId}_${clientCode}`
     });
-  }
-});
-
-// ==================== ENDPOINTS ADICIONALES DEL SERVICIO DE THREAD RESET ====================
-
-// Buscar threads por criterios
-app.post('/threads/search', async (req, res) => {
-  try {
-    const criteria = req.body || {};
-    const result = await threadResetService.findThreads(criteria);
-    
-    if (result.success) {
-      res.json({
-        ok: true,
-        ...result
-      });
-    } else {
-      res.status(500).json({ 
-        ok: false, 
-        error: result.error,
-        code: result.code
-      });
-    }
   } catch (error) {
-    console.error('Error al buscar threads:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error al buscar threads',
-      details: error.message 
-    });
-  }
-});
-
-// Obtener estadísticas del servicio
-app.get('/threads/stats', async (req, res) => {
-  try {
-    const result = await threadResetService.getServiceStats();
-    
-    if (result.success) {
-      res.json({
-        ok: true,
-        ...result
-      });
-    } else {
-      res.status(500).json({ 
-        ok: false, 
-        error: result.error,
-        code: result.code
-      });
-    }
-  } catch (error) {
-    console.error('Error al obtener estadísticas:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error al obtener estadísticas',
-      details: error.message 
-    });
-  }
-});
-
-// Resetear todos los threads usando el servicio
-app.post('/reset_all_threads', async (req, res) => {
-  try {
-    const options = req.body || {};
-    const result = await threadResetService.resetAllThreads(options);
-    
-    if (result.success) {
-      res.json({ 
-        ok: true, 
-        message: 'Todos los threads han sido reseteados exitosamente',
-        result: result
-      });
-    } else {
-      res.status(500).json({ 
-        ok: false, 
-        error: result.error,
-        code: result.code
-      });
-    }
-  } catch (error) {
-    console.error('Error al resetear todos los threads:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error al resetear todos los threads',
-      details: error.message 
+    console.error('Error eliminando sesión:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Error eliminando sesión',
+      details: error.message
     });
   }
 });
@@ -568,30 +464,51 @@ app.post('/bots/command', async (req, res) => {
 
 // ==================== ENDPOINTS DE GESTIÓN DE CLIENTES ====================
 
-// Crear nuevo cliente
+// Crear nuevo cliente + Assistant (par 1:1)
 app.post('/clients', async (req, res) => {
   try {
-    const { name, adminPhone, assistantPhone, assistantId } = req.body;
-    
-    if (!name || !adminPhone || !assistantPhone || !assistantId) {
-      return res.status(400).json({
-        ok: false,
-        error: 'name, adminPhone, assistantPhone y assistantId son requeridos'
-      });
-    }
-    
-    const newClient = await webhookManager.commandManager.createClient({
+    const {
+      id,
       name,
       adminPhone,
       assistantPhone,
-      assistantId,
-      botStatus: 'active'
-    });
+      prompt,
+      tools,
+      config,
+      responseSchema,
+      botStatus
+    } = req.body;
     
-    res.json({
+    if (!name || !adminPhone || !assistantPhone) {
+      return res.status(400).json({
+        ok: false,
+        error: 'name, adminPhone y assistantPhone son requeridos'
+      });
+    }
+
+    // prompt opcional: vacío/omitido → Assistants.prompt = '' (se puede editar después)
+    const normalizedPrompt = typeof prompt === 'string' ? prompt : '';
+    
+    const result = await webhookManager.commandManager.createClient(
+      {
+        id,
+        name,
+        adminPhone,
+        assistantPhone,
+        botStatus: botStatus || 'active',
+        prompt: normalizedPrompt,
+        tools,
+        config,
+        responseSchema
+      },
+      { prompt: normalizedPrompt, tools, config, responseSchema }
+    );
+    
+    res.status(201).json({
       ok: true,
-      client: newClient,
-      message: 'Cliente creado exitosamente'
+      client: result.client,
+      assistant: result.assistant,
+      message: 'Cliente y Assistant creados exitosamente'
     });
   } catch (error) {
     console.error('Error creando cliente:', error);
@@ -626,7 +543,7 @@ app.put('/clients/:clientId', async (req, res) => {
   }
 });
 
-// Eliminar cliente
+// Eliminar cliente + Assistant
 app.delete('/clients/:clientId', async (req, res) => {
   try {
     const { clientId } = req.params;
@@ -636,7 +553,7 @@ app.delete('/clients/:clientId', async (req, res) => {
     res.json({
       ok: true,
       result: result,
-      message: 'Cliente eliminado exitosamente'
+      message: 'Cliente y Assistant eliminados exitosamente'
     });
   } catch (error) {
     console.error('Error eliminando cliente:', error);
@@ -644,6 +561,64 @@ app.delete('/clients/:clientId', async (req, res) => {
       ok: false, 
       error: 'Error eliminando cliente',
       details: error.message 
+    });
+  }
+});
+
+// Obtener Assistant de un consultorio
+app.get('/assistants/:clientId', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const assistant = await webhookManager.commandManager.getAssistantConfig(clientId);
+
+    if (!assistant) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Assistant no encontrado'
+      });
+    }
+
+    res.json({
+      ok: true,
+      assistant
+    });
+  } catch (error) {
+    console.error('Error obteniendo Assistant:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Error obteniendo Assistant',
+      details: error.message
+    });
+  }
+});
+
+// Actualizar Assistant (404 si no existe el cliente)
+app.put('/assistants/:clientId', async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const { prompt, tools, config, responseSchema } = req.body;
+
+    const updated = await webhookManager.commandManager.updateAssistant(clientId, {
+      prompt,
+      tools,
+      config,
+      responseSchema
+    });
+
+    res.json({
+      ok: true,
+      assistant: updated,
+      message: 'Assistant actualizado exitosamente'
+    });
+  } catch (error) {
+    console.error('Error actualizando Assistant:', error);
+    const status = error.code === 'CLIENT_NOT_FOUND' || error.code === 'ASSISTANT_NOT_FOUND'
+      ? 404
+      : 500;
+    res.status(status).json({
+      ok: false,
+      error: status === 404 ? error.message : 'Error actualizando Assistant',
+      details: error.message
     });
   }
 });
@@ -834,7 +809,6 @@ app.post('/clients/reload', async (req, res) => {
       name: client.name,
       adminPhone: client.adminPhone,
       assistantPhone: client.assistantPhone,
-      assistantId: client.assistantId,
       botStatus: client.botStatus,
       status: client.status
     }));
@@ -876,7 +850,6 @@ app.get('/clients/status', async (req, res) => {
       name: client.name,
       adminPhone: client.adminPhone,
       assistantPhone: client.assistantPhone,
-      assistantId: client.assistantId,
       botStatus: client.botStatus,
       status: client.status,
       lastUpdated: client.updatedAt
@@ -1033,7 +1006,7 @@ app.listen(port, async () => {
     console.log(`Health URL: http://localhost:${port}/health`);
     console.log('Variables de entorno:');
     console.log('- OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? 'Configurado' : 'NO CONFIGURADO');
-    console.log('- ASISTENTE_ID:', process.env.ASISTENTE_ID ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- OPENAI_MODEL:', process.env.OPENAI_MODEL || 'gpt-4o-mini (default)');
     console.log('- ULTRAMSG_TOKEN:', process.env.ULTRAMSG_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- ULTRAMSG_INSTANCE_ID:', process.env.ULTRAMSG_INSTANCE_ID ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- ULTRAMSG_WEBHOOK_TOKEN:', process.env.ULTRAMSG_WEBHOOK_TOKEN ? 'Configurado' : 'NO CONFIGURADO');

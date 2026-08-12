@@ -9,7 +9,7 @@ Documento completo del sistema **asistente-openai**: qué es, para quién sirve,
 Es un **asistente automático de WhatsApp** pensado para **varios consultorios o negocios a la vez**. Cada consultorio tiene:
 
 - Su propio número de WhatsApp (el del asistente).
-- Su propio “cerebro” de inteligencia artificial (un asistente de OpenAI).
+- Su propio “cerebro” de inteligencia artificial (prompt, tools y schema en Firestore `Assistants/{clientId}`).
 - Su propio administrador (quien enciende/apaga el bot y sube documentos).
 - Opcionalmente, sus propios archivos PDF que la IA puede enviar a los pacientes.
 
@@ -38,8 +38,8 @@ Este proyecto es el “cerebro central” que conecta:
 |--------|----------------|
 | **WhatsApp + UltraMsg** | El teléfono y el mensajero |
 | **Este servidor** | La recepción y la lógica de negocio |
-| **OpenAI Assistants** | El empleado virtual que piensa y responde |
-| **Firebase** | La agenda de consultorios (quién es quién) |
+| **OpenAI Responses API** | El modelo que piensa y responde |
+| **Firebase** | Consultorios (`clients`), cerebros (`Assistants`) e historial (`bot_sessions`) |
 | **Carpeta `uploads/`** | El archivador de PDFs por consultorio |
 
 ---
@@ -48,15 +48,15 @@ Este proyecto es el “cerebro central” que conecta:
 
 ### 3.1 Conversación con inteligencia artificial
 
-- Cada mensaje de texto de un paciente se envía a OpenAI.
-- La IA responde según las instrucciones del asistente de ese consultorio.
-- La conversación tiene **memoria** mientras el servidor no se reinicie (ver sección de *threads*).
+- Cada mensaje de texto de un paciente se envía a OpenAI (Responses API).
+- La IA responde según el prompt del documento `Assistants/{clientId}` de ese consultorio.
+- La conversación tiene **memoria persistente** en Firestore (`bot_sessions`).
 
 ### 3.2 Multi-consultorio (multi-cliente)
 
 - Varios negocios pueden usar el mismo servidor.
 - El sistema identifica el consultorio por el **número al que llegó el mensaje** (número del asistente).
-- Cada uno tiene su `assistantId` de OpenAI independiente (tono, reglas y herramientas distintas).
+- Cada uno tiene su documento `Assistants/{clientId}` (prompt, tools y schema independientes).
 
 ### 3.3 Control remoto por WhatsApp (comandos)
 
@@ -110,9 +110,9 @@ POST /webhook
 ¿Bot apagado? → Avisar que está apagado
         ↓
 Identificar consultorio por número del asistente
-Obtener assistantId de OpenAI de ese consultorio
+Cargar Assistants/{clientId} (par 1:1 obligatorio)
         ↓
-OpenAI procesa el mensaje (thread + run + tools)
+OpenAI Responses API (instructions + historial Items + tools)
         ↓
 Respuesta de texto → UltraMsg → WhatsApp del paciente
 (Si la IA pidió enviar_pdf → también se envía el PDF)
@@ -122,10 +122,10 @@ Respuesta de texto → UltraMsg → WhatsApp del paciente
 
 1. Ana escribe al WhatsApp del “Consultorio García”: *“¿Me pueden mandar la lista de precios?”*
 2. UltraMsg notifica al servidor.
-3. El servidor ve que el mensaje llegó al número del Consultorio García → usa el asistente OpenAI de ese consultorio.
+3. El servidor ve que el mensaje llegó al número del Consultorio García → carga `Assistants/{clientId}`.
 4. OpenAI decide llamar `enviar_pdf` con `documento_id = lista_precios`.
 5. El servidor lee `uploads/.../lista_precios.pdf` y lo envía por WhatsApp.
-6. OpenAI también genera un texto del tipo: *“Te envío la lista de precios.”*
+6. OpenAI también genera JSON `{"reply":"Te envío la lista de precios."}`.
 7. Ese texto también llega a Ana por WhatsApp.
 
 ---
@@ -136,145 +136,120 @@ Esta es la parte más importante del sistema.
 
 ### 5.1 Qué tecnología de OpenAI usa
 
-El proyecto **no** usa el chat simple tipo “una pregunta → una respuesta” de forma aislada.
+Usa la **Responses API** de OpenAI (`openai.responses.create`):
 
-Usa la **Assistants API** de OpenAI (API beta de assistants/threads/runs):
+| Concepto | Qué significa aquí |
+|----------|--------------------|
+| **instructions** | Prompt del consultorio (`Assistants.prompt`) + lista dinámica de PDFs. |
+| **input (Items)** | Historial de la conversación (user/assistant + function_call / function_call_output). |
+| **tools** | Functions en shape Responses (planas). Aquí: `enviar_pdf`. |
+| **text.format** | JSON Schema estricto `{ "reply": string }` para la respuesta a WhatsApp. |
+| **store: false** | No se guarda estado en OpenAI; el historial vive en Firestore. |
 
-| Concepto OpenAI | Qué significa aquí |
-|-----------------|--------------------|
-| **Assistant** | El “empleado virtual” configurado (instrucciones, modelo, herramientas). Cada consultorio puede tener el suyo. |
-| **Thread** | El “hilo” o historial de una conversación con un paciente en un consultorio concreto. |
-| **Message** | Cada mensaje del usuario o del asistente dentro del thread. |
-| **Run** | Una “vuelta de pensamiento”: OpenAI lee el thread, decide qué hacer y produce respuesta (o pide herramientas). |
-| **Tool / Function** | Acciones que el código puede ejecutar por pedido de la IA. Aquí: `enviar_pdf`. |
-
-**Modelo por defecto al crear asistentes** (script `scripts/create-assistant.js`): `gpt-4o-mini`.  
-El modelo real de cada consultorio es el que tenga configurado ese Assistant en OpenAI (Dashboard o API).
+**Modelo global** vía env `OPENAI_MODEL` (default `gpt-4o-mini`). El “cerebro” por consultorio es el documento Firestore `Assistants/{clientId}` (mismo ID que `clients/{clientId}`).
 
 ### 5.2 Dónde está la integración en el código
 
 | Archivo | Responsabilidad |
 |---------|-----------------|
-| `src/managers/openAIManager.js` | **Núcleo de IA**: threads, mensajes, runs, espera, tools, respuesta final. |
-| `src/controllers/webhookManager.js` | Decide cuándo llamar a la IA y con qué `assistantId` / cliente / instancia WhatsApp. |
-| `scripts/create-assistant.js` | Crea un Assistant nuevo en OpenAI. |
-| `scripts/list-assistants.js` | Lista Assistants de la cuenta. |
+| `src/managers/openAIManager.js` | **Núcleo de IA**: Responses, loop de tools, historial en `bot_sessions`. |
+| `src/controllers/webhookManager.js` | Decide cuándo llamar a la IA; resuelve `clientId` e instancia WhatsApp. |
+| `src/services/firebaseService.js` | CRUD `clients`, `Assistants`, `bot_sessions`. |
+| `scripts/create-assistant.js` | Seed del **par** client + Assistant en Firestore. |
 | `src/services/documentStore.js` | Archivos PDF que la tool puede enviar. |
 | `src/managers/ultramsgManager.js` | Envío real del PDF/texto a WhatsApp. |
-| `src/services/commandManager.js` | Relaciona teléfono → cliente → `assistantId`; sube/borra docs. |
+| `src/services/commandManager.js` | Relaciona teléfono → cliente; carga Assistant 1:1; sube/borra docs. |
 
 Variables de entorno relacionadas:
 
 - `OPENAI_API_KEY` — clave de la cuenta OpenAI (obligatoria).
-- `ASISTENTE_ID` — ID de respaldo/legado; en multi-cliente el ID principal vive en Firebase (`assistantId` de cada cliente).
+- `OPENAI_MODEL` — modelo Responses (ej. `gpt-4o-mini`).
 
 ### 5.3 Cómo se elige qué “cerebro” usa cada mensaje
 
-1. UltraMsg entrega el mensaje con el campo `to` (número que recibió el mensaje = número del asistente).
-2. El sistema busca en Firebase/cache un cliente cuyo `assistantPhone` coincida.
-3. De ese cliente toma `assistantId` (por ejemplo `asst_abc123`).
-4. Ese ID se pasa a `openAIManager.processMessage(...)`.
+1. UltraMsg entrega el mensaje con el campo `to` (número del asistente).
+2. El sistema busca un cliente cuyo `assistantPhone` coincida → `clientId`.
+3. Carga `Assistants/{clientId}`. Si falta el documento → error (par inconsistente).
+4. `openAIManager.processMessage(userId, message, clientId, context)` usa ese prompt/tools/schema.
 
 Así, el mismo servidor puede atender al Consultorio A con un tono formal y al Consultorio B con otro tono, porque son Assistants distintos.
 
-### 5.4 Memoria de conversación (threads)
+### 5.4 Memoria de conversación (`bot_sessions`)
 
 Para no mezclar conversaciones:
 
-- Clave interna: `usuario + "_" + codigoCliente`  
+- Documento ID: `usuario + "_" + codigoCliente`  
   Ejemplo: `5215512345678_CLIENTE001`
-- Si no existe thread, se crea uno nuevo en OpenAI (`threads.create`).
-- Si ya existe, se reutiliza: la IA “recuerda” mensajes previos de esa pareja usuario–consultorio.
+- Campo `items[]`: Items Responses serializables (sin `instructions`).
+- En cada turno se reenvía `input = items` + el mensaje nuevo.
+- Límite ~40 Items al guardar (sin romper pares function_call / function_call_output).
+- Lock `lockedUntil` evita dos respuestas concurrentes a la misma sesión.
 
-**Importante:**
+**Endpoints** (requieren `ADMIN_API_TOKEN`):
 
-- Los IDs de thread se guardan **en memoria RAM** del servidor (`Map`).
-- Si el servidor **se reinicia**, se pierden esas asociaciones locales → la próxima conversación crea un thread nuevo (como empezar de cero para el usuario, aunque el thread viejo siga existiendo en OpenAI sin usarse).
-- Endpoint `POST /reset_threads`: borra el mapa local a propósito (útil para pruebas o para “olvidar” conversaciones).
+- `GET /sessions` — lista resúmenes (`itemsCount`, `isLocked`, fechas); filtros opcionales `?userId=` / `?clientCode=`.
+- `POST /reset_threads` — borra **todas** las docs de `bot_sessions`.
+- `DELETE /sessions/user/:userId` — borra todas las sesiones de ese usuario.
+- `DELETE /sessions/:userId/:clientCode` — borra una sesión concreta.
 
 ### 5.5 Qué hace exactamente `processMessage` (el corazón)
 
-Función principal: `OpenAIManager.processMessage(userId, message, assistantId, clientCode, context)`.
+Firma: `OpenAIManager.processMessage(userId, message, clientCode, context)`.
 
 Pasos internos:
 
-1. **Obtener o crear thread** para ese usuario + cliente.
-2. **Comprobar si hay un run activo** en ese thread.  
-   Si aún está “pensando”, lanza error: *“Por favor espera a que termine la respuesta anterior.”*  
-   (Evita solapar dos respuestas a la vez.)
-3. **Armar contexto local del request** (usuario, cliente, instancia UltraMsg, documentStore) para que las tools no se confundan entre usuarios concurrentes.
-4. **Agregar el mensaje del usuario** al thread.
-5. **Listar documentos PDF** del consultorio y construir `additional_instructions`, por ejemplo:  
-   *“Documentos disponibles: lista_precios, consentimiento. Usa solo estos documento_id al llamar enviar_pdf.”*
-6. **Crear un Run** con el `assistant_id` del consultorio y esas instrucciones adicionales.
-7. **Esperar el resultado** (polling cada 2 segundos, hasta ~5 minutos / 150 intentos).
-8. Si el estado es `requires_action` → ejecutar tools (ver abajo) y devolver resultados a OpenAI.
-9. Cuando el run está `completed` → leer el último mensaje del assistant y devolver el texto.
-10. El webhook envía ese texto por WhatsApp.
+1. Cargar `Assistants/{clientCode}`; error si no existe.
+2. Adquirir lock de `bot_sessions/{userId_clientCode}`.
+3. Cargar o crear sesión; append Item `user`.
+4. Construir `instructions` = prompt + documentos disponibles.
+5. Llamar `responses.create` con `input`, `tools`, `text.format`, `store: false`.
+6. Si hay `function_call` → ejecutar `enviar_pdf`, append outputs, repetir (máx. 8 loops).
+7. Parsear `{ reply }` desde `output_text`; persistir Items; liberar lock; devolver string a WhatsApp.
 
 ### 5.6 La herramienta `enviar_pdf` (function calling)
 
-A veces la IA no solo escribe texto: **pide al servidor que haga algo**.
-
-Flujo:
-
 ```text
-OpenAI (run) → estado requires_action
-        ↓
-Solicita tool: enviar_pdf { documento_id, caption? }
+responses.create → output con function_call enviar_pdf
         ↓
 Servidor: busca PDF en DocumentStore del cliente
         ↓
-UltraMsg.sendDocument (PDF en base64) al WhatsApp del usuario
+UltraMsg.sendDocument (PDF en base64)
         ↓
-Servidor responde a OpenAI: { success: true, ... }
+Append function_call_output al historial
         ↓
-OpenAI continúa el run y genera el texto final
+Nueva llamada responses.create → JSON {"reply":"..."}
 ```
 
-**Parámetros típicos que entiende el código:**
+**Parámetros:** `documento_id` (obligatorio), `caption` (opcional).
 
-- `documento_id` o `documentoId` (obligatorio)
-- `caption` (opcional, texto que acompaña el archivo)
+La tool vive en `Assistants.tools` (shape Responses, sin wrapper `function: {...}`). El seed `npm run create-assistant` la incluye.
 
-**Qué necesita estar listo para que funcione:**
+### 5.7 Instrucciones dinámicas de documentos
 
-1. El PDF subido y guardado (WhatsApp `/upload` o API admin).
-2. La tool `enviar_pdf` **registrada en el Assistant** en OpenAI (en el Dashboard o por script).  
-   El script `scripts/create-assistant.js` crea assistants **sin tools** (`tools: []`); hay que añadir la tool después.
-3. En las *Instructions* del Assistant, indicar **cuándo** usarla (ej.: si piden precios → `lista_precios`).
+En cada mensaje, `instructions` combina el prompt fijo de Firestore con la lista actual de PDFs del consultorio. Si el admin sube un PDF nuevo, la IA lo conoce en el siguiente turno sin tocar OpenAI Dashboard.
 
-Si el documento no existe, la tool devuelve error y la lista de IDs disponibles; la IA puede informar al usuario.
-
-### 5.7 Instrucciones adicionales dinámicas
-
-En cada mensaje, además de las instrucciones fijas del Assistant en OpenAI, el servidor inyecta `additional_instructions` con los PDFs **actuales** de ese consultorio.
-
-Ventaja: si el admin sube un PDF nuevo, la IA lo “conoce” en el siguiente mensaje sin reconfigurar el Assistant a mano.
-
-### 5.8 Crear y listar asistentes
+### 5.8 Seed del par client + Assistant
 
 ```bash
-npm run create-assistant   # Crea uno genérico (gpt-4o-mini) e imprime el ID
-npm run list-assistants    # Lista los de la cuenta
+npm run create-assistant        # o npm run seed-client-assistant
 ```
 
-El ID resultante se guarda en Firebase en el campo `assistantId` del cliente (y opcionalmente en `ASISTENTE_ID` del `.env` para casos simples).
+Crea en Firestore `clients/{id}` + `Assistants/{id}` con tool `enviar_pdf` y schema `{ reply }`.  
+Variables opcionales: `SEED_CLIENT_ID`, `SEED_CLIENT_NAME`, `SEED_ADMIN_PHONE`, `SEED_ASSISTANT_PHONE`, `SEED_PROMPT`.
 
 ### 5.9 Qué NO hace la IA (límites actuales)
 
 - No responde en grupos.
-- No procesa documentos enviados por pacientes como “contenido para leer” (salvo el flujo admin `/upload`).
-- No genera por sí sola la agenda diaria de citas (el scheduler está preparado, pero la fuente de citas aún es un placeholder).
-- No persiste threads en base de datos propia.
-- No usa Chat Completions ni Responses API; solo Assistants (beta).
+- No procesa documentos de pacientes como “contenido para leer” (salvo admin `/upload`).
+- No genera por sí sola la agenda diaria de citas (scheduler aún placeholder).
+- No usa Assistants API (`threads`/`runs`) ni Chat Completions en runtime.
+- No usa `previous_response_id` ni Conversations API (historial solo en Firestore).
 
 ### 5.10 Costes y rendimiento (visión práctica)
 
-- Cada mensaje normal = al menos un run de OpenAI (consumo de tokens).
+- Cada mensaje normal = al menos una llamada Responses (más si hay tools).
 - Las confirmaciones cortas evitan ese coste.
-- Si el usuario manda varios mensajes seguidos mientras hay un run activo, el segundo puede fallar con el mensaje de espera.
-- El polling espera hasta ~5 minutos; respuestas muy largas o tools lentas pueden acercarse a ese límite.
+- Si el usuario manda varios mensajes mientras la sesión está locked, el segundo puede fallar con el mensaje de espera.
 
 ---
 
@@ -319,10 +294,35 @@ Cada documento representa un consultorio. Campos típicos:
 | `name` | Nombre visible (ej. Consultorio Dr. García) |
 | `adminPhone` | WhatsApp del administrador (quien puede `/on`, `/off`, etc.) |
 | `assistantPhone` | Número del bot (dónde llegan los mensajes de pacientes) |
-| `assistantId` | ID del Assistant de OpenAI (`asst_…`) |
 | `botStatus` | `active` o `inactive` |
 | `status` | `active` o `deleted` (borrado lógico) |
 | `ULTRAMSG_*` | Credenciales de la instancia WhatsApp de ese cliente |
+| `createdAt` / `updatedAt` | Fechas |
+
+El campo legado `assistantId` (`asst_…`) **ya no se usa** en runtime. El cerebro se resuelve por `Assistants/{clientId}`.
+
+### Colección: `Assistants` (1:1 con `clients`)
+
+Documento ID = **mismo** `clientId`.
+
+| Campo | Significado |
+|-------|-------------|
+| `clientId` | Redundante con el ID del doc |
+| `prompt` | System instructions → `instructions` en Responses |
+| `tools` | Functions shape Responses (incl. `enviar_pdf`) |
+| `config` | `temperature`, `max_output_tokens`, etc. |
+| `responseSchema` | JSON Schema para `{ reply }` |
+| `updatedAt` | Fecha |
+
+Alta/baja de cliente siempre en par con su Assistant (`createClientWithAssistant` / `deleteClientWithAssistant`).
+
+### Colección: `bot_sessions`
+
+| Campo | Significado |
+|-------|-------------|
+| `userId` / `clientCode` | Identifican la sesión |
+| `items[]` | Historial Responses |
+| `lockedUntil` | Lock de concurrencia |
 | `createdAt` / `updatedAt` | Fechas |
 
 ### Credenciales del servidor
@@ -431,13 +431,13 @@ asistente-openai/
 │   ├── middleware/
 │   │   └── requireAdminAuth.js  # Protección de endpoints de documentos
 │   ├── managers/
-│   │   ├── openAIManager.js     # Integración OpenAI Assistants
+│   │   ├── openAIManager.js     # Integración OpenAI Responses API
 │   │   └── ultramsgManager.js   # WhatsApp vía UltraMsg
 │   ├── controllers/
 │   │   ├── webhookManager.js    # Orquestación de mensajes entrantes
 │   │   └── schedulerController.js
 │   └── services/
-│       ├── firebaseService.js   # Clientes en Firestore
+│       ├── firebaseService.js   # clients, Assistants, bot_sessions
 │       ├── commandManager.js    # Comandos #cliente /cmd
 │       ├── documentStore.js     # PDFs en disco
 │       ├── confirmationManager.js
@@ -445,8 +445,8 @@ asistente-openai/
 │       └── scheduler.js         # Cron jobs
 ├── uploads/                     # PDFs por cliente
 ├── scripts/
-│   ├── create-assistant.js
-│   ├── list-assistants.js
+│   ├── create-assistant.js      # Seed par client+Assistant Firestore
+│   ├── list-assistants.js       # Lista Assistants remotos (legado)
 │   └── migrate-to-firebase.js
 ├── test/                        # Scripts de prueba
 ├── package.json
@@ -477,11 +477,14 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 | GET | `/webhook` | Verificación con `?token=` |
 | POST | `/webhook` | Mensajes entrantes de UltraMsg |
 
-### OpenAI / conversaciones
+### OpenAI / conversaciones (requieren `ADMIN_API_TOKEN`)
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| POST | `/reset_threads` | Borra el mapa local de threads usuario–cliente |
+| GET | `/sessions` | Lista resúmenes de sesiones (`?userId=` / `?clientCode=` opcionales) |
+| POST | `/reset_threads` | Borra todas las sesiones en `bot_sessions` |
+| DELETE | `/sessions/user/:userId` | Borra todas las sesiones de un usuario |
+| DELETE | `/sessions/:userId/:clientCode` | Borra una sesión concreta |
 
 ### Contexto de usuario
 
@@ -505,13 +508,20 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | GET | `/clients` | Lista (cache) |
-| POST | `/clients` | Crea (`name`, `adminPhone`, `assistantPhone`, `assistantId`) |
+| POST | `/clients` | Crea **par** client + Assistant (`name`, `adminPhone`, `assistantPhone`, `prompt?`, `tools?`, `config?`) |
 | GET | `/clients/:clientId` | Uno |
-| PUT | `/clients/:clientId` | Actualiza |
-| DELETE | `/clients/:clientId` | Soft delete |
+| PUT | `/clients/:clientId` | Actualiza datos del consultorio (no crea Assistants huérfanos) |
+| DELETE | `/clients/:clientId` | Soft-delete del **par** client + Assistant |
 | GET | `/clients/stats/overview` | Estadísticas |
 | POST | `/clients/reload` | Recarga desde Firestore |
 | GET | `/clients/status` | Estado actual sin recargar |
+
+### Assistants (Firestore, 1:1)
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/assistants/:clientId` | Lee prompt/tools/config del consultorio |
+| PUT | `/assistants/:clientId` | Actualiza prompt/tools/config; **404** si no existe el cliente |
 
 ### Documentos (requieren `ADMIN_API_TOKEN`)
 
@@ -564,10 +574,10 @@ Copia `config-ultramsg.example` a `.env` y completa. Lo esencial:
 | Variable | Uso |
 |----------|-----|
 | `OPENAI_API_KEY` | Acceso a OpenAI |
-| `ASISTENTE_ID` | Fallback / scripts |
+| `OPENAI_MODEL` | Modelo Responses (default `gpt-4o-mini`) |
 | `ULTRAMSG_TOKEN` / `INSTANCE_ID` / `WEBHOOK_TOKEN` | WhatsApp (fallback) |
 | `FIREBASE_CREDENTIALS` | JSON de service account |
-| `ADMIN_API_TOKEN` | API de documentos |
+| `ADMIN_API_TOKEN` | API de documentos y borrado de sesiones |
 | `PORT` | Puerto (default 3000) |
 | `UPLOADS_DIR` | Carpeta de PDFs (opcional) |
 
@@ -587,10 +597,10 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 
 ### Alta típica de un consultorio nuevo
 
-1. Crear Assistant en OpenAI (`npm run create-assistant` o Dashboard).
-2. Registrar tool `enviar_pdf` e instrucciones (cuándo enviar cada PDF).
+1. Seed del par en Firestore (`npm run create-assistant`) o `POST /clients` (`prompt` opcional; vacío → fallback `''`).
+2. Ajustar prompt/tools con `PUT /assistants/:clientId` si hace falta.
 3. Crear instancia UltraMsg y escanear QR.
-4. Crear cliente en Firebase / `POST /clients` con teléfonos + `assistantId` + credenciales UltraMsg.
+4. Asociar credenciales UltraMsg al cliente (`PUT /clients/:clientId`).
 5. Apuntar webhook UltraMsg a `https://tu-dominio/webhook`.
 6. Subir PDFs (`/upload` o API).
 7. Probar desde WhatsApp: pregunta normal + `#ID /status` desde el admin.
@@ -601,8 +611,10 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 
 | Script | Qué hace |
 |--------|----------|
-| `npm run create-assistant` | Crea Assistant OpenAI |
-| `npm run list-assistants` | Lista Assistants |
+| `npm run create-assistant` | Seed par client + Assistant en Firestore |
+| `npm run seed-client-assistant` | Alias del anterior |
+| `npm run backfill-assistants` | Crea `Assistants/{id}` faltantes para clients activos (idempotente; `--dry-run` solo reporta) |
+| `npm run list-assistants` | Lista Assistants remotos de la cuenta (legado) |
 | `npm run migrate-firebase` | Migración de clientes a Firebase |
 | `npm run test-ultramsg` | Prueba UltraMsg |
 | `npm run test-webhook` | Prueba webhook |
@@ -617,9 +629,9 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 
 - **Agenda diaria**: la estructura existe; la obtención de citas (`getTodaysAppointments`) aún no está conectada a Google Calendar (suele devolver lista vacía).
 - **Limpieza semanal**: principalmente logging; no es un borrado agresivo de datos.
-- **Threads y contexto**: en memoria; se pierden al reiniciar.
-- **Documentación antigua** (`README.md` y algunas guías) puede mencionar Meta/Facebook o archivos que ya no existen; esta `DOCUMENTACION.md` refleja el código actual (UltraMsg + Firebase + Assistants).
-- El script para añadir la tool `enviar_pdf` mencionado en guías antiguas puede no estar en el repo; se puede registrar la tool desde el Dashboard de OpenAI.
+- **Historial**: persistido en Firestore (`bot_sessions`); sobrevive reinicios del servidor.
+- **Documentación antigua** (`README.md` y algunas guías) puede mencionar Meta/Facebook, `assistantId` remoto o Assistants API; esta `DOCUMENTACION.md` refleja Responses + Firebase.
+- Clientes existentes sin documento `Assistants/{id}` fallarán en runtime hasta crear el par. Usar `npm run backfill-assistants` (o `--dry-run` antes) para crear solo los docs faltantes sin tocar `clients`.
 
 ---
 
@@ -629,9 +641,9 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 |---------|----------------------|
 | **API / Endpoint** | Una “dirección” del servidor a la que se le pide algo (listar clientes, health, etc.). |
 | **Webhook** | UltraMsg “llama” a tu servidor cuando llega un mensaje de WhatsApp. |
-| **Assistant** | Perfil de IA en OpenAI (personalidad + reglas + herramientas). |
-| **Thread** | Historial de chat entre un paciente y un consultorio. |
-| **Run** | Una ejecución de “pensar y responder” de la IA. |
+| **Assistant (Firestore)** | Config del cerebro del consultorio: prompt, tools y schema en `Assistants/{clientId}`. |
+| **bot_session** | Historial de chat entre un paciente y un consultorio (Items de Responses). |
+| **Responses API** | Endpoint de OpenAI que genera la siguiente respuesta a partir de `instructions` + `input`. |
 | **Tool** | Acción que la IA pide al servidor (ej. enviar un PDF). |
 | **Cliente** | Un consultorio/negocio registrado en Firebase. |
 | **Instancia UltraMsg** | Una conexión WhatsApp concreta (un número). |
@@ -645,11 +657,11 @@ Este proyecto es un **backend multi-consultorio** que:
 
 1. Escucha WhatsApp (UltraMsg).
 2. Identifica el consultorio.
-3. Delega la conversación a **OpenAI Assistants** (threads + runs + tool `enviar_pdf`).
+3. Delega la conversación a **OpenAI Responses** (historial en Firestore + tool `enviar_pdf`).
 4. Devuelve la respuesta (y PDFs si aplica) por WhatsApp.
 5. Permite a cada admin controlar su bot y sus documentos sin entrar al código.
 
-La inteligencia artificial no “vive” en WhatsApp: vive en OpenAI. Este servidor es el **traductor e integrador** entre pacientes, consultorios, documentos y el modelo de IA.
+La inteligencia artificial no “vive” en WhatsApp: el modelo corre en OpenAI y el prompt/historial viven en Firebase. Este servidor es el **traductor e integrador** entre pacientes, consultorios, documentos y el modelo de IA.
 
 ---
 
