@@ -13,11 +13,13 @@ Es un **asistente automático de WhatsApp** pensado para **varios consultorios o
 - Su propio administrador (quien enciende/apaga el bot y sube documentos).
 - Opcionalmente, sus propios archivos PDF que la IA puede enviar a los pacientes.
 
-**No hay aplicación web ni app móvil.** Es un servidor (API) que:
+Es un servidor (API) que:
 
 1. Recibe mensajes de WhatsApp.
 2. Decide qué hacer (comando admin, confirmación corta, o conversación con IA).
 3. Responde por WhatsApp.
+
+También sirve un **panel admin** (SPA estática en `/`) para gestionar consultorios, assistants y PDFs con el token `ADMIN_API_TOKEN`.
 
 En la práctica: el paciente escribe por WhatsApp y recibe respuestas generadas por IA, personalizadas según el consultorio al que escribió.
 
@@ -417,8 +419,21 @@ Además de WhatsApp, se pueden gestionar por HTTP (requieren token admin):
 |--------|------|-------------|
 | GET | `/clients/:clientId/documents` | Lista PDFs |
 | POST | `/clients/:clientId/documents` | Sube PDF (multipart: `file` + `documento_id`). Máx. 25 MB |
+| DELETE | `/clients/:clientId/documents/:documentoId` | Elimina un PDF |
 
 Los archivos viven en disco: `uploads/{clientId}/{documento_id}.pdf` (volumen Docker recomendado).
+
+---
+
+## 10.1 Panel admin (SPA)
+
+La misma app Express sirve `public/` en `/`. No hace falta un segundo contenedor.
+
+1. Abre `https://tu-dominio/` (o `http://localhost:3000/`).
+2. Introduce `ADMIN_API_TOKEN`. Se guarda en `sessionStorage` y las peticiones llevan `Authorization: Bearer <token>`.
+3. Desde el panel: dashboard (health, bots, scheduler, UltraMsg), CRUD de consultorios, edición del Assistant (textarea de prompt + JSON de tools/config/schema) y gestión de PDFs.
+
+Si cambias credenciales `ULTRAMSG_*` de un consultorio, el servidor re-inicializa las instancias sin reiniciar el contenedor.
 
 ---
 
@@ -429,7 +444,7 @@ asistente-openai/
 ├── src/
 │   ├── index.js                 # Servidor Express: todos los endpoints
 │   ├── middleware/
-│   │   └── requireAdminAuth.js  # Protección de endpoints de documentos
+│   │   └── requireAdminAuth.js  # Protección de la API de gestión y el panel
 │   ├── managers/
 │   │   ├── openAIManager.js     # Integración OpenAI Responses API
 │   │   └── ultramsgManager.js   # WhatsApp vía UltraMsg
@@ -448,6 +463,7 @@ asistente-openai/
 │   ├── create-assistant.js      # Seed par client+Assistant Firestore
 │   ├── backfill-assistants.js   # Crea Assistants/{id} faltantes (opcional)
 │   └── migrate-to-firebase.js
+├── public/                      # Panel admin (HTML + JS)
 ├── test/                        # Scripts de prueba
 ├── package.json
 ├── Dockerfile / docker-compose.yml
@@ -462,7 +478,7 @@ asistente-openai/
 - **Controllers**: reciben HTTP y coordinan.
 - **index.js**: cablea todo y publica las URLs.
 
-**No hay frontend** en este repositorio.
+El frontend es la SPA en `public/`, servida por el mismo proceso Node.
 
 ---
 
@@ -494,7 +510,7 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 | GET | `/user-context/:userId` | Consulta contexto |
 | POST | `/clear-user-context/:userId` | Limpia contexto |
 
-### Scheduler
+### Scheduler (requieren `ADMIN_API_TOKEN`)
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -503,7 +519,7 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 | POST | `/scheduler/stop` | Detiene tareas |
 | POST | `/scheduler/restart` | Reinicia tareas |
 
-### Clientes (Firebase)
+### Clientes (Firebase, requieren `ADMIN_API_TOKEN`)
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -516,7 +532,7 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 | POST | `/clients/reload` | Recarga desde Firestore |
 | GET | `/clients/status` | Estado actual sin recargar |
 
-### Assistants (Firestore, 1:1)
+### Assistants (Firestore, 1:1, requieren `ADMIN_API_TOKEN`)
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -530,16 +546,17 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 |--------|------|-------------|
 | GET | `/clients/:clientId/documents` | Lista PDFs |
 | POST | `/clients/:clientId/documents` | Sube PDF |
+| DELETE | `/clients/:clientId/documents/:documentoId` | Elimina un PDF |
 
 ### Bots y grupos
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| GET | `/bots/status` | Estado de bots |
-| POST | `/bots/command` | Ejecuta comando (`clientId`, `command`) |
+| GET | `/bots/status` | Estado de bots (requiere token) |
+| POST | `/bots/command` | Ejecuta comando (`clientId`, `command`) (requiere token) |
 | GET | `/group-settings` | Política: no responder en grupos |
 
-### UltraMsg
+### UltraMsg (requieren `ADMIN_API_TOKEN`)
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -556,7 +573,7 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 
 ### Nota de seguridad
 
-Varios endpoints de clientes/bots/scheduler **no exigen token admin**. Si el servidor es público, conviene protegerlos (firewall, reverse proxy, VPN o autenticación adicional).
+Los endpoints de gestión (`/clients`, `/assistants`, `/bots`, `/scheduler`, `/ultramsg`, documentos y sesiones) exigen `ADMIN_API_TOKEN`. Siguen públicos: webhooks y `/health`.
 
 ---
 
@@ -578,7 +595,7 @@ Copia `config-ultramsg.example` a `.env` y completa. Lo esencial:
 | `OPENAI_MODEL` | Modelo Responses (default `gpt-4o-mini`) |
 | `ULTRAMSG_TOKEN` / `INSTANCE_ID` / `WEBHOOK_TOKEN` | WhatsApp (fallback) |
 | `FIREBASE_CREDENTIALS` | JSON de service account |
-| `ADMIN_API_TOKEN` | API de documentos y borrado de sesiones |
+| `ADMIN_API_TOKEN` | Panel admin y API de gestión (clientes, assistants, documentos, sesiones, bots, scheduler, UltraMsg) |
 | `PORT` | Puerto (default 3000) |
 | `UPLOADS_DIR` | Carpeta de PDFs (opcional) |
 

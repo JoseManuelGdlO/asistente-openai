@@ -303,23 +303,19 @@ class OpenAIManager {
         const output = Array.isArray(response.output) ? response.output : [];
         const functionCalls = output.filter((item) => item.type === 'function_call');
 
-        if (functionCalls.length === 0) {
-          // Persistir mensajes assistant serializados (sin reasoning)
-          for (const item of output) {
-            const serialized = this.serializeOutputItem(item);
-            if (serialized) {
-              items.push(serialized);
-            }
+        // Persistir todos los items serializables (mensajes + function_calls; sin reasoning)
+        for (const item of output) {
+          const serialized = this.serializeOutputItem(item);
+          if (serialized) {
+            items.push(serialized);
           }
+        }
+
+        if (functionCalls.length === 0) {
           break;
         }
 
         for (const call of functionCalls) {
-          const serializedCall = this.serializeOutputItem(call);
-          if (serializedCall) {
-            items.push(serializedCall);
-          }
-
           const result = await this.executeFunctionCall(call, runContext);
           items.push({
             type: 'function_call_output',

@@ -14,6 +14,7 @@ Un asistente inteligente de WhatsApp que integra OpenAI GPT-4 para responder men
 - **🎮 Sistema de Comandos**: Control remoto de bots por cliente con autenticación
 - **🔥 Firebase Integration**: Gestión dinámica de clientes en la nube
 - **📊 Múltiples Clientes**: Soporte para múltiples consultorios con asistentes independientes
+- **🖥️ Panel admin**: SPA en el mismo contenedor (`/`) para gestionar consultorios, assistants y PDFs
 
 ## 📁 Estructura del Proyecto
 
@@ -33,6 +34,7 @@ src/
 │   └── schedulerController.js # 🎛️ Controlador del scheduler
 ├── utils/                      # 🛠️ Utilidades (futuro)
 └── README.md                   # 📚 Documentación de la estructura
+public/                         # Panel admin (HTML + JS)
 ```
 
 ## ⚙️ Configuración
@@ -60,6 +62,9 @@ FIREBASE_PROJECT_ID=tu-proyecto-id
 FIREBASE_CLIENT_EMAIL=tu-service-account@proyecto.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nTu-clave-privada-aqui\n-----END PRIVATE KEY-----\n"
 FIREBASE_DATABASE_URL=https://tu-proyecto-id.firebaseio.com
+
+# Admin panel + API de gestión
+ADMIN_API_TOKEN=change-me-to-a-long-random-secret
 
 # Server Configuration
 PORT=3000
@@ -105,6 +110,19 @@ npm start
 npm run ngrok
 ```
 
+## 🖥️ Panel admin
+
+La misma app sirve una SPA en `/`. Entra con el valor de `ADMIN_API_TOKEN` (se guarda en `sessionStorage` y se envía como `Authorization: Bearer …`).
+
+Desde el panel puedes:
+
+- Ver health, bots, scheduler e instancias UltraMsg
+- Crear, editar y eliminar consultorios
+- Editar el Assistant (prompt + tools/config/responseSchema en JSON)
+- Listar, subir y borrar PDFs
+
+Los endpoints de gestión (`/clients`, `/assistants`, `/bots`, `/scheduler`, `/ultramsg`, documentos) **requieren** ese token. Siguen públicos: `/webhook`, `/webhook-own` y `/health`.
+
 ## 📡 Endpoints Disponibles
 
 ### Webhooks
@@ -122,21 +140,25 @@ npm run ngrok
 - `GET /user-context/:userId` - Obtener contexto de un usuario
 - `POST /clear-user-context/:userId` - Limpiar contexto de un usuario
 
-### Gestión de Clientes (Firebase)
+### Gestión de Clientes (Firebase, requieren `ADMIN_API_TOKEN`)
 - `POST /clients` - Crear nuevo cliente
 - `GET /clients` - Listar todos los clientes
 - `GET /clients/:clientId` - Obtener cliente específico
 - `PUT /clients/:clientId` - Actualizar cliente
 - `DELETE /clients/:clientId` - Eliminar cliente
 - `GET /clients/stats/overview` - Estadísticas de clientes
+- `GET /clients/status` - Estado actual sin recargar
 - `POST /clients/reload` - Recargar clientes desde Firebase
+- `GET /clients/:clientId/documents` - Listar PDFs
+- `POST /clients/:clientId/documents` - Subir PDF
+- `DELETE /clients/:clientId/documents/:documentoId` - Eliminar PDF
 
-### Assistants (Firestore, 1:1)
+### Assistants (Firestore, 1:1, requieren `ADMIN_API_TOKEN`)
 - `GET /assistants` - Listar todos los Assistants
 - `GET /assistants/:clientId` - Obtener prompt/tools/config de un consultorio
 - `PUT /assistants/:clientId` - Actualizar prompt/tools/config
 
-### Scheduler
+### Scheduler (requieren `ADMIN_API_TOKEN`)
 - `GET /scheduler/status` - Estado de tareas programadas
 - `POST /scheduler/run/:taskName` - Ejecutar tarea manualmente
 - `POST /scheduler/stop` - Detener todas las tareas
@@ -145,9 +167,8 @@ npm run ngrok
 ### Configuración de Grupos
 - `GET /group-settings` - Ver configuración de comportamiento en grupos
 
-### Sistema de Comandos
+### Sistema de Comandos (requieren `ADMIN_API_TOKEN`)
 - `GET /bots/status` - Ver estado de todos los bots
-- `GET /clients` - Ver configuración de clientes
 - `POST /bots/command` - Ejecutar comando manualmente
 
 ### Utilidad

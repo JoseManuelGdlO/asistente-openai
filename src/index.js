@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const multer = require('multer');
 require('dotenv').config();
@@ -52,6 +53,28 @@ const webhookManager = new WebhookManager(
   documentStore
 );
 const schedulerController = new SchedulerController(scheduler);
+
+const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
+
+function hasUltraMsgFields(data) {
+  if (!data || typeof data !== 'object') return false;
+  return ULTRAMSG_FIELD_KEYS.some((key) => typeof data[key] === 'string' && data[key].trim() !== '');
+}
+
+function stripEmptyUltraMsgFields(data) {
+  const next = { ...data };
+  ULTRAMSG_FIELD_KEYS.forEach((key) => {
+    if (next[key] === '' || next[key] == null) {
+      delete next[key];
+    }
+  });
+  return next;
+}
+
+async function reinitUltraMsgInstances() {
+  console.log('🔄 Re-inicializando instancias UltraMsg...');
+  await ultraMsgManager.initializeInstances(true);
+}
 
 // ==================== RECARGA AUTOMÁTICA DE CLIENTES ====================
 
@@ -318,7 +341,7 @@ app.post('/clear-user-context/:userId', (req, res) => {
 // ==================== ENDPOINTS DE SCHEDULER ====================
 
 // Obtener estado de tareas programadas
-app.get('/scheduler/status', (req, res) => {
+app.get('/scheduler/status', requireAdminAuth, (req, res) => {
   try {
     const result = schedulerController.getTasksStatus();
     res.json(result);
@@ -328,7 +351,7 @@ app.get('/scheduler/status', (req, res) => {
 });
 
 // Ejecutar tarea manualmente
-app.post('/scheduler/run/:taskName', async (req, res) => {
+app.post('/scheduler/run/:taskName', requireAdminAuth, async (req, res) => {
   try {
     const { taskName } = req.params;
     const result = await schedulerController.runTaskManually(taskName);
@@ -339,7 +362,7 @@ app.post('/scheduler/run/:taskName', async (req, res) => {
 });
 
 // Detener todas las tareas
-app.post('/scheduler/stop', (req, res) => {
+app.post('/scheduler/stop', requireAdminAuth, (req, res) => {
   try {
     const result = schedulerController.stopAllTasks();
     res.json(result);
@@ -349,7 +372,7 @@ app.post('/scheduler/stop', (req, res) => {
 });
 
 // Reiniciar tareas
-app.post('/scheduler/restart', (req, res) => {
+app.post('/scheduler/restart', requireAdminAuth, (req, res) => {
   try {
     const result = schedulerController.restartTasks();
     res.json(result);
@@ -391,7 +414,7 @@ app.get('/group-settings', (req, res) => {
 // ==================== ENDPOINTS DE COMANDOS ====================
 
 // Endpoint para ver estado de todos los bots
-app.get('/bots/status', (req, res) => {
+app.get('/bots/status', requireAdminAuth, (req, res) => {
   try {
     const status = webhookManager.commandManager.getAllBotsStatus();
     res.json({
@@ -410,7 +433,7 @@ app.get('/bots/status', (req, res) => {
 });
 
 // Endpoint para ver configuración de clientes
-app.get('/clients', (req, res) => {
+app.get('/clients', requireAdminAuth, (req, res) => {
   try {
     const clients = webhookManager.commandManager.getClientConfig();
     res.json({
@@ -429,7 +452,7 @@ app.get('/clients', (req, res) => {
 });
 
 // Endpoint para ejecutar comando manualmente
-app.post('/bots/command', async (req, res) => {
+app.post('/bots/command', requireAdminAuth, async (req, res) => {
   try {
     const { clientId, command, phoneNumber } = req.body;
     
@@ -465,7 +488,7 @@ app.post('/bots/command', async (req, res) => {
 // ==================== ENDPOINTS DE GESTIÓN DE CLIENTES ====================
 
 // Crear nuevo cliente + Assistant (par 1:1)
-app.post('/clients', async (req, res) => {
+app.post('/clients', requireAdminAuth, async (req, res) => {
   try {
     const {
       id,
@@ -476,7 +499,10 @@ app.post('/clients', async (req, res) => {
       tools,
       config,
       responseSchema,
-      botStatus
+      botStatus,
+      ULTRAMSG_TOKEN,
+      ULTRAMSG_INSTANCE_ID,
+      ULTRAMSG_WEBHOOK_TOKEN
     } = req.body;
     
     if (!name || !adminPhone || !assistantPhone) {
@@ -488,21 +514,30 @@ app.post('/clients', async (req, res) => {
 
     // prompt opcional: vacío/omitido → Assistants.prompt = '' (se puede editar después)
     const normalizedPrompt = typeof prompt === 'string' ? prompt : '';
+
+    const clientPayload = stripEmptyUltraMsgFields({
+      id,
+      name,
+      adminPhone,
+      assistantPhone,
+      botStatus: botStatus || 'active',
+      prompt: normalizedPrompt,
+      tools,
+      config,
+      responseSchema,
+      ULTRAMSG_TOKEN,
+      ULTRAMSG_INSTANCE_ID,
+      ULTRAMSG_WEBHOOK_TOKEN
+    });
     
     const result = await webhookManager.commandManager.createClient(
-      {
-        id,
-        name,
-        adminPhone,
-        assistantPhone,
-        botStatus: botStatus || 'active',
-        prompt: normalizedPrompt,
-        tools,
-        config,
-        responseSchema
-      },
+      clientPayload,
       { prompt: normalizedPrompt, tools, config, responseSchema }
     );
+
+    if (hasUltraMsgFields(clientPayload)) {
+      await reinitUltraMsgInstances();
+    }
     
     res.status(201).json({
       ok: true,
@@ -521,12 +556,16 @@ app.post('/clients', async (req, res) => {
 });
 
 // Actualizar cliente
-app.put('/clients/:clientId', async (req, res) => {
+app.put('/clients/:clientId', requireAdminAuth, async (req, res) => {
   try {
     const { clientId } = req.params;
-    const updateData = req.body;
+    const updateData = stripEmptyUltraMsgFields(req.body);
     
     const updatedClient = await webhookManager.commandManager.updateClient(clientId, updateData);
+
+    if (hasUltraMsgFields(updateData)) {
+      await reinitUltraMsgInstances();
+    }
     
     res.json({
       ok: true,
@@ -544,7 +583,7 @@ app.put('/clients/:clientId', async (req, res) => {
 });
 
 // Eliminar cliente + Assistant
-app.delete('/clients/:clientId', async (req, res) => {
+app.delete('/clients/:clientId', requireAdminAuth, async (req, res) => {
   try {
     const { clientId } = req.params;
     
@@ -566,7 +605,7 @@ app.delete('/clients/:clientId', async (req, res) => {
 });
 
 // Listar todos los Assistants (Firestore)
-app.get('/assistants', async (req, res) => {
+app.get('/assistants', requireAdminAuth, async (req, res) => {
   try {
     const assistants = await webhookManager.commandManager.listAssistants();
     res.json({
@@ -585,7 +624,7 @@ app.get('/assistants', async (req, res) => {
 });
 
 // Obtener Assistant de un consultorio
-app.get('/assistants/:clientId', async (req, res) => {
+app.get('/assistants/:clientId', requireAdminAuth, async (req, res) => {
   try {
     const { clientId } = req.params;
     const assistant = await webhookManager.commandManager.getAssistantConfig(clientId);
@@ -612,7 +651,7 @@ app.get('/assistants/:clientId', async (req, res) => {
 });
 
 // Actualizar Assistant (404 si no existe el cliente)
-app.put('/assistants/:clientId', async (req, res) => {
+app.put('/assistants/:clientId', requireAdminAuth, async (req, res) => {
   try {
     const { clientId } = req.params;
     const { prompt, tools, config, responseSchema } = req.body;
@@ -642,8 +681,117 @@ app.put('/assistants/:clientId', async (req, res) => {
   }
 });
 
+// Estado actual sin recargar (antes de /clients/:clientId)
+app.get('/clients/status', requireAdminAuth, async (req, res) => {
+  try {
+    const currentClients = webhookManager.commandManager.getClientConfig();
+    const clientsInfo = Object.entries(currentClients).map(([id, client]) => ({
+      id: id,
+      name: client.name,
+      adminPhone: client.adminPhone,
+      assistantPhone: client.assistantPhone,
+      botStatus: client.botStatus,
+      status: client.status,
+      lastUpdated: client.updatedAt
+    }));
+    
+    res.json({
+      ok: true,
+      count: Object.keys(currentClients).length,
+      clients: clientsInfo,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error obteniendo estado de clientes:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error obteniendo estado de clientes',
+      details: error.message 
+    });
+  }
+});
+
+// Obtener estadísticas de clientes
+app.get('/clients/stats/overview', requireAdminAuth, async (req, res) => {
+  try {
+    const stats = await webhookManager.commandManager.firebaseService.getClientStats();
+    
+    res.json({
+      ok: true,
+      stats: stats
+    });
+  } catch (error) {
+    console.error('Error obteniendo estadísticas:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error obteniendo estadísticas',
+      details: error.message 
+    });
+  }
+});
+
+// Recargar clientes desde Firebase
+app.post('/clients/reload', requireAdminAuth, async (req, res) => {
+  try {
+    console.log('🔄 Iniciando recarga de clientes desde Firebase...');
+    
+    const beforeCount = Object.keys(webhookManager.commandManager.getClientConfig()).length;
+    const beforeClients = Object.keys(webhookManager.commandManager.getClientConfig());
+    
+    await webhookManager.commandManager.reloadClients();
+    
+    const afterCount = Object.keys(webhookManager.commandManager.getClientConfig()).length;
+    const afterClients = Object.keys(webhookManager.commandManager.getClientConfig());
+    
+    const addedClients = afterClients.filter(id => !beforeClients.includes(id));
+    const removedClients = beforeClients.filter(id => !afterClients.includes(id));
+    
+    console.log('✅ Recarga completada:');
+    console.log(`- Antes: ${beforeCount} clientes`);
+    console.log(`- Después: ${afterCount} clientes`);
+    console.log(`- Agregados: ${addedClients.length}`);
+    console.log(`- Removidos: ${removedClients.length}`);
+    
+    const currentClients = webhookManager.commandManager.getClientConfig();
+    const clientsInfo = Object.entries(currentClients).map(([id, client]) => ({
+      id: id,
+      name: client.name,
+      adminPhone: client.adminPhone,
+      assistantPhone: client.assistantPhone,
+      botStatus: client.botStatus,
+      status: client.status
+    }));
+    
+    res.json({
+      ok: true,
+      message: 'Clientes recargados exitosamente',
+      summary: {
+        beforeCount: beforeCount,
+        afterCount: afterCount,
+        added: addedClients.length,
+        removed: removedClients.length,
+        changes: addedClients.length > 0 || removedClients.length > 0
+      },
+      changes: {
+        added: addedClients,
+        removed: removedClients
+      },
+      clients: clientsInfo,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error recargando clientes:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Error recargando clientes',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Obtener cliente específico
-app.get('/clients/:clientId', async (req, res) => {
+app.get('/clients/:clientId', requireAdminAuth, async (req, res) => {
   try {
     const { clientId } = req.params;
     
@@ -776,116 +924,40 @@ app.post(
   }
 );
 
-// Obtener estadísticas de clientes
-app.get('/clients/stats/overview', async (req, res) => {
+// Eliminar PDF de un cliente
+app.delete('/clients/:clientId/documents/:documentoId', requireAdminAuth, async (req, res) => {
   try {
-    const stats = await webhookManager.commandManager.firebaseService.getClientStats();
-    
-    res.json({
-      ok: true,
-      stats: stats
-    });
-  } catch (error) {
-    console.error('Error obteniendo estadísticas:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error obteniendo estadísticas',
-      details: error.message 
-    });
-  }
-});
+    const { clientId, documentoId } = req.params;
 
-// Recargar clientes desde Firebase
-app.post('/clients/reload', async (req, res) => {
-  try {
-    console.log('🔄 Iniciando recarga de clientes desde Firebase...');
-    
-    // Obtener estado antes de la recarga
-    const beforeCount = Object.keys(webhookManager.commandManager.getClientConfig()).length;
-    const beforeClients = Object.keys(webhookManager.commandManager.getClientConfig());
-    
-    // Recargar clientes
-    await webhookManager.commandManager.reloadClients();
-    
-    // Obtener estado después de la recarga
-    const afterCount = Object.keys(webhookManager.commandManager.getClientConfig()).length;
-    const afterClients = Object.keys(webhookManager.commandManager.getClientConfig());
-    
-    // Detectar cambios
-    const addedClients = afterClients.filter(id => !beforeClients.includes(id));
-    const removedClients = beforeClients.filter(id => !afterClients.includes(id));
-    
-    console.log('✅ Recarga completada:');
-    console.log(`- Antes: ${beforeCount} clientes`);
-    console.log(`- Después: ${afterCount} clientes`);
-    console.log(`- Agregados: ${addedClients.length}`);
-    console.log(`- Removidos: ${removedClients.length}`);
-    
-    // Obtener información detallada de los clientes actuales
-    const currentClients = webhookManager.commandManager.getClientConfig();
-    const clientsInfo = Object.entries(currentClients).map(([id, client]) => ({
-      id: id,
-      name: client.name,
-      adminPhone: client.adminPhone,
-      assistantPhone: client.assistantPhone,
-      botStatus: client.botStatus,
-      status: client.status
-    }));
-    
-    res.json({
-      ok: true,
-      message: 'Clientes recargados exitosamente',
-      summary: {
-        beforeCount: beforeCount,
-        afterCount: afterCount,
-        added: addedClients.length,
-        removed: removedClients.length,
-        changes: addedClients.length > 0 || removedClients.length > 0
-      },
-      changes: {
-        added: addedClients,
-        removed: removedClients
-      },
-      clients: clientsInfo,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('❌ Error recargando clientes:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error recargando clientes',
-      details: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
+    const client = await webhookManager.commandManager.firebaseService.getClientById(clientId);
+    if (!client) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Cliente no encontrado'
+      });
+    }
 
-// Endpoint adicional para ver el estado actual sin recargar
-app.get('/clients/status', async (req, res) => {
-  try {
-    const currentClients = webhookManager.commandManager.getClientConfig();
-    const clientsInfo = Object.entries(currentClients).map(([id, client]) => ({
-      id: id,
-      name: client.name,
-      adminPhone: client.adminPhone,
-      assistantPhone: client.assistantPhone,
-      botStatus: client.botStatus,
-      status: client.status,
-      lastUpdated: client.updatedAt
-    }));
-    
+    const deleted = await documentStore.delete(clientId, documentoId);
+    if (!deleted) {
+      return res.status(404).json({
+        ok: false,
+        error: `Documento no encontrado: ${documentoId}`
+      });
+    }
+
     res.json({
       ok: true,
-      count: Object.keys(currentClients).length,
-      clients: clientsInfo,
-      timestamp: new Date().toISOString()
+      message: 'Documento eliminado exitosamente',
+      clientId,
+      documentoId
     });
   } catch (error) {
-    console.error('Error obteniendo estado de clientes:', error);
-    res.status(500).json({ 
-      ok: false, 
-      error: 'Error obteniendo estado de clientes',
-      details: error.message 
+    console.error('Error eliminando documento:', error);
+    const status = /inválido/i.test(error.message) ? 400 : 500;
+    res.status(status).json({
+      ok: false,
+      error: 'Error eliminando documento',
+      details: error.message
     });
   }
 });
@@ -893,7 +965,7 @@ app.get('/clients/status', async (req, res) => {
 // ==================== ENDPOINTS DE GESTIÓN DE INSTANCIAS ULTRAMSG ====================
 
 // Obtener estado de todas las instancias de UltraMsg
-app.get('/ultramsg/instances', async (req, res) => {
+app.get('/ultramsg/instances', requireAdminAuth, async (req, res) => {
   try {
     const instances = ultraMsgManager.getAllInstances();
     const statuses = await ultraMsgManager.getAllInstancesStatus();
@@ -921,7 +993,7 @@ app.get('/ultramsg/instances', async (req, res) => {
 });
 
 // Obtener información de una instancia específica
-app.get('/ultramsg/instances/:instanceId', async (req, res) => {
+app.get('/ultramsg/instances/:instanceId', requireAdminAuth, async (req, res) => {
   try {
     const { instanceId } = req.params;
     
@@ -957,7 +1029,7 @@ app.get('/ultramsg/instances/:instanceId', async (req, res) => {
 });
 
 // Enviar mensaje usando una instancia específica
-app.post('/ultramsg/instances/:instanceId/send', async (req, res) => {
+app.post('/ultramsg/instances/:instanceId/send', requireAdminAuth, async (req, res) => {
   try {
     const { instanceId } = req.params;
     const { to, message } = req.body;
@@ -1014,6 +1086,14 @@ app.post('/test', (req, res) => {
   });
 });
 
+// ==================== PANEL ADMIN (SPA) ====================
+
+const publicDir = path.join(__dirname, '../public');
+app.use(express.static(publicDir));
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
+
 // ==================== INICIALIZACIÓN DEL SERVIDOR ====================
 
 app.listen(port, async () => {
@@ -1023,6 +1103,7 @@ app.listen(port, async () => {
     console.log(`Webhook URL: http://localhost:${port}/webhook`);
     console.log(`Test URL: http://localhost:${port}/test`);
     console.log(`Health URL: http://localhost:${port}/health`);
+    console.log(`Panel admin: http://localhost:${port}/`);
     console.log('Variables de entorno:');
     console.log('- OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- OPENAI_MODEL:', process.env.OPENAI_MODEL || 'gpt-4o-mini (default)');
@@ -1061,4 +1142,5 @@ app.listen(port, async () => {
     console.log('=== SERVER READY ===');
     console.log('📱 Configuración de grupos: Los mensajes de grupos son ignorados automáticamente');
     console.log(`🔗 Endpoint de configuración: http://localhost:${port}/group-settings`);
+    console.log(`🔗 Endpoint de panel admin: http://localhost:${port}/`);
 }); 
