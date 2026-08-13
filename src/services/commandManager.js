@@ -383,6 +383,21 @@ class CommandManager {
   }
 
   /**
+   * Lista Assistants de Firestore (excluye deleted). Incluye clientName del cache si existe.
+   * @returns {Promise<Array>}
+   */
+  async listAssistants() {
+    const assistants = await this.firebaseService.getAllAssistants();
+    return assistants.map((assistant) => {
+      const client = this.clientConfig[assistant.id];
+      return {
+        ...assistant,
+        clientName: client?.name || null
+      };
+    });
+  }
+
+  /**
    * Obtiene la config Assistants/{clientId} (relación 1:1)
    * @param {string} clientId
    * @returns {Promise<Object|null>}

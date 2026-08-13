@@ -565,6 +565,25 @@ app.delete('/clients/:clientId', async (req, res) => {
   }
 });
 
+// Listar todos los Assistants (Firestore)
+app.get('/assistants', async (req, res) => {
+  try {
+    const assistants = await webhookManager.commandManager.listAssistants();
+    res.json({
+      ok: true,
+      assistants,
+      count: assistants.length
+    });
+  } catch (error) {
+    console.error('Error listando Assistants:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Error listando Assistants',
+      details: error.message
+    });
+  }
+});
+
 // Obtener Assistant de un consultorio
 app.get('/assistants/:clientId', async (req, res) => {
   try {

@@ -520,6 +520,7 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
+| GET | `/assistants` | Lista todos los Assistants de Firestore (excluye deleted) |
 | GET | `/assistants/:clientId` | Lee prompt/tools/config del consultorio |
 | PUT | `/assistants/:clientId` | Actualiza prompt/tools/config; **404** si no existe el cliente |
 

@@ -131,6 +131,11 @@ npm run ngrok
 - `GET /clients/stats/overview` - Estadísticas de clientes
 - `POST /clients/reload` - Recargar clientes desde Firebase
 
+### Assistants (Firestore, 1:1)
+- `GET /assistants` - Listar todos los Assistants
+- `GET /assistants/:clientId` - Obtener prompt/tools/config de un consultorio
+- `PUT /assistants/:clientId` - Actualizar prompt/tools/config
+
 ### Scheduler
 - `GET /scheduler/status` - Estado de tareas programadas
 - `POST /scheduler/run/:taskName` - Ejecutar tarea manualmente

@@ -340,6 +340,35 @@ class FirebaseService {
   // ==================== Assistants (1:1 con clients) ====================
 
   /**
+   * Lista todos los Assistants (excluye soft-deleted)
+   * @returns {Promise<Array>}
+   */
+  async getAllAssistants() {
+    try {
+      const snapshot = await this.assistantsCollection.get();
+      const assistants = [];
+
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.status === 'deleted') {
+          return;
+        }
+        assistants.push({
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate?.() || data.createdAt,
+          updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+        });
+      });
+
+      return assistants;
+    } catch (error) {
+      console.error('❌ Error listando Assistants:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Obtiene la config del Assistant de un consultorio
    * @param {string} clientId
    * @returns {Promise<Object|null>}
