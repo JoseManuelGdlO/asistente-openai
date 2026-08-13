@@ -38,6 +38,31 @@ class OpenAIManager {
   }
 
   /**
+   * Quita function_call sin function_call_output (pares rotos no se pueden reanudar)
+   * @param {Array} items
+   * @returns {Array}
+   */
+  dropIncompleteToolCalls(items) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return Array.isArray(items) ? items : [];
+    }
+
+    const callIdsWithOutput = new Set();
+    for (const item of items) {
+      if (item?.type === 'function_call_output' && item.call_id) {
+        callIdsWithOutput.add(item.call_id);
+      }
+    }
+
+    return items.filter((item) => {
+      if (item?.type === 'function_call' && item.call_id && !callIdsWithOutput.has(item.call_id)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  /**
    * Recorta historial sin romper pares function_call / function_call_output
    * @param {Array} items
    * @param {number} maxItems
@@ -228,12 +253,12 @@ class OpenAIManager {
   async processMessage(userId, message, clientCode = 'default', context = {}) {
     const assistant = await this.firebaseService.getAssistantByClientId(clientCode);
     if (!assistant || assistant.status === 'deleted') {
-      throw new Error(`Assistant no encontrado para cliente: ${clientCode}`);
+      return '❌ Error: Configuración del asistente incompleta. Contacta al administrador.';
     }
 
     const locked = await this.firebaseService.tryLockBotSession(userId, clientCode);
     if (!locked) {
-      throw new Error('Por favor espera a que termine la respuesta anterior.');
+      return 'Por favor espera a que termine la respuesta anterior.';
     }
 
     // Contexto local por request: evita que peticiones concurrentes se pisen
@@ -245,9 +270,11 @@ class OpenAIManager {
       documentStore: context.documentStore || null
     };
 
+    let items = null;
+
     try {
       const session = await this.firebaseService.getOrCreateBotSession(userId, clientCode);
-      let items = Array.isArray(session.items) ? [...session.items] : [];
+      items = Array.isArray(session.items) ? [...session.items] : [];
 
       const userItem = { type: 'message', role: 'user', content: message };
       items.push(userItem);
@@ -270,6 +297,7 @@ class OpenAIManager {
 
       while (loops < MAX_TOOL_LOOPS) {
         loops += 1;
+        await this.firebaseService.refreshBotSessionLock(userId, clientCode);
 
         const request = {
           model: this.model,
@@ -326,17 +354,24 @@ class OpenAIManager {
       }
 
       if (!finalResponse) {
+        await this.persistSessionItems(userId, clientCode, items);
         return 'Hubo un error procesando tu mensaje. Intenta de nuevo.';
       }
 
       const reply = this.parseReply(finalResponse);
-      const trimmed = this.trimHistoryItems(items, MAX_HISTORY_ITEMS);
-      await this.firebaseService.saveBotSession(userId, clientCode, {
-        items: trimmed,
-        lockedUntil: null
-      });
+      await this.persistSessionItems(userId, clientCode, items);
 
       return reply;
+    } catch (error) {
+      console.error('Error procesando mensaje con OpenAI:', error.message);
+      if (Array.isArray(items) && items.length) {
+        try {
+          await this.persistSessionItems(userId, clientCode, items);
+        } catch (saveError) {
+          console.error('Error persistiendo sesión tras fallo:', saveError.message);
+        }
+      }
+      return 'Hubo un error procesando tu mensaje. Intenta de nuevo.';
     } finally {
       try {
         await this.firebaseService.unlockBotSession(userId, clientCode);
@@ -344,6 +379,21 @@ class OpenAIManager {
         console.error('Error liberando lock de sesión:', unlockError.message);
       }
     }
+  }
+
+  /**
+   * Guarda items de sesión sin pares de tools rotos
+   * @param {string} userId
+   * @param {string} clientCode
+   * @param {Array} items
+   */
+  async persistSessionItems(userId, clientCode, items) {
+    const cleaned = this.dropIncompleteToolCalls(items);
+    const trimmed = this.trimHistoryItems(cleaned, MAX_HISTORY_ITEMS);
+    await this.firebaseService.saveBotSession(userId, clientCode, {
+      items: trimmed,
+      lockedUntil: null
+    });
   }
 
   /**

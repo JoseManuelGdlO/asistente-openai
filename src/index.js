@@ -128,6 +128,20 @@ app.post('/webhook', async (req, res) => {
         console.log('📱 Mensaje de grupo ignorado exitosamente');
       } else if (result.reason === 'blacklisted') {
         console.log('[BLACKLIST] Mensaje ignorado por contacto bloqueado (UltraMsg)');
+      } else if (result.reason === 'document_ignored') {
+        console.log('📎 Documento recibido sin /upload; ignorado (UltraMsg)');
+      } else if (result.reason === 'empty_message') {
+        console.log('Mensaje vacío ignorado (UltraMsg)');
+      } else if (result.reason === 'confirmation_processed') {
+        console.log('Mensaje de confirmación procesado (UltraMsg)');
+      } else if (result.reason === 'client_not_found') {
+        console.log('Consultorio no identificado; se envió aviso (UltraMsg)');
+      } else if (result.reason === 'bot_inactive') {
+        console.log('Bot inactivo; se envió aviso (UltraMsg)');
+      } else if (result.reason === 'assistant_missing') {
+        console.log('Assistant faltante; se envió aviso (UltraMsg)');
+      } else if (result.reason === 'media_download_failed') {
+        console.log('Error descargando adjunto; se envió aviso (UltraMsg)');
       } else {
         console.log('Mensaje procesado exitosamente');
       }
@@ -163,6 +177,12 @@ app.post('/webhook-own', async (req, res) => {
         console.log('[BLACKLIST] Mensaje ignorado por contacto bloqueado (own system)');
       } else if (result.reason === 'not_text_message') {
         console.log('📎 Mensaje no textual (imagen/audio/etc.) — se envió aviso al usuario (own system)');
+      } else if (result.reason === 'confirmation_processed') {
+        console.log('Mensaje de confirmación procesado (own system)');
+      } else if (result.reason === 'bot_inactive') {
+        console.log('Bot inactivo; se envió aviso (own system)');
+      } else if (result.reason === 'assistant_missing') {
+        console.log('Assistant faltante; se envió aviso (own system)');
       } else {
         console.log('Mensaje procesado exitosamente (own system)');
       }

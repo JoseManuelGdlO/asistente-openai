@@ -25,6 +25,7 @@ class FirebaseService {
     this.assistantsCollection = this.db.collection('Assistants');
     this.botSessionsCollection = this.db.collection('bot_sessions');
     this.blacklistCollection = this.db.collection('blacklist-phone');
+    this.webhookDedupCollection = this.db.collection('webhook_dedup');
   }
 
   /**
@@ -662,7 +663,7 @@ class FirebaseService {
    * @param {number} lockMs
    * @returns {Promise<boolean>}
    */
-  async tryLockBotSession(userId, clientCode, lockMs = 120000) {
+  async tryLockBotSession(userId, clientCode, lockMs = 180000) {
     const id = this.sessionId(userId, clientCode);
     const ref = this.botSessionsCollection.doc(id);
     const now = Date.now();
@@ -699,6 +700,24 @@ class FirebaseService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Renueva el lock de sesión (heartbeat durante loops de tools)
+   * @param {string} userId
+   * @param {string} clientCode
+   * @param {number} lockMs
+   */
+  async refreshBotSessionLock(userId, clientCode, lockMs = 180000) {
+    const id = this.sessionId(userId, clientCode);
+    const lockedUntil = new Date(Date.now() + lockMs);
+    await this.botSessionsCollection.doc(id).set(
+      {
+        lockedUntil,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
   }
 
   /**
@@ -849,6 +868,68 @@ class FirebaseService {
       console.error('❌ Error reseteando bot_sessions:', error);
       throw error;
     }
+  }
+
+  /**
+   * Intenta reclamar un mensaje de webhook para dedup (multi-instancia)
+   * @param {string} key - p.ej. ultra:{id} / own:{id}
+   * @param {number} ttlMs - TTL del claim en processing
+   * @returns {Promise<boolean>} - false si ya está claimed o completed vigente
+   */
+  async tryClaimWebhookMessage(key, ttlMs = 5 * 60 * 1000) {
+    const ref = this.webhookDedupCollection.doc(String(key));
+    const now = Date.now();
+    const expiresAt = new Date(now + ttlMs);
+
+    try {
+      await this.db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists) {
+          const data = snap.data() || {};
+          const existingExpires = data.expiresAt?.toDate?.() || data.expiresAt;
+          const expiresMs = existingExpires ? new Date(existingExpires).getTime() : 0;
+          const stillValid = expiresMs > now;
+          if (stillValid && (data.status === 'completed' || data.status === 'processing')) {
+            throw new Error('WEBHOOK_ALREADY_CLAIMED');
+          }
+        }
+        tx.set(ref, {
+          status: 'processing',
+          expiresAt,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      });
+      return true;
+    } catch (error) {
+      if (error.message === 'WEBHOOK_ALREADY_CLAIMED') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Marca un mensaje de webhook como completado (evita reintentos tardíos)
+   * @param {string} key
+   * @param {number} ttlMs
+   */
+  async markWebhookMessageCompleted(key, ttlMs = 24 * 60 * 60 * 1000) {
+    await this.webhookDedupCollection.doc(String(key)).set(
+      {
+        status: 'completed',
+        expiresAt: new Date(Date.now() + ttlMs),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+  }
+
+  /**
+   * Libera el claim para que UltraMsg/Own puedan reintentar
+   * @param {string} key
+   */
+  async releaseWebhookMessage(key) {
+    await this.webhookDedupCollection.doc(String(key)).delete();
   }
 
   /**

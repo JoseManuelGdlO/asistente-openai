@@ -105,11 +105,13 @@ UltraMsg recibe el mensaje y llama a tu servidor
         ↓
 POST /webhook
         ↓
+Claim en webhook_dedup (ultra:{id} / own:{id})
+        ↓
 ¿Es grupo? → Ignorar
 ¿Es comando #cliente /…? → Ejecutar comando y responder
 ¿Es documento sin /upload? → Ignorar
 ¿Es confirmación corta esperada? → Respuesta fija (sin IA)
-¿Bot apagado? → Avisar que está apagado
+¿Sin consultorio / bot apagado / Assistant faltante? → Aviso por WhatsApp
         ↓
 Identificar consultorio por número del asistente
 Cargar Assistants/{clientId} (par 1:1 obligatorio)
@@ -156,7 +158,7 @@ Usa la **Responses API** de OpenAI (`openai.responses.create`):
 |---------|-----------------|
 | `src/managers/openAIManager.js` | **Núcleo de IA**: Responses, loop de tools, historial en `bot_sessions`. |
 | `src/controllers/webhookManager.js` | Decide cuándo llamar a la IA; resuelve `clientId` e instancia WhatsApp. |
-| `src/services/firebaseService.js` | CRUD `clients`, `Assistants`, `bot_sessions`. |
+| `src/services/firebaseService.js` | CRUD `clients`, `Assistants`, `bot_sessions`, `webhook_dedup`. |
 | `scripts/create-assistant.js` | Seed del **par** client + Assistant en Firestore. |
 | `src/services/documentStore.js` | Archivos PDF que la tool puede enviar. |
 | `src/managers/ultramsgManager.js` | Envío real del PDF/texto a WhatsApp. |
@@ -171,7 +173,7 @@ Variables de entorno relacionadas:
 
 1. UltraMsg entrega el mensaje con el campo `to` (número del asistente).
 2. El sistema busca un cliente cuyo `assistantPhone` coincida → `clientId`.
-3. Carga `Assistants/{clientId}`. Si falta el documento → error (par inconsistente).
+3. Carga `Assistants/{clientId}`. Si falta el documento → aviso al paciente (par inconsistente).
 4. `openAIManager.processMessage(userId, message, clientId, context)` usa ese prompt/tools/schema.
 
 Así, el mismo servidor puede atender al Consultorio A con un tono formal y al Consultorio B con otro tono, porque son Assistants distintos.
@@ -185,7 +187,10 @@ Para no mezclar conversaciones:
 - Campo `items[]`: Items Responses serializables (sin `instructions`).
 - En cada turno se reenvía `input = items` + el mensaje nuevo.
 - Límite ~40 Items al guardar (sin romper pares function_call / function_call_output).
-- Lock `lockedUntil` evita dos respuestas concurrentes a la misma sesión.
+- Lock `lockedUntil` (TTL inicial **180s**): evita dos respuestas concurrentes a la misma sesión.
+- **Heartbeat**: en cada loop de tools se renueva `lockedUntil` (`refreshBotSessionLock`), para que un ciclo lento de hasta 8 tools no deje entrar otra petición.
+- Si `responses.create` falla a mitad, se persiste el Item `user` (y pares de tools completos). Los `function_call` sin `function_call_output` se descartan. El lock se libera en `finally`.
+- Si el lock está ocupado, no se appenda el mensaje: se responde *“Por favor espera a que termine la respuesta anterior.”*
 
 **Endpoints** (requieren `ADMIN_API_TOKEN`):
 
@@ -200,13 +205,14 @@ Firma: `OpenAIManager.processMessage(userId, message, clientCode, context)`.
 
 Pasos internos:
 
-1. Cargar `Assistants/{clientCode}`; error si no existe.
-2. Adquirir lock de `bot_sessions/{userId_clientCode}`.
+1. Cargar `Assistants/{clientCode}`; si no existe, devolver aviso de config incompleta (no lanza).
+2. Adquirir lock de `bot_sessions/{userId_clientCode}` (180s). Si está ocupado, devolver aviso de espera.
 3. Cargar o crear sesión; append Item `user`.
 4. Construir `instructions` = prompt + documentos disponibles.
-5. Llamar `responses.create` con `input`, `tools`, `text.format`, `store: false`.
+5. Llamar `responses.create` con `input`, `tools`, `text.format`, `store: false`. Al inicio de cada loop, renovar el lock.
 6. Si hay `function_call` → ejecutar `enviar_pdf`, append outputs, repetir (máx. 8 loops).
 7. Parsear `{ reply }` desde `output_text`; persistir Items; liberar lock; devolver string a WhatsApp.
+8. Si OpenAI falla: persistir lo posible (sin pares rotos), liberar lock y devolver *“Hubo un error procesando tu mensaje. Intenta de nuevo.”* para que el webhook lo envíe (HTTP 200, sin silencio).
 
 ### 5.6 La herramienta `enviar_pdf` (function calling)
 
@@ -283,6 +289,8 @@ https://tu-dominio.com/webhook
 
 El servidor valida el token (`?token=` o header `x-webhook-token`).
 
+Tras identificar el mensaje se hace claim en `webhook_dedup`. Avisos de negocio (consultorio no identificado, bot apagado, Assistant faltante) se envían por WhatsApp y el webhook responde **200**. Si el envío o un fallo inesperado lanza, se libera el claim y se responde **500** para que UltraMsg reintente.
+
 ---
 
 ## 7. Firebase (consultorios / clientes)
@@ -324,8 +332,22 @@ Alta/baja de cliente siempre en par con su Assistant (`createClientWithAssistant
 |-------|-------------|
 | `userId` / `clientCode` | Identifican la sesión |
 | `items[]` | Historial Responses |
-| `lockedUntil` | Lock de concurrencia |
+| `lockedUntil` | Lock de concurrencia (180s + heartbeat por loop) |
 | `createdAt` / `updatedAt` | Fechas |
+
+### Colección: `webhook_dedup`
+
+Evita doble procesamiento (multi-instancia) y el silencio por reintento de UltraMsg tras un 500.
+
+Documento ID = `ultra:{messageId}` o `own:{messageId}`.
+
+| Campo | Significado |
+|-------|-------------|
+| `status` | `processing` (claim) o `completed` (ya notificado) |
+| `expiresAt` | Si expiró, otro worker puede reclamar. Activar TTL de Firestore sobre este campo. |
+| `updatedAt` | Fecha |
+
+Flujo: claim al llegar el webhook → si el handler termina (incluido aviso de negocio o error de OpenAI convertido a texto) → `completed` (24h) → HTTP 200. Si lanza **antes** de notificar al usuario → se borra el claim → HTTP 500 → UltraMsg puede reintentar.
 
 ### Credenciales del servidor
 
@@ -452,7 +474,7 @@ asistente-openai/
 │   │   ├── webhookManager.js    # Orquestación de mensajes entrantes
 │   │   └── schedulerController.js
 │   └── services/
-│       ├── firebaseService.js   # clients, Assistants, bot_sessions
+│       ├── firebaseService.js   # clients, Assistants, bot_sessions, webhook_dedup
 │       ├── commandManager.js    # Comandos #cliente /cmd
 │       ├── documentStore.js     # PDFs en disco
 │       ├── confirmationManager.js
@@ -645,9 +667,9 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 
 - **Agenda diaria**: la estructura existe; la obtención de citas (`getTodaysAppointments`) aún no está conectada a Google Calendar (suele devolver lista vacía).
 - **Limpieza semanal**: principalmente logging; no es un borrado agresivo de datos.
-- **Historial**: persistido en Firestore (`bot_sessions`); sobrevive reinicios del servidor.
+- **Historial**: persistido en Firestore (`bot_sessions`); sobrevive reinicios del servidor. Si OpenAI falla a mitad, se guarda el turno del usuario (sin pares de tools rotos).
 - **Documentación antigua** (`README.md` y algunas guías) puede mencionar Meta/Facebook; esta `DOCUMENTACION.md` refleja Responses + Firebase.
-- Clientes sin documento `Assistants/{id}` fallan en runtime. Si hiciera falta: `node scripts/backfill-assistants.js` (o `--dry-run` antes).
+- Clientes sin documento `Assistants/{id}` reciben un aviso por WhatsApp (no quedan mudos). Si hiciera falta crear el par: `node scripts/backfill-assistants.js` (o `--dry-run` antes).
 
 ---
 
@@ -657,6 +679,7 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 |---------|----------------------|
 | **API / Endpoint** | Una “dirección” del servidor a la que se le pide algo (listar clientes, health, etc.). |
 | **Webhook** | UltraMsg “llama” a tu servidor cuando llega un mensaje de WhatsApp. |
+| **webhook_dedup** | Doc en Firestore que evita procesar dos veces el mismo mensaje (y el silencio si hay reintento). |
 | **Assistant (Firestore)** | Config del cerebro del consultorio: prompt, tools y schema en `Assistants/{clientId}`. |
 | **bot_session** | Historial de chat entre un paciente y un consultorio (Items de Responses). |
 | **Responses API** | Endpoint de OpenAI que genera la siguiente respuesta a partir de `instructions` + `input`. |
