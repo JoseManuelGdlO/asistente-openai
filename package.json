@@ -10,7 +10,6 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "test-webhook": "node test/test-webhook.js",
     "create-assistant": "node scripts/create-assistant.js",
-    "list-assistants": "node scripts/list-assistants.js",
     "test-ultramsg": "node test/test-ultramsg.js",
     "test-scheduler": "node test/test-scheduler.js",
     "test-groups": "node test/test-group-detection.js",

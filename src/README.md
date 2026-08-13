@@ -1,130 +1,67 @@
-# 📁 Estructura del Proyecto
+# Estructura del Proyecto
 
 ## Organización de Carpetas
 
 ```
 src/
-├── index.js                    # 🚀 Punto de entrada principal
-├── managers/                   # 🔌 Gestores de servicios externos
-│   ├── openAIManager.js       # 🤖 Gestor de OpenAI
-│   ├── ultramsgManager.js     # 📱 Gestor de UltraMsg
-│   ├── ownSystemManager.js    # 🏗️ Gestor de tu backend WhatsApp (OWN_SYSTEM)
-│   └── facebookTokenManager.js # 🔑 Gestor de tokens Facebook
-├── services/                   # ⚙️ Servicios de negocio
-│   ├── confirmationManager.js  # ✅ Gestor de confirmaciones
-│   ├── userContextManager.js   # 👤 Gestor de contexto de usuario
-│   └── scheduler.js           # ⏰ Scheduler de tareas
-├── controllers/                # 🎮 Controladores de endpoints
-│   ├── webhookManager.js      # 🌐 Controlador de webhooks
-│   └── schedulerController.js # 🎛️ Controlador del scheduler
-└── utils/                      # 🛠️ Utilidades (futuro)
+├── index.js                    # Punto de entrada principal
+├── middleware/
+│   └── requireAdminAuth.js     # Auth para admin API
+├── managers/                   # Gestores de servicios externos
+│   ├── openAIManager.js        # OpenAI Responses API + bot_sessions
+│   ├── ultramsgManager.js      # UltraMsg / WhatsApp
+│   └── ownSystemManager.js     # Backend WhatsApp propio (OWN_SYSTEM)
+├── services/                   # Servicios de negocio
+│   ├── firebaseService.js      # clients, Assistants, bot_sessions
+│   ├── commandManager.js       # Comandos #cliente /cmd
+│   ├── documentStore.js        # PDFs por consultorio
+│   ├── confirmationManager.js  # Confirmaciones cortas
+│   ├── userContextManager.js   # Contexto de agenda/usuario
+│   └── scheduler.js            # Cron jobs
+├── controllers/
+│   ├── webhookManager.js       # Webhooks UltraMsg / own
+│   └── schedulerController.js
+└── utils/                      # Utilidades (futuro)
 ```
 
-## 📋 Descripción de Carpetas
+## Descripción
 
-### 🚀 `index.js`
-- **Propósito**: Punto de entrada principal de la aplicación
-- **Responsabilidad**: Configuración del servidor Express, middleware y definición de endpoints
-- **Dependencias**: Importa todas las clases de las otras carpetas
+### `index.js`
+Punto de entrada Express: middleware, endpoints y arranque del servidor.
 
-### 🔌 `managers/`
-- **Propósito**: Gestores de servicios externos y APIs
-- **Contenido**:
-  - `openAIManager.js`: Maneja todas las interacciones con OpenAI
-  - `ultramsgManager.js`: Gestiona la comunicación con UltraMsg
-  - `ownSystemManager.js`: Gestiona el envío de mensajes vía tu API (endpoint `/devices/:deviceId/messages/send`)
-  - `facebookTokenManager.js`: Maneja tokens de Facebook (legacy)
+### `managers/`
+- `openAIManager.js`: Responses API, tools (`enviar_pdf`), historial en Firestore
+- `ultramsgManager.js`: envío/recepción vía UltraMsg
+- `ownSystemManager.js`: envío vía API propia (`OWN_API_BASE_URL`)
 
-### ⚙️ `services/`
-- **Propósito**: Lógica de negocio y servicios internos
-- **Contenido**:
-  - `confirmationManager.js`: Detecta y maneja mensajes de confirmación
-  - `userContextManager.js`: Gestiona el contexto de conversación de usuarios
-  - `scheduler.js`: Programa y ejecuta tareas automáticas
+### `services/`
+- `firebaseService.js`: CRUD de `clients`, `Assistants`, `bot_sessions`
+- `commandManager.js`: resolución cliente/Assistant y comandos admin
+- `documentStore.js`, `confirmationManager.js`, `userContextManager.js`, `scheduler.js`
 
-### 🎮 `controllers/`
-- **Propósito**: Controladores que manejan las peticiones HTTP
-- **Contenido**:
-  - `webhookManager.js`: Procesa webhooks de UltraMsg
-  - `schedulerController.js`: Maneja endpoints del scheduler
+### `controllers/`
+- `webhookManager.js`: orquesta mensajes entrantes
+- `schedulerController.js`: endpoints del scheduler
 
-## 🔑 Variables / Config necesarias para OWN_SYSTEM
+## Variables OWN_SYSTEM
 
-### Variables de entorno
-- `OWN_API_BASE_URL`: Base URL de tu backend WhatsApp (ej: `https://api-tu-backend.com`)
+- `OWN_API_BASE_URL`: Base URL del backend WhatsApp propio
+- Por cliente en Firebase: `OWN_SYSTEM` (boolean), `OWN_API_KEY` (string)
+- Inbound: `POST /webhook-own` (`type=message.inbound`, `normalized.to`)
 
-### Campos por cliente en Firebase (`clients/<id>`)
-- `OWN_SYSTEM` (boolean): `true` si el cliente usa tu plataforma propia.
-- `OWN_API_KEY` (string): API key para autenticar el envío con tu backend WhatsApp.
-
-### Endpoint de inbound (tu plataforma)
-- `POST /webhook-own`
-- Se espera `type=message.inbound` y `normalized.to` en formato `telefono:device@s.whatsapp.net`.
-- Para detectar el cliente se usa `assistantPhone = normalized.to.split(':')[0]`.
-
-### 🛠️ `utils/`
-- **Propósito**: Utilidades y helpers (preparado para futuro)
-- **Contenido**: Vacío por ahora, para futuras utilidades
-
-## 🔄 Flujo de Dependencias
+## Flujo de dependencias
 
 ```
 index.js
-├── managers/
-│   ├── openAIManager.js
-│   ├── ultramsgManager.js
-│   └── facebookTokenManager.js
-├── services/
-│   ├── confirmationManager.js
-│   ├── userContextManager.js
-│   └── scheduler.js (depende de ultramsgManager)
-└── controllers/
-    ├── webhookManager.js (depende de managers y services)
-    └── schedulerController.js (depende de scheduler)
+├── managers/ (openAI, ultramsg, ownSystem)
+├── services/ (firebase, commands, documents, confirmation, context, scheduler)
+└── controllers/ (webhook, scheduler)
 ```
 
-## 📝 Convenciones de Nomenclatura
+## Documentación relacionada
 
-- **Archivos**: camelCase (ej: `userContextManager.js`)
-- **Clases**: PascalCase (ej: `UserContextManager`)
-- **Carpetas**: camelCase (ej: `userContextManager`)
-
-## 🎯 Beneficios de esta Estructura
-
-1. **Separación de Responsabilidades**: Cada carpeta tiene un propósito específico
-2. **Escalabilidad**: Fácil agregar nuevos managers, servicios o controladores
-3. **Mantenibilidad**: Cambios aislados por funcionalidad
-4. **Legibilidad**: Estructura clara y fácil de navegar
-5. **Reutilización**: Servicios y managers pueden ser reutilizados
-
-## 🚀 Cómo Agregar Nuevos Archivos
-
-### Nuevo Manager
-```bash
-# Crear en managers/
-touch src/managers/nuevoManager.js
-```
-
-### Nuevo Servicio
-```bash
-# Crear en services/
-touch src/services/nuevoServicio.js
-```
-
-### Nuevo Controlador
-```bash
-# Crear en controllers/
-touch src/controllers/nuevoController.js
-```
-
-### Nueva Utilidad
-```bash
-# Crear en utils/
-touch src/utils/nuevaUtilidad.js
-```
-
-## 📚 Documentación Relacionada
-
-- `REFACTORING_GUIDE.md` - Guía completa de la refactorización
-- `REFACTORING_SUMMARY.md` - Resumen ejecutivo
-- `SCHEDULER_GUIDE.md` - Documentación del scheduler 
+- `docs/DOCUMENTACION.md` — fuente de verdad del sistema
+- `docs/SCHEDULER_GUIDE.md`
+- `docs/COMMANDS_GUIDE.md`
+- `docs/FIREBASE_MIGRATION_GUIDE.md`
+- `docs/FIREBASE_ULTRAMSG_GUIDE.md`

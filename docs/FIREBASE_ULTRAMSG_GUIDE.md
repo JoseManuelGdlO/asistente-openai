@@ -30,7 +30,6 @@ Cada cliente en Firebase debe tener estos campos para UltraMsg:
   "name": "Consultorio Dra. García",
   "adminPhone": "5216181020927@c.us",
   "assistantPhone": "5216182191002",
-  "assistantId": "asst_KGIIBdi0uGXm0rvZQYpVTBoe",
   "botStatus": "active",
   "status": "active",
   
@@ -43,6 +42,8 @@ Cada cliente en Firebase debe tener estos campos para UltraMsg:
   "updatedAt": "2025-07-23T23:21:42.000Z"
 }
 ```
+
+El cerebro de IA vive en `Assistants/{clientId}` (prompt, tools, schema), no en un `assistantId` remoto de OpenAI.
 
 ### 2. Campos Requeridos para UltraMsg
 

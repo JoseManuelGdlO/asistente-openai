@@ -401,20 +401,6 @@ class CommandManager {
   }
 
   /**
-   * @deprecated Usar getClientByAssistantPhone + getAssistantConfig
-   * Conservado por compatibilidad: ahora devuelve clientId (no asst_…)
-   */
-  async getAssistantIdByPhone(assistantPhone) {
-    try {
-      const client = await this.firebaseService.getClientByAssistantPhone(assistantPhone);
-      return client ? client.id : null;
-    } catch (error) {
-      console.error('❌ Error resolviendo cliente por teléfono:', error);
-      return null;
-    }
-  }
-
-  /**
    * Obtiene el mensaje de ayuda para un cliente
    * @param {string} clientId - ID del cliente
    * @returns {string} - Mensaje de ayuda

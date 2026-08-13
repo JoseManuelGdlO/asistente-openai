@@ -55,9 +55,9 @@ El sistema de comandos permite controlar remotamente los bots de cada cliente/co
 Los archivos se guardan en `uploads/{clientId}/{documento_id}.pdf` (volumen Docker).
 
 #### Envío automático por el asistente
-- La tool OpenAI `enviar_pdf` permite al asistente mandar un PDF al usuario.
-- En las Instructions del assistant indica **cuándo** llamar la tool (ej. al pedir precios → `documento_id="lista_precios"`).
-- Registra la tool con: `node scripts/add-enviar-pdf-tool.js asst_xxxxxxxx`
+- La tool `enviar_pdf` (en `Assistants/{clientId}.tools`) permite al modelo mandar un PDF al usuario.
+- En el `prompt` del Assistant indica **cuándo** llamar la tool (ej. al pedir precios → `documento_id="lista_precios"`).
+- Al crear el par con `npm run create-assistant` o `POST /clients`, la tool ya viene incluida; se puede ajustar con `PUT /assistants/:clientId`.
 
 ### **🛑 Lista de bloqueados (blacklist)**
 

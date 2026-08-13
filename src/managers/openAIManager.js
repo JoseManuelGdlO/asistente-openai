@@ -49,14 +49,17 @@ class OpenAIManager {
     }
 
     let start = items.length - maxItems;
-    while (start < items.length) {
-      const item = items[start];
-      if (item && item.type === 'function_call_output') {
-        start += 1;
-        continue;
-      }
-      break;
+
+    // Si el corte cae en un function_call_output, retroceder para incluir su function_call
+    while (start > 0 && items[start]?.type === 'function_call_output') {
+      start -= 1;
     }
+
+    // Si aún queda un output huérfano al inicio (no hay call que incluir), descartarlo
+    while (start < items.length && items[start]?.type === 'function_call_output') {
+      start += 1;
+    }
+
     return items.slice(start);
   }
 
@@ -82,6 +85,7 @@ class OpenAIManager {
     if (item.type === 'message') {
       const text = this.extractMessageText(item);
       return {
+        type: 'message',
         role: item.role || 'assistant',
         content: text
       };
@@ -245,7 +249,7 @@ class OpenAIManager {
       const session = await this.firebaseService.getOrCreateBotSession(userId, clientCode);
       let items = Array.isArray(session.items) ? [...session.items] : [];
 
-      const userItem = { role: 'user', content: message };
+      const userItem = { type: 'message', role: 'user', content: message };
       items.push(userItem);
 
       const docsInstructions = await this.buildDocumentsInstructions(
@@ -350,7 +354,7 @@ class OpenAIManager {
    * Resetea todas las sesiones (bot_sessions)
    * @returns {Promise<number>}
    */
-  async resetThreads() {
+  async resetSessions() {
     const deleted = await this.firebaseService.resetAllBotSessions();
     console.log(`=== Sesiones reseteadas (${deleted}) ===`);
     return deleted;

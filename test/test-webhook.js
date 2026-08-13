@@ -2,7 +2,7 @@ const axios = require('axios');
 
 // URL de tu servidor (ajusta según tu configuración de ngrok)
 const WEBHOOK_URL = 'http://localhost:3000/webhook';
-const TEST_URL = 'http://localhost:3000/reset_threads';
+const TEST_URL = 'http://localhost:3000/reset_sessions';
 const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || '';
 
 // Simular una petición de WhatsApp

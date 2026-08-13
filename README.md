@@ -21,9 +21,9 @@ Un asistente inteligente de WhatsApp que integra OpenAI GPT-4 para responder men
 src/
 ├── index.js                    # 🚀 Punto de entrada principal
 ├── managers/                   # 🔌 Gestores de servicios externos
-│   ├── openAIManager.js       # 🤖 Gestor de OpenAI
+│   ├── openAIManager.js       # 🤖 Gestor OpenAI Responses API
 │   ├── ultramsgManager.js     # 📱 Gestor de UltraMsg
-│   └── facebookTokenManager.js # 🔑 Gestor de tokens Facebook
+│   └── ownSystemManager.js    # 🏗️ Backend WhatsApp propio (OWN_SYSTEM)
 ├── services/                   # ⚙️ Servicios de negocio
 │   ├── confirmationManager.js  # ✅ Gestor de confirmaciones
 │   ├── userContextManager.js   # 👤 Gestor de contexto de usuario
@@ -48,7 +48,7 @@ Crea un archivo `.env` en la raíz del proyecto:
 ```env
 # OpenAI Configuration
 OPENAI_API_KEY=sk-your-openai-api-key
-ASISTENTE_ID=asst-your-assistant-id
+OPENAI_MODEL=gpt-4o-mini
 
 # UltraMsg Configuration
 ULTRAMSG_TOKEN=tu-token-de-ultramsg
@@ -83,11 +83,11 @@ Si tienes clientes configurados en variables de entorno:
 npm run migrate-firebase
 ```
 
-### 6. Crear Asistente de OpenAI
+### 6. Seed de cliente + Assistant (Firestore)
 ```bash
 npm run create-assistant
 ```
-
+Crea el par `clients/{id}` + `Assistants/{id}` (prompt, tools, schema). Variables opcionales: `SEED_CLIENT_ID`, `SEED_CLIENT_NAME`, etc.
 ## 🚀 Ejecutar el Servidor
 
 ### Desarrollo
@@ -113,7 +113,7 @@ npm run ngrok
 
 ### Gestión de sesiones (requieren `ADMIN_API_TOKEN`)
 - `GET /sessions` - Listar sesiones (`?userId=` / `?clientCode=` opcionales)
-- `POST /reset_threads` - Borrar todas las sesiones (`bot_sessions`)
+- `POST /reset_sessions` - Borrar todas las sesiones (`bot_sessions`)
 - `DELETE /sessions/user/:userId` - Borrar todas las sesiones de un usuario
 - `DELETE /sessions/:userId/:clientCode` - Borrar una sesión concreta
 
@@ -221,10 +221,12 @@ npm run test-firebase
 
 ## 📚 Documentación
 
-- `src/README.md` - Documentación detallada de la estructura
-- `SCHEDULER_GUIDE.md` - Guía completa del sistema de tareas programadas
-- `COMMANDS_GUIDE.md` - Guía completa del sistema de comandos
-- `FIREBASE_MIGRATION_GUIDE.md` - Guía completa de migración a Firebase
+- `docs/DOCUMENTACION.md` - Documentación completa del sistema (Responses + Firebase)
+- `src/README.md` - Estructura de carpetas
+- `docs/SCHEDULER_GUIDE.md` - Guía del sistema de tareas programadas
+- `docs/COMMANDS_GUIDE.md` - Guía del sistema de comandos
+- `docs/FIREBASE_MIGRATION_GUIDE.md` - Guía de migración a Firebase
+- `docs/FIREBASE_ULTRAMSG_GUIDE.md` - Firebase + UltraMsg por cliente
 
 ## 🔧 Scripts Disponibles
 
@@ -237,9 +239,8 @@ npm run test-firebase
 - `npm run test-groups` - Probar detección de grupos
 - `npm run test-commands` - Probar sistema de comandos
 - `npm run test-firebase` - Probar conexión con Firebase
-- `npm run migrate-firebase` - Migrar clientes a Firebase
-- `npm run create-assistant` - Crear nuevo asistente de OpenAI
-- `npm run list-assistants` - Listar asistentes existentes
+- `npm run migrate-firebase` - Migrar/seed clientes a Firebase (par client + Assistant)
+- `npm run create-assistant` - Seed par client + Assistant en Firestore
 
 ## 🏗️ Arquitectura
 

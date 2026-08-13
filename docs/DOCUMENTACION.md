@@ -188,7 +188,7 @@ Para no mezclar conversaciones:
 **Endpoints** (requieren `ADMIN_API_TOKEN`):
 
 - `GET /sessions` — lista resúmenes (`itemsCount`, `isLocked`, fechas); filtros opcionales `?userId=` / `?clientCode=`.
-- `POST /reset_threads` — borra **todas** las docs de `bot_sessions`.
+- `POST /reset_sessions` — borra **todas** las docs de `bot_sessions`.
 - `DELETE /sessions/user/:userId` — borra todas las sesiones de ese usuario.
 - `DELETE /sessions/:userId/:clientCode` — borra una sesión concreta.
 
@@ -231,7 +231,7 @@ En cada mensaje, `instructions` combina el prompt fijo de Firestore con la lista
 ### 5.8 Seed del par client + Assistant
 
 ```bash
-npm run create-assistant        # o npm run seed-client-assistant
+npm run create-assistant
 ```
 
 Crea en Firestore `clients/{id}` + `Assistants/{id}` con tool `enviar_pdf` y schema `{ reply }`.  
@@ -446,7 +446,7 @@ asistente-openai/
 ├── uploads/                     # PDFs por cliente
 ├── scripts/
 │   ├── create-assistant.js      # Seed par client+Assistant Firestore
-│   ├── list-assistants.js       # Lista Assistants remotos (legado)
+│   ├── backfill-assistants.js   # Crea Assistants/{id} faltantes (opcional)
 │   └── migrate-to-firebase.js
 ├── test/                        # Scripts de prueba
 ├── package.json
@@ -482,7 +482,7 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | GET | `/sessions` | Lista resúmenes de sesiones (`?userId=` / `?clientCode=` opcionales) |
-| POST | `/reset_threads` | Borra todas las sesiones en `bot_sessions` |
+| POST | `/reset_sessions` | Borra todas las sesiones en `bot_sessions` |
 | DELETE | `/sessions/user/:userId` | Borra todas las sesiones de un usuario |
 | DELETE | `/sessions/:userId/:clientCode` | Borra una sesión concreta |
 
@@ -612,10 +612,8 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 | Script | Qué hace |
 |--------|----------|
 | `npm run create-assistant` | Seed par client + Assistant en Firestore |
-| `npm run seed-client-assistant` | Alias del anterior |
-| `npm run backfill-assistants` | Crea `Assistants/{id}` faltantes para clients activos (idempotente; `--dry-run` solo reporta) |
-| `npm run list-assistants` | Lista Assistants remotos de la cuenta (legado) |
-| `npm run migrate-firebase` | Migración de clientes a Firebase |
+| `node scripts/backfill-assistants.js` | Crea `Assistants/{id}` faltantes para clients activos (idempotente; `--dry-run` solo reporta). Ya aplicado en producción si corresponde. |
+| `npm run migrate-firebase` | Seed/migración de clientes de ejemplo a Firestore |
 | `npm run test-ultramsg` | Prueba UltraMsg |
 | `npm run test-webhook` | Prueba webhook |
 | `npm run test-commands` | Prueba comandos |
@@ -630,8 +628,8 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 - **Agenda diaria**: la estructura existe; la obtención de citas (`getTodaysAppointments`) aún no está conectada a Google Calendar (suele devolver lista vacía).
 - **Limpieza semanal**: principalmente logging; no es un borrado agresivo de datos.
 - **Historial**: persistido en Firestore (`bot_sessions`); sobrevive reinicios del servidor.
-- **Documentación antigua** (`README.md` y algunas guías) puede mencionar Meta/Facebook, `assistantId` remoto o Assistants API; esta `DOCUMENTACION.md` refleja Responses + Firebase.
-- Clientes existentes sin documento `Assistants/{id}` fallarán en runtime hasta crear el par. Usar `npm run backfill-assistants` (o `--dry-run` antes) para crear solo los docs faltantes sin tocar `clients`.
+- **Documentación antigua** (`README.md` y algunas guías) puede mencionar Meta/Facebook; esta `DOCUMENTACION.md` refleja Responses + Firebase.
+- Clientes sin documento `Assistants/{id}` fallan en runtime. Si hiciera falta: `node scripts/backfill-assistants.js` (o `--dry-run` antes).
 
 ---
 

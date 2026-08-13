@@ -76,14 +76,14 @@ Este script:
 Si prefieres migrar manualmente, usa la API:
 
 ```bash
-# Crear cliente
+# Crear par client + Assistant
 curl -X POST http://localhost:3000/clients \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Consultorio Dr. García",
     "adminPhone": "5216181344331@c.us",
     "assistantPhone": "6182191002",
-    "assistantId": "asst-abc123",
+    "prompt": "Eres el asistente del consultorio. Responde en JSON {\"reply\":\"...\"}.",
     "botStatus": "active"
   }'
 ```
@@ -99,10 +99,12 @@ Content-Type: application/json
   "name": "Nombre del Consultorio",
   "adminPhone": "5216181344331@c.us",
   "assistantPhone": "6182191002",
-  "assistantId": "asst-abc123",
+  "prompt": "Eres el asistente del consultorio. Responde en JSON {\"reply\":\"...\"}.",
   "botStatus": "active"
 }
 ```
+
+Crea el par `clients/{id}` + `Assistants/{id}`. El cerebro (prompt/tools/schema) se edita con `PUT /assistants/:clientId`.
 
 ### **Listar Clientes**
 ```bash
@@ -121,9 +123,11 @@ Content-Type: application/json
 
 {
   "name": "Nuevo Nombre",
-  "assistantId": "asst-nuevo123"
+  "botStatus": "active"
 }
 ```
+
+Para actualizar prompt/tools usa `PUT /assistants/{clientId}` (no `assistantId` remoto de OpenAI).
 
 ### **Eliminar Cliente**
 ```bash
@@ -166,11 +170,25 @@ npm run test-webhook
     "name": "Consultorio Dr. García",
     "adminPhone": "5216181344331@c.us",
     "assistantPhone": "6182191002",
-    "assistantId": "asst-abc123",
-    "botStatus": "active", // active | inactive
-    "status": "active", // active | deleted
-    "createdAt": "2024-01-01T00:00:00.000Z",
-    "updatedAt": "2024-01-01T00:00:00.000Z"
+    "botStatus": "active",
+    "status": "active",
+    // ULTRAMSG_* opcionales por cliente
+    "createdAt": "...",
+    "updatedAt": "..."
+  }
+}
+```
+
+### **Colección: Assistants** (mismo ID que el cliente)
+```javascript
+{
+  "clientId": {
+    "clientId": "clientId",
+    "prompt": "Eres el asistente...",
+    "tools": [ /* enviar_pdf, etc. */ ],
+    "config": { "temperature": 0.4 },
+    "responseSchema": { /* { reply: string } */ },
+    "updatedAt": "..."
   }
 }
 ```

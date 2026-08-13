@@ -159,9 +159,9 @@ app.post('/webhook-own', async (req, res) => {
 
 // ==================== ENDPOINTS DE GESTIÓN DE SESIONES ====================
 
-app.post('/reset_threads', requireAdminAuth, async (req, res) => {
+app.post('/reset_sessions', requireAdminAuth, async (req, res) => {
   try {
-    const deleted = await openAIManager.resetThreads();
+    const deleted = await openAIManager.resetSessions();
     res.json({
       ok: true,
       message: 'Todas las sesiones de usuario han sido reseteadas.',
