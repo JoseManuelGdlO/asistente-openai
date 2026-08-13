@@ -4,7 +4,8 @@
 
 ```
 src/
-├── index.js                    # Punto de entrada principal
+├── index.js                    # Arranque: deps reales, listen, intervalos
+├── app.js                      # createApp(deps): rutas Express (testeable)
 ├── middleware/
 │   └── requireAdminAuth.js     # Auth para admin API
 ├── managers/                   # Gestores de servicios externos
@@ -27,7 +28,10 @@ src/
 ## Descripción
 
 ### `index.js`
-Punto de entrada Express: middleware, endpoints y arranque del servidor.
+Cablea dependencias reales, recarga periódica de clientes y `listen`.
+
+### `app.js`
+`createApp(deps)` registra middleware y rutas. Los tests HTTP inyectan stubs.
 
 ### `managers/`
 - `openAIManager.js`: Responses API, tools (`enviar_pdf`), historial en Firestore

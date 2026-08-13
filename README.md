@@ -261,7 +261,9 @@ npm run test-firebase
 - `npm start` - Iniciar servidor en producción
 - `npm run dev` - Iniciar servidor en desarrollo con nodemon
 - `npm run ngrok` - Exponer servidor con ngrok
-- `npm run test-ultramsg` - Probar conexión con UltraMsg
+- `npm test` - Suite automatizada (Jest + Supertest, sin Firebase/OpenAI reales)
+- `npm run test:watch` - Jest en modo watch
+- `npm run test-ultramsg` - Probar conexión con UltraMsg (manual, servidor en marcha)
 - `npm run test-scheduler` - Probar sistema de tareas
 - `npm run test-webhook` - Probar webhook
 - `npm run test-groups` - Probar detección de grupos

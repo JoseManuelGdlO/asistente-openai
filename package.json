@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "ngrok": "ngrok http 3000",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
+    "test:watch": "jest --watch",
     "test-webhook": "node test/test-webhook.js",
     "create-assistant": "node scripts/create-assistant.js",
     "test-ultramsg": "node test/test-ultramsg.js",
@@ -37,5 +38,9 @@
     "multer": "^2.2.0",
     "node-cron": "^4.2.1",
     "openai": "^4.0.0"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2"
   }
 }

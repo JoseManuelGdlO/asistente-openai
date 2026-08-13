@@ -10,7 +10,10 @@ class WebhookManager {
     this.confirmationManager = confirmationManager;
     this.userContextManager = userContextManager;
     this.documentStore = documentStore || new DocumentStore();
-    this.commandManager = new CommandManager(this.documentStore);
+    this.commandManager = new CommandManager(
+      this.documentStore,
+      openAIManager?.firebaseService || null
+    );
   }
 
   get firebaseService() {
@@ -182,10 +185,12 @@ class WebhookManager {
    */
   isGroupMessage(messageData) {
     // Verificar si el from termina en @g.us (grupo) o contiene información de grupo
-    return messageData.from && (
-      messageData.from.endsWith('@g.us') || 
-      messageData.chat?.isGroup === true ||
-      (messageData.chat && messageData.chat.id && messageData.chat.id.endsWith('@g.us'))
+    return Boolean(
+      messageData.from && (
+        messageData.from.endsWith('@g.us') ||
+        messageData.chat?.isGroup === true ||
+        (messageData.chat && messageData.chat.id && messageData.chat.id.endsWith('@g.us'))
+      )
     );
   }
 

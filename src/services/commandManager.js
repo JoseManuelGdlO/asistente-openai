@@ -2,9 +2,9 @@ const FirebaseService = require('./firebaseService');
 const DocumentStore = require('./documentStore');
 
 class CommandManager {
-  constructor(documentStore = null) {
+  constructor(documentStore = null, firebaseService = null) {
     // Servicio de Firebase para gestionar clientes
-    this.firebaseService = new FirebaseService();
+    this.firebaseService = firebaseService || new FirebaseService();
     this.documentStore = documentStore || new DocumentStore();
     
     // Configuración de clientes desde Firebase

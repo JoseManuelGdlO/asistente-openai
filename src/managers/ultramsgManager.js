@@ -3,10 +3,10 @@ const FirebaseService = require('../services/firebaseService');
 require('dotenv').config();
 
 class UltraMsgManager {
-  constructor() {
+  constructor(firebaseService = null) {
     this.instances = new Map();
     this.defaultInstance = null;
-    this.firebaseService = new FirebaseService();
+    this.firebaseService = firebaseService || new FirebaseService();
     this.initialized = false;
   }
 
