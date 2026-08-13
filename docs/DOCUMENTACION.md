@@ -19,7 +19,7 @@ Es un servidor (API) que:
 2. Decide qué hacer (comando admin, confirmación corta, o conversación con IA).
 3. Responde por WhatsApp.
 
-También sirve un **panel admin** (SPA estática en `/`) para gestionar consultorios, assistants y PDFs con el token `ADMIN_API_TOKEN`.
+También sirve un **panel admin** (SPA estática en `/`) para gestionar consultorios, assistants, PDFs y sesiones con el token `ADMIN_API_TOKEN`.
 
 En la práctica: el paciente escribe por WhatsApp y recibe respuestas generadas por IA, personalizadas según el consultorio al que escribió.
 
@@ -197,7 +197,10 @@ Para no mezclar conversaciones:
 - `GET /sessions` — lista resúmenes (`itemsCount`, `isLocked`, fechas); filtros opcionales `?userId=` / `?clientCode=`.
 - `POST /reset_sessions` — borra **todas** las docs de `bot_sessions`.
 - `DELETE /sessions/user/:userId` — borra todas las sesiones de ese usuario.
+- `DELETE /sessions/client/:clientCode` — borra todas las sesiones de ese consultorio.
 - `DELETE /sessions/:userId/:clientCode` — borra una sesión concreta.
+
+El panel expone estas acciones en **Sesiones** (listado global) y en la pestaña **Sesiones** de cada consultorio. Al guardar el Assistant se puede marcar “Resetear conversaciones…” para que el historial viejo no siga al prompt nuevo.
 
 ### 5.5 Qué hace exactamente `processMessage` (el corazón)
 
@@ -453,7 +456,7 @@ La misma app Express sirve `public/` en `/`. No hace falta un segundo contenedor
 
 1. Abre `https://tu-dominio/` (o `http://localhost:3000/`).
 2. Introduce `ADMIN_API_TOKEN`. Se guarda en `sessionStorage` y las peticiones llevan `Authorization: Bearer <token>`.
-3. Desde el panel: dashboard (health, bots, scheduler, UltraMsg), CRUD de consultorios, edición del Assistant (textarea de prompt + JSON de tools/config/schema) y gestión de PDFs.
+3. Desde el panel: dashboard (health, bots, scheduler, UltraMsg), CRUD de consultorios, edición del Assistant (textarea de prompt + JSON de tools/config/schema), gestión de PDFs y sesiones (listar/borrar; reset al cambiar el prompt).
 
 Si cambias credenciales `ULTRAMSG_*` de un consultorio, el servidor re-inicializa las instancias sin reiniciar el contenedor.
 
@@ -522,6 +525,7 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 | GET | `/sessions` | Lista resúmenes de sesiones (`?userId=` / `?clientCode=` opcionales) |
 | POST | `/reset_sessions` | Borra todas las sesiones en `bot_sessions` |
 | DELETE | `/sessions/user/:userId` | Borra todas las sesiones de un usuario |
+| DELETE | `/sessions/client/:clientCode` | Borra todas las sesiones de un consultorio |
 | DELETE | `/sessions/:userId/:clientCode` | Borra una sesión concreta |
 
 ### Contexto de usuario

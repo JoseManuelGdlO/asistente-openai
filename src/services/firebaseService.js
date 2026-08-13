@@ -798,6 +798,34 @@ class FirebaseService {
   }
 
   /**
+   * Borra docs de bot_sessions en batches de 400
+   * @param {FirebaseFirestore.QueryDocumentSnapshot[]} docs
+   * @returns {Promise<number>}
+   */
+  async deleteBotSessionDocs(docs) {
+    if (!docs.length) return 0;
+    const batchSize = 400;
+    let deleted = 0;
+    let batch = this.db.batch();
+    let ops = 0;
+
+    for (const doc of docs) {
+      batch.delete(doc.ref);
+      ops += 1;
+      deleted += 1;
+      if (ops >= batchSize) {
+        await batch.commit();
+        batch = this.db.batch();
+        ops = 0;
+      }
+    }
+    if (ops > 0) {
+      await batch.commit();
+    }
+    return deleted;
+  }
+
+  /**
    * Borra todas las sesiones de un usuario (todos los clientCode)
    * @param {string} userId
    * @returns {Promise<number>}
@@ -805,31 +833,28 @@ class FirebaseService {
   async deleteBotSessionsByUserId(userId) {
     try {
       const snapshot = await this.botSessionsCollection.where('userId', '==', userId).get();
-      if (snapshot.empty) {
-        return 0;
-      }
-      const batchSize = 400;
-      let deleted = 0;
-      let batch = this.db.batch();
-      let ops = 0;
-
-      for (const doc of snapshot.docs) {
-        batch.delete(doc.ref);
-        ops += 1;
-        deleted += 1;
-        if (ops >= batchSize) {
-          await batch.commit();
-          batch = this.db.batch();
-          ops = 0;
-        }
-      }
-      if (ops > 0) {
-        await batch.commit();
-      }
+      const deleted = await this.deleteBotSessionDocs(snapshot.docs);
       console.log(`✅ bot_sessions eliminadas para usuario ${userId}: ${deleted}`);
       return deleted;
     } catch (error) {
       console.error('❌ Error eliminando bot_sessions por userId:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Borra todas las sesiones de un consultorio
+   * @param {string} clientCode
+   * @returns {Promise<number>}
+   */
+  async deleteBotSessionsByClientCode(clientCode) {
+    try {
+      const snapshot = await this.botSessionsCollection.where('clientCode', '==', clientCode).get();
+      const deleted = await this.deleteBotSessionDocs(snapshot.docs);
+      console.log(`✅ bot_sessions eliminadas para consultorio ${clientCode}: ${deleted}`);
+      return deleted;
+    } catch (error) {
+      console.error('❌ Error eliminando bot_sessions por clientCode:', error);
       throw error;
     }
   }
@@ -841,27 +866,7 @@ class FirebaseService {
   async resetAllBotSessions() {
     try {
       const snapshot = await this.botSessionsCollection.get();
-      if (snapshot.empty) {
-        return 0;
-      }
-      const batchSize = 400;
-      let deleted = 0;
-      let batch = this.db.batch();
-      let ops = 0;
-
-      for (const doc of snapshot.docs) {
-        batch.delete(doc.ref);
-        ops += 1;
-        deleted += 1;
-        if (ops >= batchSize) {
-          await batch.commit();
-          batch = this.db.batch();
-          ops = 0;
-        }
-      }
-      if (ops > 0) {
-        await batch.commit();
-      }
+      const deleted = await this.deleteBotSessionDocs(snapshot.docs);
       console.log(`✅ bot_sessions reseteadas: ${deleted}`);
       return deleted;
     } catch (error) {

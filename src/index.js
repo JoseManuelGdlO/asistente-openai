@@ -263,6 +263,26 @@ app.delete('/sessions/user/:userId', requireAdminAuth, async (req, res) => {
   }
 });
 
+// Borrar todas las sesiones de un consultorio (debe ir antes de /sessions/:userId/:clientCode)
+app.delete('/sessions/client/:clientCode', requireAdminAuth, async (req, res) => {
+  try {
+    const { clientCode } = req.params;
+    const deleted = await openAIManager.deleteSessionsByClientCode(clientCode);
+    res.json({
+      ok: true,
+      message: `Sesiones eliminadas para consultorio: ${clientCode}`,
+      deleted
+    });
+  } catch (error) {
+    console.error('Error eliminando sesiones del consultorio:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Error eliminando sesiones del consultorio',
+      details: error.message
+    });
+  }
+});
+
 app.delete('/sessions/:userId/:clientCode', requireAdminAuth, async (req, res) => {
   try {
     const { userId, clientCode } = req.params;

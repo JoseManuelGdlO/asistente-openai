@@ -14,7 +14,7 @@ Un asistente inteligente de WhatsApp que integra OpenAI GPT-4 para responder men
 - **🎮 Sistema de Comandos**: Control remoto de bots por cliente con autenticación
 - **🔥 Firebase Integration**: Gestión dinámica de clientes en la nube
 - **📊 Múltiples Clientes**: Soporte para múltiples consultorios con asistentes independientes
-- **🖥️ Panel admin**: SPA en el mismo contenedor (`/`) para gestionar consultorios, assistants y PDFs
+- **🖥️ Panel admin**: SPA en el mismo contenedor (`/`) para gestionar consultorios, assistants, PDFs y sesiones
 
 ## 📁 Estructura del Proyecto
 
@@ -120,8 +120,9 @@ Desde el panel puedes:
 - Crear, editar y eliminar consultorios
 - Editar el Assistant (prompt + tools/config/responseSchema en JSON)
 - Listar, subir y borrar PDFs
+- Listar y borrar sesiones (historial por usuario/consultorio); resetear al cambiar el prompt
 
-Los endpoints de gestión (`/clients`, `/assistants`, `/bots`, `/scheduler`, `/ultramsg`, documentos) **requieren** ese token. Siguen públicos: `/webhook`, `/webhook-own` y `/health`.
+Los endpoints de gestión (`/clients`, `/assistants`, `/bots`, `/scheduler`, `/ultramsg`, `/sessions`, documentos) **requieren** ese token. Siguen públicos: `/webhook`, `/webhook-own` y `/health`.
 
 ## 📡 Endpoints Disponibles
 
@@ -133,6 +134,7 @@ Los endpoints de gestión (`/clients`, `/assistants`, `/bots`, `/scheduler`, `/u
 - `GET /sessions` - Listar sesiones (`?userId=` / `?clientCode=` opcionales)
 - `POST /reset_sessions` - Borrar todas las sesiones (`bot_sessions`)
 - `DELETE /sessions/user/:userId` - Borrar todas las sesiones de un usuario
+- `DELETE /sessions/client/:clientCode` - Borrar todas las sesiones de un consultorio
 - `DELETE /sessions/:userId/:clientCode` - Borrar una sesión concreta
 
 ### Contexto de Usuario

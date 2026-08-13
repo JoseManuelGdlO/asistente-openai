@@ -428,6 +428,17 @@ class OpenAIManager {
   }
 
   /**
+   * Borra todas las sesiones de un consultorio
+   * @param {string} clientCode
+   * @returns {Promise<number>}
+   */
+  async deleteSessionsByClientCode(clientCode) {
+    const deleted = await this.firebaseService.deleteBotSessionsByClientCode(clientCode);
+    console.log(`=== Sesiones eliminadas para consultorio ${clientCode}: ${deleted} ===`);
+    return deleted;
+  }
+
+  /**
    * Lista sesiones (resumen, sin items)
    * @param {{ userId?: string, clientCode?: string }} [filters]
    * @returns {Promise<Object[]>}

@@ -48,6 +48,70 @@
     return `<span class="badge ${active ? 'badge-ok' : 'badge-off'}">${active ? 'Activo' : 'Inactivo'}</span>`;
   }
 
+  function formatSessionDate(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+  }
+
+  function sessionLockBadge(session) {
+    return session.isLocked
+      ? '<span class="badge badge-warn">Locked</span>'
+      : '<span class="badge badge-ok">Libre</span>';
+  }
+
+  function sessionsTableHtml(sessions, { showClient = true } = {}) {
+    if (!sessions.length) return '<p class="empty">No hay sesiones.</p>';
+    return `
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Usuario</th>
+          ${showClient ? '<th>Consultorio</th>' : ''}
+          <th>Items</th>
+          <th>Lock</th>
+          <th>Actualizado</th>
+          <th></th>
+        </tr></thead>
+        <tbody>
+          ${sessions.map((session) => `
+            <tr>
+              <td>${escapeHtml(session.userId || '')}</td>
+              ${showClient ? `<td>${escapeHtml(session.clientCode || '')}</td>` : ''}
+              <td>${escapeHtml(session.itemsCount ?? 0)}</td>
+              <td>${sessionLockBadge(session)}</td>
+              <td>${escapeHtml(formatSessionDate(session.updatedAt))}</td>
+              <td class="actions">
+                <button type="button" class="btn btn-sm btn-danger"
+                  data-del-user="${escapeHtml(session.userId || '')}"
+                  data-del-client="${escapeHtml(session.clientCode || '')}">Eliminar</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table></div>`;
+  }
+
+  function bindSessionDeletes(root, onDone) {
+    root.querySelectorAll('[data-del-user]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const userId = btn.dataset.delUser;
+        const clientCode = btn.dataset.delClient;
+        if (!confirm(`¿Eliminar la sesión ${userId}_${clientCode}? El historial de esa conversación se perderá.`)) return;
+        try {
+          await api(
+            `/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(clientCode)}`,
+            { method: 'DELETE' }
+          );
+          await onDone();
+        } catch (err) {
+          const flash = document.getElementById('sess-flash') || document.getElementById('form-flash');
+          showFlash(flash, err.message, 'err');
+        }
+      });
+    });
+  }
+
   function showFlash(el, message, type) {
     if (!el) return;
     el.className = `flash ${type === 'ok' ? 'flash-ok' : 'flash-err'}`;
@@ -57,8 +121,18 @@
 
   function parseRoute() {
     const hash = (location.hash || '#/').replace(/^#/, '') || '/';
-    const parts = hash.split('/').filter(Boolean);
+    const qIndex = hash.indexOf('?');
+    const path = qIndex >= 0 ? hash.slice(0, qIndex) : hash;
+    const query = new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : '');
+    const parts = path.split('/').filter(Boolean);
     if (parts.length === 0) return { name: 'dashboard' };
+    if (parts[0] === 'sessions') {
+      return {
+        name: 'sessions',
+        userId: (query.get('userId') || '').trim(),
+        clientCode: (query.get('clientCode') || '').trim()
+      };
+    }
     if (parts[0] === 'clients' && parts[1] === 'new') return { name: 'client-new' };
     if (parts[0] === 'clients' && parts[1]) {
       return { name: 'client-detail', clientId: decodeURIComponent(parts[1]), tab: parts[2] || 'consultorio' };
@@ -68,8 +142,9 @@
   }
 
   function setActiveNav(name) {
+    const nav = (name === 'client-detail' || name === 'client-new') ? 'clients' : name;
     document.querySelectorAll('[data-nav]').forEach((link) => {
-      link.classList.toggle('active', link.dataset.nav === (name === 'dashboard' ? 'dashboard' : 'clients'));
+      link.classList.toggle('active', link.dataset.nav === nav);
     });
   }
 
@@ -152,6 +227,7 @@
     content.innerHTML = '<p class="muted">Cargando…</p>';
     try {
       if (route.name === 'dashboard') await renderDashboard();
+      else if (route.name === 'sessions') await renderSessions(route);
       else if (route.name === 'clients') await renderClients();
       else if (route.name === 'client-new') renderClientForm();
       else if (route.name === 'client-detail') await renderClientDetail(route.clientId, route.tab);
@@ -283,6 +359,72 @@
         }
       });
     });
+  }
+
+  async function renderSessions(route) {
+    const userId = route.userId || '';
+    const clientCode = route.clientCode || '';
+    const query = new URLSearchParams();
+    if (userId) query.set('userId', userId);
+    if (clientCode) query.set('clientCode', clientCode);
+    const path = query.toString() ? `/sessions?${query}` : '/sessions';
+    const payload = await api(path);
+    const sessions = payload.sessions || [];
+
+    content.innerHTML = `
+      <div class="page-head">
+        <h1>Sesiones</h1>
+        <div class="actions">
+          <button type="button" id="reset-all-sessions" class="btn-danger">Resetear todas</button>
+        </div>
+      </div>
+      <div id="sess-flash" hidden></div>
+      <form id="sess-filters" class="card stack" style="margin-bottom:1rem">
+        <div class="grid grid-2">
+          <div>
+            <label for="filter-user">Usuario</label>
+            <input id="filter-user" type="text" value="${escapeHtml(userId)}" placeholder="52155…">
+          </div>
+          <div>
+            <label for="filter-client">Consultorio</label>
+            <input id="filter-client" type="text" value="${escapeHtml(clientCode)}" placeholder="CLIENTE001">
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit">Filtrar</button>
+          <a class="btn btn-secondary" href="#/sessions">Limpiar</a>
+        </div>
+      </form>
+      <div class="card">
+        <p class="muted">${sessions.length} sesión${sessions.length === 1 ? '' : 'es'}</p>
+        ${sessionsTableHtml(sessions, { showClient: true })}
+      </div>
+    `;
+
+    document.getElementById('sess-filters').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const params = new URLSearchParams();
+      const nextUser = document.getElementById('filter-user').value.trim();
+      const nextClient = document.getElementById('filter-client').value.trim();
+      if (nextUser) params.set('userId', nextUser);
+      if (nextClient) params.set('clientCode', nextClient);
+      const q = params.toString();
+      goToHash(q ? `#/sessions?${q}` : '#/sessions');
+    });
+
+    document.getElementById('reset-all-sessions').addEventListener('click', async () => {
+      if (!confirm('¿Borrar TODAS las sesiones de todos los consultorios? Esta acción no se puede deshacer.')) return;
+      const flash = document.getElementById('sess-flash');
+      try {
+        const result = await api('/reset_sessions', { method: 'POST' });
+        showFlash(flash, result.message || `Sesiones reseteadas (${result.deleted ?? 0})`, 'ok');
+        setTimeout(render, 400);
+      } catch (err) {
+        showFlash(flash, err.message, 'err');
+      }
+    });
+
+    bindSessionDeletes(content, render);
   }
 
   function clientsFromPayload(payload) {
@@ -440,7 +582,7 @@
   }
 
   async function renderClientDetail(clientId, tab) {
-    const currentTab = ['consultorio', 'assistant', 'documentos'].includes(tab) ? tab : 'consultorio';
+    const currentTab = ['consultorio', 'assistant', 'documentos', 'sesiones'].includes(tab) ? tab : 'consultorio';
     const clientRes = await api(`/clients/${encodeURIComponent(clientId)}`);
     const client = clientRes.client;
 
@@ -456,6 +598,7 @@
         <a href="#/clients/${encodeURIComponent(clientId)}" class="${currentTab === 'consultorio' ? 'active' : ''}">Consultorio</a>
         <a href="#/clients/${encodeURIComponent(clientId)}/assistant" class="${currentTab === 'assistant' ? 'active' : ''}">Assistant</a>
         <a href="#/clients/${encodeURIComponent(clientId)}/documentos" class="${currentTab === 'documentos' ? 'active' : ''}">Documentos</a>
+        <a href="#/clients/${encodeURIComponent(clientId)}/sesiones" class="${currentTab === 'sesiones' ? 'active' : ''}">Sesiones</a>
       </nav>
       <div id="detail-body"></div>
     `;
@@ -465,6 +608,8 @@
       await renderAssistantTab(body, clientId);
     } else if (currentTab === 'documentos') {
       await renderDocumentsTab(body, clientId);
+    } else if (currentTab === 'sesiones') {
+      await renderSessionsTab(body, clientId);
     } else {
       renderConsultorioTab(body, client);
     }
@@ -544,8 +689,13 @@
           </div>
           <textarea id="asst-schema" class="json">${escapeHtml(prettyJson(assistant.responseSchema || {}, {}))}</textarea>
         </div>
+        <label class="check">
+          <input type="checkbox" id="asst-reset-sessions">
+          <span>Resetear conversaciones de este consultorio al guardar</span>
+        </label>
         <div class="actions">
           <button type="submit">Guardar Assistant</button>
+          <button type="button" id="asst-reset-only" class="btn-secondary">Solo resetear sesiones</button>
         </div>
       </form>
     `;
@@ -588,11 +738,62 @@
             responseSchema: schema.value
           }
         });
-        showFlash(flash, 'Assistant actualizado', 'ok');
+        if (document.getElementById('asst-reset-sessions').checked) {
+          try {
+            const result = await api(`/sessions/client/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
+            showFlash(flash, `Assistant actualizado. Sesiones reseteadas: ${result.deleted ?? 0}`, 'ok');
+          } catch (resetErr) {
+            showFlash(flash, `Assistant actualizado, pero no se pudieron resetear sesiones: ${resetErr.message}`, 'err');
+          }
+        } else {
+          showFlash(flash, 'Assistant actualizado', 'ok');
+        }
       } catch (err) {
         showFlash(flash, err.message, 'err');
       }
     });
+
+    document.getElementById('asst-reset-only').addEventListener('click', async () => {
+      if (!confirm(`¿Borrar todas las sesiones del consultorio "${clientId}"? El historial de todas las conversaciones se perderá.`)) return;
+      const flash = document.getElementById('form-flash');
+      try {
+        const result = await api(`/sessions/client/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
+        showFlash(flash, result.message || `Sesiones reseteadas: ${result.deleted ?? 0}`, 'ok');
+      } catch (err) {
+        showFlash(flash, err.message, 'err');
+      }
+    });
+  }
+
+  async function renderSessionsTab(container, clientId) {
+    const payload = await api(`/sessions?clientCode=${encodeURIComponent(clientId)}`);
+    const sessions = payload.sessions || [];
+
+    container.innerHTML = `
+      <div id="form-flash" hidden></div>
+      <div class="page-head" style="margin-top:0">
+        <p class="muted" style="margin:0">Historial Responses de este consultorio. Borrar una sesión hace que el siguiente mensaje empiece de cero.</p>
+        <div class="actions">
+          <button type="button" id="reset-client-sessions" class="btn-danger">Resetear este consultorio</button>
+        </div>
+      </div>
+      <div class="card">
+        ${sessionsTableHtml(sessions, { showClient: false })}
+      </div>
+    `;
+
+    document.getElementById('reset-client-sessions').addEventListener('click', async () => {
+      if (!confirm(`¿Borrar todas las sesiones del consultorio "${clientId}"? El historial de todas las conversaciones se perderá.`)) return;
+      try {
+        const result = await api(`/sessions/client/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
+        await renderClientDetail(clientId, 'sesiones');
+        showFlash(document.getElementById('form-flash'), result.message || `Sesiones reseteadas: ${result.deleted ?? 0}`, 'ok');
+      } catch (err) {
+        showFlash(document.getElementById('form-flash'), err.message, 'err');
+      }
+    });
+
+    bindSessionDeletes(container, () => renderClientDetail(clientId, 'sesiones'));
   }
 
   async function renderDocumentsTab(container, clientId) {
