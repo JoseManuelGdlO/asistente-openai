@@ -10,6 +10,31 @@ const DEFAULT_RESPONSE_SCHEMA = {
   additionalProperties: false
 };
 
+// Responses API + strict: required debe incluir todas las keys de properties.
+// Campos opcionales se modelan como string|null.
+const DEFAULT_ENVIAR_PDF_TOOL = {
+  type: 'function',
+  name: 'enviar_pdf',
+  description:
+    'Envía un PDF del consultorio al usuario por WhatsApp. Usa solo documento_id de la lista de documentos disponibles.',
+  parameters: {
+    type: 'object',
+    properties: {
+      documento_id: {
+        type: 'string',
+        description: 'Identificador del PDF (ej. lista_precios)'
+      },
+      caption: {
+        type: ['string', 'null'],
+        description: 'Texto opcional que acompaña el archivo'
+      }
+    },
+    required: ['documento_id', 'caption'],
+    additionalProperties: false
+  },
+  strict: true
+};
+
 class FirebaseService {
   constructor() {
     // Inicializar Firebase Admin SDK
@@ -954,5 +979,6 @@ class FirebaseService {
 }
 
 FirebaseService.DEFAULT_RESPONSE_SCHEMA = DEFAULT_RESPONSE_SCHEMA;
+FirebaseService.DEFAULT_ENVIAR_PDF_TOOL = DEFAULT_ENVIAR_PDF_TOOL;
 
 module.exports = FirebaseService;

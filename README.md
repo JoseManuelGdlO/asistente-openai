@@ -119,10 +119,11 @@ Desde el panel puedes:
 - Ver health, bots, scheduler e instancias UltraMsg
 - Crear, editar y eliminar consultorios
 - Editar el Assistant (prompt + tools/config/responseSchema en JSON)
+- Probar prompt y tools en el playground (OpenAI real, sin WhatsApp; sesión `playground_{clientId}`)
 - Listar, subir y borrar PDFs
 - Listar y borrar sesiones (historial por usuario/consultorio); resetear al cambiar el prompt
 
-Los endpoints de gestión (`/clients`, `/assistants`, `/bots`, `/scheduler`, `/ultramsg`, `/sessions`, documentos) **requieren** ese token. Siguen públicos: `/webhook`, `/webhook-own` y `/health`.
+Los endpoints de gestión (`/clients`, `/assistants`, `/playground`, `/bots`, `/scheduler`, `/ultramsg`, `/sessions`, documentos) **requieren** ese token. Siguen públicos: `/webhook`, `/webhook-own` y `/health`.
 
 ## 📡 Endpoints Disponibles
 
@@ -158,7 +159,11 @@ Los endpoints de gestión (`/clients`, `/assistants`, `/bots`, `/scheduler`, `/u
 ### Assistants (Firestore, 1:1, requieren `ADMIN_API_TOKEN`)
 - `GET /assistants` - Listar todos los Assistants
 - `GET /assistants/:clientId` - Obtener prompt/tools/config de un consultorio
-- `PUT /assistants/:clientId` - Actualizar prompt/tools/config
+- `PUT /assistants/:clientId` - Actualizar prompt/tools/config (resetea el playground de ese consultorio)
+
+### Playground (requieren `ADMIN_API_TOKEN`)
+- `GET /playground/:clientId` - Historial de la sesión `playground_{clientId}`
+- `POST /playground/:clientId/chat` - Enviar un mensaje de prueba (`{ message, reset? }`)
 
 ### Scheduler (requieren `ADMIN_API_TOKEN`)
 - `GET /scheduler/status` - Estado de tareas programadas

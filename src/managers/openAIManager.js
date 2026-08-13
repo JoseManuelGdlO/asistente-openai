@@ -38,6 +38,76 @@ class OpenAIManager {
   }
 
   /**
+   * Ajusta tools al contrato strict de Responses: required incluye todas las properties.
+   * Las keys que no estaban en required se vuelven nullable (siguen siendo opcionales).
+   * @param {Array} tools
+   * @returns {Array}
+   */
+  normalizeToolsForResponses(tools) {
+    if (!Array.isArray(tools)) {
+      return [];
+    }
+
+    return tools.map((tool) => {
+      if (!tool || tool.type !== 'function' || !tool.parameters || typeof tool.parameters !== 'object') {
+        return tool;
+      }
+      if (tool.strict !== true) {
+        return tool;
+      }
+
+      const properties = tool.parameters.properties && typeof tool.parameters.properties === 'object'
+        ? { ...tool.parameters.properties }
+        : {};
+      const required = Array.isArray(tool.parameters.required)
+        ? [...tool.parameters.required]
+        : [];
+
+      for (const key of Object.keys(properties)) {
+        if (required.includes(key)) {
+          continue;
+        }
+        required.push(key);
+        properties[key] = this.makeJsonSchemaNullable(properties[key]);
+      }
+
+      return {
+        ...tool,
+        parameters: {
+          ...tool.parameters,
+          properties,
+          required,
+          additionalProperties: tool.parameters.additionalProperties === undefined
+            ? false
+            : tool.parameters.additionalProperties
+        }
+      };
+    });
+  }
+
+  /**
+   * Añade null al type de un schema JSON (campo opcional en strict)
+   * @param {Object} schema
+   * @returns {Object}
+   */
+  makeJsonSchemaNullable(schema) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+      return { type: ['string', 'null'] };
+    }
+    const next = { ...schema };
+    if (Array.isArray(next.type)) {
+      if (!next.type.includes('null')) {
+        next.type = [...next.type, 'null'];
+      }
+    } else if (typeof next.type === 'string') {
+      next.type = [next.type, 'null'];
+    } else {
+      next.type = ['string', 'null'];
+    }
+    return next;
+  }
+
+  /**
    * Quita function_call sin function_call_output (pares rotos no se pueden reanudar)
    * @param {Array} items
    * @returns {Array}
@@ -243,22 +313,58 @@ class OpenAIManager {
   }
 
   /**
+   * Devuelve string (webhook) u objeto con traza (playground)
+   * @param {Object} context
+   * @param {string} reply
+   * @param {Object} [extra]
+   * @returns {string|Object}
+   */
+  wrapProcessResult(context, reply, extra = {}) {
+    if (!context || !context.returnTrace) {
+      return reply;
+    }
+    return {
+      reply,
+      tools: Array.isArray(extra.tools) ? extra.tools : [],
+      locked: Boolean(extra.locked),
+      items: Array.isArray(extra.items) ? extra.items : []
+    };
+  }
+
+  /**
+   * Lee una sesión (incluye items). Null si no existe.
+   * @param {string} userId
+   * @param {string} clientCode
+   * @returns {Promise<Object|null>}
+   */
+  async getSession(userId, clientCode) {
+    return this.firebaseService.getBotSession(userId, clientCode);
+  }
+
+  /**
    * Procesa un mensaje con Responses API + historial en Firestore
    * @param {string} userId
    * @param {string} message
    * @param {string} clientCode
    * @param {Object} context
-   * @returns {Promise<string>}
+   * @returns {Promise<string|Object>}
    */
   async processMessage(userId, message, clientCode = 'default', context = {}) {
     const assistant = await this.firebaseService.getAssistantByClientId(clientCode);
     if (!assistant || assistant.status === 'deleted') {
-      return '❌ Error: Configuración del asistente incompleta. Contacta al administrador.';
+      return this.wrapProcessResult(
+        context,
+        '❌ Error: Configuración del asistente incompleta. Contacta al administrador.'
+      );
     }
 
     const locked = await this.firebaseService.tryLockBotSession(userId, clientCode);
     if (!locked) {
-      return 'Por favor espera a que termine la respuesta anterior.';
+      return this.wrapProcessResult(
+        context,
+        'Por favor espera a que termine la respuesta anterior.',
+        { locked: true }
+      );
     }
 
     // Contexto local por request: evita que peticiones concurrentes se pisen
@@ -267,7 +373,8 @@ class OpenAIManager {
       clientId: clientCode,
       instanceId: context.instanceId || null,
       ultraMsgManager: context.ultraMsgManager || null,
-      documentStore: context.documentStore || null
+      documentStore: context.documentStore || null,
+      toolTrace: []
     };
 
     let items = null;
@@ -287,7 +394,9 @@ class OpenAIManager {
         .filter(Boolean)
         .join('\n\n');
 
-      const tools = Array.isArray(assistant.tools) ? assistant.tools : [];
+      const tools = this.normalizeToolsForResponses(
+        Array.isArray(assistant.tools) ? assistant.tools : []
+      );
       const responseSchema = assistant.responseSchema
         || FirebaseService.DEFAULT_RESPONSE_SCHEMA;
       const config = assistant.config || {};
@@ -345,6 +454,17 @@ class OpenAIManager {
 
         for (const call of functionCalls) {
           const result = await this.executeFunctionCall(call, runContext);
+          let args = {};
+          try {
+            args = JSON.parse(call.arguments || '{}');
+          } catch (_error) {
+            args = {};
+          }
+          runContext.toolTrace.push({
+            name: call.name,
+            arguments: args,
+            result
+          });
           items.push({
             type: 'function_call_output',
             call_id: call.call_id,
@@ -355,13 +475,20 @@ class OpenAIManager {
 
       if (!finalResponse) {
         await this.persistSessionItems(userId, clientCode, items);
-        return 'Hubo un error procesando tu mensaje. Intenta de nuevo.';
+        return this.wrapProcessResult(
+          context,
+          'Hubo un error procesando tu mensaje. Intenta de nuevo.',
+          { tools: runContext.toolTrace, items }
+        );
       }
 
       const reply = this.parseReply(finalResponse);
       await this.persistSessionItems(userId, clientCode, items);
 
-      return reply;
+      return this.wrapProcessResult(context, reply, {
+        tools: runContext.toolTrace,
+        items
+      });
     } catch (error) {
       console.error('Error procesando mensaje con OpenAI:', error.message);
       if (Array.isArray(items) && items.length) {
@@ -371,7 +498,11 @@ class OpenAIManager {
           console.error('Error persistiendo sesión tras fallo:', saveError.message);
         }
       }
-      return 'Hubo un error procesando tu mensaje. Intenta de nuevo.';
+      return this.wrapProcessResult(
+        context,
+        'Hubo un error procesando tu mensaje. Intenta de nuevo.',
+        { tools: runContext.toolTrace, items }
+      );
     } finally {
       try {
         await this.firebaseService.unlockBotSession(userId, clientCode);

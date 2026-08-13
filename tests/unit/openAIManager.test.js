@@ -50,6 +50,27 @@ describe('OpenAIManager helpers', () => {
     expect(cleaned.find((i) => i.call_id === 'c2' && i.type === 'function_call')).toBeTruthy();
   });
 
+  it('normalizeToolsForResponses mete properties faltantes en required (strict)', () => {
+    const tools = [{
+      type: 'function',
+      name: 'enviar_pdf',
+      strict: true,
+      parameters: {
+        type: 'object',
+        properties: {
+          documento_id: { type: 'string' },
+          caption: { type: 'string', description: 'opcional' }
+        },
+        required: ['documento_id'],
+        additionalProperties: false
+      }
+    }];
+    const normalized = manager.normalizeToolsForResponses(tools);
+    expect(normalized[0].parameters.required).toEqual(['documento_id', 'caption']);
+    expect(normalized[0].parameters.properties.caption.type).toEqual(['string', 'null']);
+    expect(normalized[0].parameters.properties.documento_id.type).toBe('string');
+  });
+
   it('parseReply extrae { reply } o texto plano', () => {
     expect(manager.parseReply({ output_text: '{"reply":"Hola"}' })).toBe('Hola');
     expect(manager.parseReply({ output_text: 'texto plano' })).toBe('texto plano');

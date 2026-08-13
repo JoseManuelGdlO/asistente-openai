@@ -34,7 +34,7 @@ Cablea dependencias reales, recarga periódica de clientes y `listen`.
 `createApp(deps)` registra middleware y rutas. Los tests HTTP inyectan stubs.
 
 ### `managers/`
-- `openAIManager.js`: Responses API, tools (`enviar_pdf`), historial en Firestore
+- `openAIManager.js`: Responses API, tools (`enviar_pdf`), historial en Firestore; `returnTrace` para el playground admin
 - `ultramsgManager.js`: envío/recepción vía UltraMsg
 - `ownSystemManager.js`: envío vía API propia (`OWN_API_BASE_URL`)
 

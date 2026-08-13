@@ -119,6 +119,87 @@
     el.hidden = false;
   }
 
+  function playgroundUserId(clientId) {
+    return `playground_${clientId}`;
+  }
+
+  function parseAssistantText(content) {
+    const text = typeof content === 'string' ? content : '';
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.reply === 'string') return parsed.reply;
+    } catch {
+      // texto plano
+    }
+    return text;
+  }
+
+  function playgroundItemsToEvents(items) {
+    const events = [];
+    const pending = new Map();
+    for (const item of items || []) {
+      if (item.type === 'message') {
+        const role = item.role === 'user' ? 'user' : 'assistant';
+        const raw = typeof item.content === 'string' ? item.content : '';
+        const text = role === 'assistant' ? parseAssistantText(raw) : raw;
+        events.push({ kind: 'message', role, text });
+      } else if (item.type === 'function_call') {
+        let args = {};
+        try {
+          args = JSON.parse(item.arguments || '{}');
+        } catch {
+          args = {};
+        }
+        pending.set(item.call_id, { name: item.name, arguments: args });
+      } else if (item.type === 'function_call_output') {
+        const call = pending.get(item.call_id) || { name: 'tool', arguments: {} };
+        pending.delete(item.call_id);
+        let result = {};
+        try {
+          result = JSON.parse(item.output || '{}');
+        } catch {
+          result = { error: String(item.output || 'error') };
+        }
+        events.push({ kind: 'tool', name: call.name, arguments: call.arguments, result });
+      }
+    }
+    return events;
+  }
+
+  function toolBadgeHtml(event) {
+    const result = event.result || {};
+    if (result.success) {
+      const label = result.filename || result.documento_id || event.arguments?.documento_id || event.name;
+      return `<div class="playground-badge playground-badge-ok">PDF simulado: ${escapeHtml(label)}</div>`;
+    }
+    const err = result.error || 'error';
+    return `<div class="playground-badge playground-badge-err">${escapeHtml(event.name || 'tool')}: ${escapeHtml(err)}</div>`;
+  }
+
+  function playgroundEventHtml(event) {
+    if (event.kind === 'tool') return toolBadgeHtml(event);
+    const cls = event.role === 'user' ? 'playground-msg user' : 'playground-msg assistant';
+    return `<div class="${cls}">${escapeHtml(event.text || '')}</div>`;
+  }
+
+  function renderPlaygroundLog(logEl, events) {
+    if (!logEl) return;
+    if (!events.length) {
+      logEl.innerHTML = '<p class="muted playground-empty">Aún no hay mensajes. Prueba el Assistant guardado.</p>';
+      return;
+    }
+    logEl.innerHTML = events.map(playgroundEventHtml).join('');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function appendPlaygroundEvents(logEl, events) {
+    if (!logEl || !events.length) return;
+    const empty = logEl.querySelector('.playground-empty');
+    if (empty) empty.remove();
+    logEl.insertAdjacentHTML('beforeend', events.map(playgroundEventHtml).join(''));
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
   function parseRoute() {
     const hash = (location.hash || '#/').replace(/^#/, '') || '/';
     const qIndex = hash.indexOf('?');
@@ -662,42 +743,56 @@
 
     container.innerHTML = `
       <div id="form-flash" hidden></div>
-      <form id="assistant-form" class="card stack">
-        <p class="muted">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
-        <div>
-          <label for="asst-prompt">Prompt</label>
-          <textarea id="asst-prompt" class="prompt">${escapeHtml(assistant.prompt || '')}</textarea>
-        </div>
-        <div>
-          <div class="page-head" style="margin:0">
-            <label for="asst-tools">Tools (JSON)</label>
-            <button type="button" class="btn-sm btn-secondary" data-pretty="asst-tools">Formatear JSON</button>
+      <div class="assistant-layout">
+        <form id="assistant-form" class="card stack">
+          <p class="muted">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
+          <div>
+            <label for="asst-prompt">Prompt</label>
+            <textarea id="asst-prompt" class="prompt">${escapeHtml(assistant.prompt || '')}</textarea>
           </div>
-          <textarea id="asst-tools" class="json">${escapeHtml(prettyJson(assistant.tools || [], []))}</textarea>
-        </div>
-        <div>
-          <div class="page-head" style="margin:0">
-            <label for="asst-config">Config (JSON)</label>
-            <button type="button" class="btn-sm btn-secondary" data-pretty="asst-config">Formatear JSON</button>
+          <div>
+            <div class="page-head" style="margin:0">
+              <label for="asst-tools">Tools (JSON)</label>
+              <button type="button" class="btn-sm btn-secondary" data-pretty="asst-tools">Formatear JSON</button>
+            </div>
+            <textarea id="asst-tools" class="json">${escapeHtml(prettyJson(assistant.tools || [], []))}</textarea>
           </div>
-          <textarea id="asst-config" class="json">${escapeHtml(prettyJson(assistant.config || {}, {}))}</textarea>
-        </div>
-        <div>
-          <div class="page-head" style="margin:0">
-            <label for="asst-schema">responseSchema (JSON)</label>
-            <button type="button" class="btn-sm btn-secondary" data-pretty="asst-schema">Formatear JSON</button>
+          <div>
+            <div class="page-head" style="margin:0">
+              <label for="asst-config">Config (JSON)</label>
+              <button type="button" class="btn-sm btn-secondary" data-pretty="asst-config">Formatear JSON</button>
+            </div>
+            <textarea id="asst-config" class="json">${escapeHtml(prettyJson(assistant.config || {}, {}))}</textarea>
           </div>
-          <textarea id="asst-schema" class="json">${escapeHtml(prettyJson(assistant.responseSchema || {}, {}))}</textarea>
-        </div>
-        <label class="check">
-          <input type="checkbox" id="asst-reset-sessions">
-          <span>Resetear conversaciones de este consultorio al guardar</span>
-        </label>
-        <div class="actions">
-          <button type="submit">Guardar Assistant</button>
-          <button type="button" id="asst-reset-only" class="btn-secondary">Solo resetear sesiones</button>
-        </div>
-      </form>
+          <div>
+            <div class="page-head" style="margin:0">
+              <label for="asst-schema">responseSchema (JSON)</label>
+              <button type="button" class="btn-sm btn-secondary" data-pretty="asst-schema">Formatear JSON</button>
+            </div>
+            <textarea id="asst-schema" class="json">${escapeHtml(prettyJson(assistant.responseSchema || {}, {}))}</textarea>
+          </div>
+          <label class="check">
+            <input type="checkbox" id="asst-reset-sessions">
+            <span>Resetear conversaciones de este consultorio al guardar</span>
+          </label>
+          <div class="actions">
+            <button type="submit">Guardar Assistant</button>
+            <button type="button" id="asst-reset-only" class="btn-secondary">Solo resetear sesiones</button>
+          </div>
+        </form>
+        <aside class="card playground-card stack">
+          <div class="page-head" style="margin:0">
+            <h2 class="playground-title">Probar Assistant</h2>
+            <button type="button" id="playground-reset" class="btn-sm btn-secondary">Nueva conversación</button>
+          </div>
+          <p class="muted">Usa el Assistant guardado. Gasta tokens de OpenAI. No envía WhatsApp.</p>
+          <div id="playground-log" class="playground-log"></div>
+          <form id="playground-form" class="playground-composer">
+            <textarea id="playground-input" rows="3" placeholder="Escribe un mensaje de prueba…"></textarea>
+            <button type="submit" id="playground-send">Enviar</button>
+          </form>
+        </aside>
+      </div>
     `;
 
     container.querySelectorAll('[data-pretty]').forEach((btn) => {
@@ -714,6 +809,30 @@
       });
     });
 
+    const playgroundLog = document.getElementById('playground-log');
+    const playgroundInput = document.getElementById('playground-input');
+    const playgroundSend = document.getElementById('playground-send');
+
+    function clearPlaygroundLog() {
+      renderPlaygroundLog(playgroundLog, []);
+    }
+
+    async function loadPlayground() {
+      try {
+        const res = await api(`/playground/${encodeURIComponent(clientId)}`);
+        renderPlaygroundLog(playgroundLog, playgroundItemsToEvents(res.items || []));
+      } catch (err) {
+        renderPlaygroundLog(playgroundLog, []);
+        showFlash(document.getElementById('form-flash'), err.message, 'err');
+      }
+    }
+
+    function setPlaygroundBusy(busy) {
+      playgroundInput.disabled = busy;
+      playgroundSend.disabled = busy;
+      document.getElementById('playground-reset').disabled = busy;
+    }
+
     document.getElementById('assistant-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const flash = document.getElementById('form-flash');
@@ -729,7 +848,7 @@
         return;
       }
       try {
-        await api(`/assistants/${encodeURIComponent(clientId)}`, {
+        const saved = await api(`/assistants/${encodeURIComponent(clientId)}`, {
           method: 'PUT',
           body: {
             prompt: document.getElementById('asst-prompt').value,
@@ -738,6 +857,9 @@
             responseSchema: schema.value
           }
         });
+        if (saved.playgroundReset) {
+          clearPlaygroundLog();
+        }
         if (document.getElementById('asst-reset-sessions').checked) {
           try {
             const result = await api(`/sessions/client/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
@@ -746,7 +868,9 @@
             showFlash(flash, `Assistant actualizado, pero no se pudieron resetear sesiones: ${resetErr.message}`, 'err');
           }
         } else {
-          showFlash(flash, 'Assistant actualizado', 'ok');
+          showFlash(flash, saved.playgroundReset
+            ? 'Assistant actualizado. Playground reiniciado.'
+            : 'Assistant actualizado', 'ok');
         }
       } catch (err) {
         showFlash(flash, err.message, 'err');
@@ -758,11 +882,70 @@
       const flash = document.getElementById('form-flash');
       try {
         const result = await api(`/sessions/client/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
+        clearPlaygroundLog();
         showFlash(flash, result.message || `Sesiones reseteadas: ${result.deleted ?? 0}`, 'ok');
       } catch (err) {
         showFlash(flash, err.message, 'err');
       }
     });
+
+    document.getElementById('playground-reset').addEventListener('click', async () => {
+      if (!confirm('¿Empezar una nueva conversación de prueba? Se borra solo el historial del playground.')) return;
+      try {
+        await api(
+          `/sessions/${encodeURIComponent(playgroundUserId(clientId))}/${encodeURIComponent(clientId)}`,
+          { method: 'DELETE' }
+        );
+        clearPlaygroundLog();
+      } catch (err) {
+        showFlash(document.getElementById('form-flash'), err.message, 'err');
+      }
+    });
+
+    document.getElementById('playground-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const message = playgroundInput.value.trim();
+      if (!message) return;
+
+      setPlaygroundBusy(true);
+      appendPlaygroundEvents(playgroundLog, [{ kind: 'message', role: 'user', text: message }]);
+      playgroundInput.value = '';
+
+      try {
+        const result = await api(`/playground/${encodeURIComponent(clientId)}/chat`, {
+          method: 'POST',
+          body: { message }
+        });
+        const toolEvents = (result.tools || []).map((tool) => ({
+          kind: 'tool',
+          name: tool.name,
+          arguments: tool.arguments || {},
+          result: tool.result || {}
+        }));
+        appendPlaygroundEvents(playgroundLog, [
+          ...toolEvents,
+          { kind: 'message', role: 'assistant', text: result.reply || '' }
+        ]);
+      } catch (err) {
+        appendPlaygroundEvents(playgroundLog, [{
+          kind: 'message',
+          role: 'assistant',
+          text: err.message || 'Error enviando el mensaje'
+        }]);
+      } finally {
+        setPlaygroundBusy(false);
+        playgroundInput.focus();
+      }
+    });
+
+    playgroundInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        document.getElementById('playground-form').requestSubmit();
+      }
+    });
+
+    await loadPlayground();
   }
 
   async function renderSessionsTab(container, clientId) {

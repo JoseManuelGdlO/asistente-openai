@@ -21,6 +21,10 @@ function stripEmptyUltraMsgFields(data) {
   return next;
 }
 
+function playgroundUserId(clientId) {
+  return `playground_${clientId}`;
+}
+
 function createUploadPdf() {
   return multer({
     storage: multer.memoryStorage(),
@@ -638,9 +642,18 @@ function createApp(deps = {}) {
         responseSchema
       });
 
+      let playgroundReset = false;
+      try {
+        await openAIManager.deleteSession(playgroundUserId(clientId), clientId);
+        playgroundReset = true;
+      } catch (resetError) {
+        console.error('Error reseteando sesión playground al guardar Assistant:', resetError.message);
+      }
+
       res.json({
         ok: true,
         assistant: updated,
+        playgroundReset,
         message: 'Assistant actualizado exitosamente'
       });
     } catch (error) {
@@ -651,6 +664,97 @@ function createApp(deps = {}) {
       res.status(status).json({
         ok: false,
         error: status === 404 ? error.message : 'Error actualizando Assistant',
+        details: error.message
+      });
+    }
+  });
+
+  app.get('/playground/:clientId', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const assistant = await webhookManager.commandManager.getAssistantConfig(clientId);
+      if (!assistant) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Assistant no encontrado'
+        });
+      }
+
+      const userId = playgroundUserId(clientId);
+      const session = await openAIManager.getSession(userId, clientId);
+      res.json({
+        ok: true,
+        userId,
+        clientId,
+        items: Array.isArray(session?.items) ? session.items : []
+      });
+    } catch (error) {
+      console.error('Error leyendo playground:', error);
+      res.status(500).json({
+        ok: false,
+        error: 'Error leyendo playground',
+        details: error.message
+      });
+    }
+  });
+
+  app.post('/playground/:clientId/chat', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+      const reset = Boolean(req.body?.reset);
+
+      if (!message) {
+        return res.status(400).json({
+          ok: false,
+          error: 'message es requerido'
+        });
+      }
+
+      const assistant = await webhookManager.commandManager.getAssistantConfig(clientId);
+      if (!assistant) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Assistant no encontrado'
+        });
+      }
+
+      const userId = playgroundUserId(clientId);
+      if (reset) {
+        await openAIManager.deleteSession(userId, clientId);
+      }
+
+      const captured = [];
+      const fakeTransport = {
+        sendDocument: async (to, { filename, caption } = {}) => {
+          captured.push({ to, filename, caption: caption || '' });
+          return { mocked: true };
+        }
+      };
+
+      const result = await openAIManager.processMessage(userId, message, clientId, {
+        ultraMsgManager: fakeTransport,
+        documentStore,
+        returnTrace: true
+      });
+
+      const payload = typeof result === 'string'
+        ? { reply: result, tools: [], locked: false, items: [] }
+        : result;
+
+      res.json({
+        ok: true,
+        reply: payload.reply,
+        userId,
+        tools: payload.tools || [],
+        simulatedDocuments: captured,
+        locked: Boolean(payload.locked)
+      });
+    } catch (error) {
+      console.error('Error en playground chat:', error);
+      res.status(500).json({
+        ok: false,
+        error: 'Error procesando mensaje del playground',
         details: error.message
       });
     }
@@ -1063,5 +1167,6 @@ function createApp(deps = {}) {
 module.exports = {
   createApp,
   hasUltraMsgFields,
-  stripEmptyUltraMsgFields
+  stripEmptyUltraMsgFields,
+  playgroundUserId
 };

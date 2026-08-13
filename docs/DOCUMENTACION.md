@@ -231,7 +231,7 @@ Append function_call_output al historial
 Nueva llamada responses.create → JSON {"reply":"..."}
 ```
 
-**Parámetros:** `documento_id` (obligatorio), `caption` (opcional).
+**Parámetros:** `documento_id` (obligatorio), `caption` (opcional; en schema strict se envía como `string | null` y entra en `required`). Al llamar a OpenAI, `normalizeToolsForResponses` corrige tools guardadas con `required` incompleto.
 
 La tool vive en `Assistants.tools` (shape Responses, sin wrapper `function: {...}`). El seed `npm run create-assistant` la incluye.
 
@@ -456,9 +456,25 @@ La misma app Express sirve `public/` en `/`. No hace falta un segundo contenedor
 
 1. Abre `https://tu-dominio/` (o `http://localhost:3000/`).
 2. Introduce `ADMIN_API_TOKEN`. Se guarda en `sessionStorage` y las peticiones llevan `Authorization: Bearer <token>`.
-3. Desde el panel: dashboard (health, bots, scheduler, UltraMsg), CRUD de consultorios, edición del Assistant (textarea de prompt + JSON de tools/config/schema), gestión de PDFs y sesiones (listar/borrar; reset al cambiar el prompt).
+3. Desde el panel: dashboard (health, bots, scheduler, UltraMsg), CRUD de consultorios, edición del Assistant (textarea de prompt + JSON de tools/config/schema), **playground de chat** al lado del prompt, gestión de PDFs y sesiones (listar/borrar; reset al cambiar el prompt).
 
 Si cambias credenciales `ULTRAMSG_*` de un consultorio, el servidor re-inicializa las instancias sin reiniciar el contenedor.
+
+---
+
+## 10.2 Playground de prompts y tools
+
+En la pestaña **Assistant** hay un chat de prueba que llama a OpenAI y Firestore de verdad, **sin UltraMsg ni webhook**.
+
+- Usuario fijo: `playground_{clientId}` (no se mezcla con pacientes).
+- Usa el Assistant **ya guardado** (prompt/tools/schema de Firestore). Probar el textarea sin guardar queda pendiente.
+- `enviar_pdf` resuelve PDFs reales del consultorio pero no envía WhatsApp; en el chat aparece `PDF simulado: archivo.pdf` (o el error si el id no existe).
+- La sesión persiste en `bot_sessions`. Se reinicia con **Nueva conversación**, al **guardar** el Assistant, o al resetear sesiones del consultorio. Cambiar de consultorio carga la sesión playground de ese agente (no borra la anterior).
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/playground/:clientId` | Historial (`items`) de la sesión playground |
+| POST | `/playground/:clientId/chat` | Envía un mensaje `{ message, reset? }` y devuelve `reply`, `tools`, `simulatedDocuments` |
 
 ---
 
@@ -564,7 +580,14 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 |--------|------|-------------|
 | GET | `/assistants` | Lista todos los Assistants de Firestore (excluye deleted) |
 | GET | `/assistants/:clientId` | Lee prompt/tools/config del consultorio |
-| PUT | `/assistants/:clientId` | Actualiza prompt/tools/config; **404** si no existe el cliente |
+| PUT | `/assistants/:clientId` | Actualiza prompt/tools/config; resetea la sesión playground; **404** si no existe el cliente |
+
+### Playground (requieren `ADMIN_API_TOKEN`)
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/playground/:clientId` | Lee `items` de `playground_{clientId}` |
+| POST | `/playground/:clientId/chat` | Chat de prueba (OpenAI real, sin WhatsApp) |
 
 ### Documentos (requieren `ADMIN_API_TOKEN`)
 
@@ -621,7 +644,7 @@ Copia `config-ultramsg.example` a `.env` y completa. Lo esencial:
 | `OPENAI_MODEL` | Modelo Responses (default `gpt-4o-mini`) |
 | `ULTRAMSG_TOKEN` / `INSTANCE_ID` / `WEBHOOK_TOKEN` | WhatsApp (fallback) |
 | `FIREBASE_CREDENTIALS` | JSON de service account |
-| `ADMIN_API_TOKEN` | Panel admin y API de gestión (clientes, assistants, documentos, sesiones, bots, scheduler, UltraMsg) |
+| `ADMIN_API_TOKEN` | Panel admin y API de gestión (clientes, assistants, playground, documentos, sesiones, bots, scheduler, UltraMsg) |
 | `PORT` | Puerto (default 3000) |
 | `UPLOADS_DIR` | Carpeta de PDFs (opcional) |
 

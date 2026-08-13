@@ -1,27 +1,6 @@
 const FirebaseService = require('../src/services/firebaseService');
 
-const DEFAULT_ENVIAR_PDF_TOOL = {
-  type: 'function',
-  name: 'enviar_pdf',
-  description:
-    'Envía un PDF del consultorio al usuario por WhatsApp. Usa solo documento_id de la lista de documentos disponibles.',
-  parameters: {
-    type: 'object',
-    properties: {
-      documento_id: {
-        type: 'string',
-        description: 'Identificador del PDF (ej. lista_precios)'
-      },
-      caption: {
-        type: 'string',
-        description: 'Texto opcional que acompaña el archivo'
-      }
-    },
-    required: ['documento_id'],
-    additionalProperties: false
-  },
-  strict: true
-};
+const DEFAULT_ENVIAR_PDF_TOOL = FirebaseService.DEFAULT_ENVIAR_PDF_TOOL;
 
 function defaultPrompt(name) {
   return `Eres el asistente virtual de ${name} por WhatsApp.
