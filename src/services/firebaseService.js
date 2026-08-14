@@ -963,6 +963,32 @@ class FirebaseService {
   }
 
   /**
+   * Borra docs de webhook_dedup con expiresAt vencido (batches de 400)
+   * @returns {Promise<{deleted: number}>}
+   */
+  async cleanupExpiredWebhookDedup() {
+    const batchSize = 400;
+    let deleted = 0;
+    try {
+      while (true) {
+        const snapshot = await this.webhookDedupCollection
+          .where('expiresAt', '<', new Date())
+          .limit(batchSize)
+          .get();
+        if (snapshot.empty) {
+          break;
+        }
+        deleted += await this.deleteBotSessionDocs(snapshot.docs);
+      }
+      console.log(`✅ webhook_dedup expirados eliminados: ${deleted}`);
+      return { deleted };
+    } catch (error) {
+      console.error('❌ Error limpiando webhook_dedup expirados:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Verifica la conexión con Firebase
    * @returns {Promise<boolean>} - True si la conexión es exitosa
    */

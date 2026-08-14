@@ -2,6 +2,17 @@
  * Firestore in-memory para tests de FirebaseService (bot_sessions + webhook_dedup).
  */
 
+function toMillis(value) {
+  if (value == null) return null;
+  if (typeof value.toDate === 'function') {
+    const date = value.toDate();
+    const ms = date?.getTime?.();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
 function clone(value) {
   if (value === undefined) return undefined;
   if (typeof structuredClone === 'function') {
@@ -88,6 +99,11 @@ function createInMemoryFirestore() {
       for (const [id, data] of col.entries()) {
         const matches = this.filters.every(({ field, op, value }) => {
           if (op === '==') return data[field] === value;
+          if (op === '<') {
+            const left = toMillis(data[field]);
+            const right = toMillis(value);
+            return left != null && right != null && left < right;
+          }
           return false;
         });
         if (matches) {

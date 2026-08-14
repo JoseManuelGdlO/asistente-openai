@@ -347,7 +347,7 @@ Documento ID = `ultra:{messageId}` o `own:{messageId}`.
 | Campo | Significado |
 |-------|-------------|
 | `status` | `processing` (claim) o `completed` (ya notificado) |
-| `expiresAt` | Si expiró, otro worker puede reclamar. Activar TTL de Firestore sobre este campo. |
+| `expiresAt` | Si expiró, otro worker puede reclamar. Limpieza diaria a las 3:00 AM (`webhookDedupCleanup`); manual: `POST /scheduler/run/webhookDedupCleanup`. |
 | `updatedAt` | Fecha |
 
 Flujo: claim al llegar el webhook → si el handler termina (incluido aviso de negocio o error de OpenAI convertido a texto) → `completed` (24h) → HTTP 200. Si lanza **antes** de notificar al usuario → se borra el claim → HTTP 500 → UltraMsg puede reintentar.
@@ -557,7 +557,7 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | GET | `/scheduler/status` | Estado de tareas |
-| POST | `/scheduler/run/:taskName` | Ejecuta `dailyAgenda`, `weeklyCleanup` o `statusCheck` |
+| POST | `/scheduler/run/:taskName` | Ejecuta `dailyAgenda`, `weeklyCleanup`, `statusCheck` o `webhookDedupCleanup` |
 | POST | `/scheduler/stop` | Detiene tareas |
 | POST | `/scheduler/restart` | Reinicia tareas |
 

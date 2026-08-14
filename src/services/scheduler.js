@@ -1,11 +1,13 @@
 const cron = require('node-cron');
 const UltraMsgManager = require('../managers/ultramsgManager');
+const FirebaseService = require('./firebaseService');
 const axios = require('axios');
 require('dotenv').config();
 
 class Scheduler {
-  constructor() {
+  constructor(firebaseService = null) {
     this.ultraMsgManager = new UltraMsgManager();
+    this.firebaseService = firebaseService || new FirebaseService();
     this.tasks = new Map();
   }
 
@@ -21,6 +23,9 @@ class Scheduler {
     
     // Tarea de verificación de estado cada hora
     this.scheduleStatusCheck();
+
+    // Limpieza diaria de webhook_dedup expirados (3:00 AM)
+    this.scheduleWebhookDedupCleanup();
     
     console.log('✅ Tareas programadas inicializadas');
   }
@@ -84,6 +89,27 @@ class Scheduler {
 
     this.tasks.set('statusCheck', task);
     console.log('🔍 Verificación de estado programada cada hora');
+  }
+
+  // Programar limpieza de webhook_dedup (diario a las 3:00 AM)
+  scheduleWebhookDedupCleanup() {
+    const task = cron.schedule('0 3 * * *', async () => {
+      console.log('🧹 === LIMPIEZA webhook_dedup ===');
+      console.log('Hora:', new Date().toLocaleString('es-ES'));
+
+      try {
+        await this.cleanupWebhookDedup();
+        console.log('✅ Limpieza webhook_dedup completada');
+      } catch (error) {
+        console.error('❌ Error en limpieza webhook_dedup:', error.message);
+      }
+    }, {
+      scheduled: true,
+      timezone: "America/Mexico_City"
+    });
+
+    this.tasks.set('webhookDedupCleanup', task);
+    console.log('🧹 Limpieza webhook_dedup programada para las 3:00 AM');
   }
 
   // Método principal para enviar agenda diaria
@@ -216,6 +242,13 @@ Por favor confirma que asistirás respondiendo con "ok", "confirmado" o similar.
     }
   }
 
+  // Borrar docs de webhook_dedup con expiresAt vencido
+  async cleanupWebhookDedup() {
+    const result = await this.firebaseService.cleanupExpiredWebhookDedup();
+    console.log(`🧹 webhook_dedup borrados: ${result.deleted}`);
+    return result;
+  }
+
   // Verificar estado del sistema
   async checkSystemStatus() {
     try {
@@ -247,6 +280,9 @@ Por favor confirma que asistirás respondiendo con "ok", "confirmado" o similar.
         break;
       case 'statusCheck':
         await this.checkSystemStatus();
+        break;
+      case 'webhookDedupCleanup':
+        await this.cleanupWebhookDedup();
         break;
       default:
         console.log('❌ Tarea no encontrada:', taskName);

@@ -38,4 +38,28 @@ describe('FirebaseService webhook_dedup', () => {
     await service.releaseWebhookMessage('own:9');
     await expect(service.tryClaimWebhookMessage('own:9')).resolves.toBe(true);
   });
+
+  it('cleanupExpiredWebhookDedup borra vencidos y conserva vigentes', async () => {
+    await service.webhookDedupCollection.doc('ultra:old').set({
+      status: 'completed',
+      expiresAt: new Date(Date.now() - 1000)
+    });
+    await service.webhookDedupCollection.doc('ultra:older').set({
+      status: 'processing',
+      expiresAt: new Date(Date.now() - 60_000)
+    });
+    await service.webhookDedupCollection.doc('ultra:fresh').set({
+      status: 'completed',
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    await expect(service.cleanupExpiredWebhookDedup()).resolves.toEqual({ deleted: 2 });
+
+    const old = await service.webhookDedupCollection.doc('ultra:old').get();
+    const older = await service.webhookDedupCollection.doc('ultra:older').get();
+    const fresh = await service.webhookDedupCollection.doc('ultra:fresh').get();
+    expect(old.exists).toBe(false);
+    expect(older.exists).toBe(false);
+    expect(fresh.exists).toBe(true);
+  });
 });
