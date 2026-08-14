@@ -113,6 +113,34 @@ describe('WebhookManager', () => {
     expect(ultraMsgManager.sendMessage).toHaveBeenCalled();
   });
 
+  it('responde agradecimiento sin OpenAI aunque no haya agenda pendiente', async () => {
+    const { wm, openAIManager, ultraMsgManager } = createManager();
+    const result = await wm.processMessage({
+      from: '521555@c.us',
+      to: '521000@c.us',
+      body: 'Muchas gracias'
+    });
+    expect(result.reason).toBe('confirmation_processed');
+    expect(openAIManager.processMessage).not.toHaveBeenCalled();
+    expect(ultraMsgManager.sendMessage).toHaveBeenCalledWith(
+      '521555',
+      expect.stringMatching(/Con gusto/),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('deja "sí" sin agenda pendiente para que lo procese OpenAI', async () => {
+    const { wm, openAIManager } = createManager();
+    const result = await wm.processMessage({
+      from: '521555@c.us',
+      to: '521000@c.us',
+      body: 'sí'
+    });
+    expect(result.reason).toBe('ai_reply');
+    expect(openAIManager.processMessage).toHaveBeenCalled();
+  });
+
   it('envía aviso si no hay consultorio', async () => {
     const { wm, ultraMsgManager } = createManager({
       commandManager: {

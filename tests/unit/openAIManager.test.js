@@ -272,7 +272,8 @@ describe('OpenAIManager.processMessage', () => {
     expect(reply).toMatch(/zonas faciales/);
     expect(ultraMsgManager.sendDocument).not.toHaveBeenCalled();
     expect(documentStore.get).not.toHaveBeenCalled();
-    expect(create.mock.calls[1][0].tool_choice).toBe('none');
+    // La tool ni se ofrece: no hace falta tool_choice=none para cerrar
+    expect(create.mock.calls[1][0].tools).toBeUndefined();
   });
 
   it('bloquea enviar_pdf si el mensaje actual no tiene intención de curso o reenvío', async () => {
@@ -314,12 +315,169 @@ describe('OpenAIManager.processMessage', () => {
     expect(reply).toMatch(/faciales/);
     expect(documentStore.get).not.toHaveBeenCalled();
     expect(ultraMsgManager.sendDocument).not.toHaveBeenCalled();
-    expect(create.mock.calls[1][0].tool_choice).toBe('none');
+    expect(create.mock.calls[1][0].tools).toBeUndefined();
     const toolOutput = create.mock.calls[1][0].input.find((item) => item.type === 'function_call_output');
     expect(JSON.parse(toolOutput.output)).toMatchObject({
       blocked: true,
       documento_id: 'lista_precios'
     });
+  });
+
+  it('no ofrece enviar_pdf al modelo si el mensaje no es de curso ni reenvío', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn(),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const create = jest.fn().mockResolvedValue({
+      output_text: '{"reply":"Estamos en Aguascalientes"}',
+      output: [{ type: 'message', role: 'assistant', content: [] }]
+    });
+    manager.openai = { responses: { create } };
+
+    await manager.processMessage('521', '¿dónde están ubicados?', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager: { sendDocument: jest.fn() }
+    });
+
+    expect(create.mock.calls[0][0].tools).toBeUndefined();
+  });
+
+  it('ofrece enviar_pdf cuando hay intención de curso y documentos sin enviar', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn(),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'dossier_2026' }])
+    };
+    const create = jest.fn().mockResolvedValue({
+      output_text: '{"reply":"Info del curso"}',
+      output: [{ type: 'message', role: 'assistant', content: [] }]
+    });
+    manager.openai = { responses: { create } };
+
+    await manager.processMessage('521', 'me interesa el curso', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager: { sendDocument: jest.fn() }
+    });
+
+    expect(create.mock.calls[0][0].tools).toEqual([
+      expect.objectContaining({ name: 'enviar_pdf' })
+    ]);
+  });
+
+  it('no ofrece enviar_pdf si todos los documentos ya se enviaron en la sesión', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      }),
+      getOrCreateBotSession: jest.fn().mockResolvedValue({
+        items: [],
+        sentDocumentIds: ['dossier_2026']
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn(),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'dossier_2026' }])
+    };
+    const create = jest.fn().mockResolvedValue({
+      output_text: '{"reply":"El curso incluye temario completo"}',
+      output: [{ type: 'message', role: 'assistant', content: [] }]
+    });
+    manager.openai = { responses: { create } };
+
+    await manager.processMessage('521', 'otra duda del curso', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager: { sendDocument: jest.fn() }
+    });
+
+    expect(create.mock.calls[0][0].tools).toBeUndefined();
+  });
+
+  it('ofrece enviar_pdf ante reenvío explícito aunque ya se haya enviado', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      }),
+      getOrCreateBotSession: jest.fn().mockResolvedValue({
+        items: [],
+        sentDocumentIds: ['dossier_2026']
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn(),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'dossier_2026' }])
+    };
+    const create = jest.fn().mockResolvedValue({
+      output_text: '{"reply":"Te lo reenvío"}',
+      output: [{ type: 'message', role: 'assistant', content: [] }]
+    });
+    manager.openai = { responses: { create } };
+
+    await manager.processMessage('521', 'mándame el pdf otra vez', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager: { sendDocument: jest.fn() }
+    });
+
+    expect(create.mock.calls[0][0].tools).toEqual([
+      expect.objectContaining({ name: 'enviar_pdf' })
+    ]);
+  });
+
+  it('canOfferEnviarPdf soporta varios documentos sin ids hardcodeados', async () => {
+    const manager = new OpenAIManager(createFirebaseStub());
+    const documentStore = {
+      list: jest.fn().mockResolvedValue([
+        { documentoId: 'dossier_curso' },
+        { documentoId: 'temario_avanzado' }
+      ])
+    };
+
+    const partial = await manager.canOfferEnviarPdf(
+      'info del curso',
+      { sessionSentDocuments: new Set(['dossier_curso']) },
+      documentStore,
+      'CLIENTE001'
+    );
+    expect(partial).toBe(true);
+
+    const exhausted = await manager.canOfferEnviarPdf(
+      'info del curso',
+      { sessionSentDocuments: new Set(['dossier_curso', 'temario_avanzado']) },
+      documentStore,
+      'CLIENTE001'
+    );
+    expect(exhausted).toBe(false);
+  });
+
+  it('canOfferEnviarPdf es false si el cliente no tiene documentos', async () => {
+    const manager = new OpenAIManager(createFirebaseStub());
+    const result = await manager.canOfferEnviarPdf(
+      'info del curso',
+      { sessionSentDocuments: new Set() },
+      { list: jest.fn().mockResolvedValue([]) },
+      'CLIENTE001'
+    );
+    expect(result).toBe(false);
   });
 
   it('no revela documentos disponibles cuando el documento_id no existe', async () => {

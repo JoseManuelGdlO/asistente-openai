@@ -113,32 +113,46 @@ class WebhookManager {
    */
   async processConfirmationMessage(userId, message, sendReply, origin = 'UltraMsg') {
     const userCtx = this.userContextManager.getUserContext(userId);
+    const isAcknowledgement = this.confirmationManager.isAcknowledgementMessage(message);
     const isConfirmation = this.confirmationManager.isConfirmationMessage(message);
-    
+
     console.log('Mensaje del usuario:', message);
+    console.log('¿Es agradecimiento?', isAcknowledgement);
     console.log('¿Es confirmación?', isConfirmation);
     console.log('Contexto del usuario:', userCtx);
-    
-    // Si es un mensaje de confirmación y estamos esperando confirmación, responder sin procesar con IA
+
+    // Agradecimiento / cierre corto: siempre plantilla, sin IA
+    if (isAcknowledgement) {
+      console.log('Agradecimiento detectado, respondiendo automáticamente (sin IA)');
+      const ackResponse = this.confirmationManager.getAcknowledgementResponse();
+
+      try {
+        await sendReply(ackResponse);
+        this.userContextManager.updateUserContext(userId, 'confirmation', message);
+        return true;
+      } catch (error) {
+        console.error('❌ ' + this._formatSendErrorLog(origin, userId, ackResponse, error));
+        throw error;
+      }
+    }
+
+    // Afirmación + agenda pendiente: plantilla de confirmación (comportamiento histórico)
     if (isConfirmation && userCtx.isWaitingForConfirmation) {
       console.log('Mensaje de confirmación detectado, respondiendo automáticamente');
-      
+
       const confirmationResponse = this.confirmationManager.getConfirmationResponse();
-      
+
       try {
         await sendReply(confirmationResponse);
-        
-        // Actualizar contexto del usuario
         this.userContextManager.updateUserContext(userId, 'confirmation', message);
-        
         return true;
       } catch (error) {
         console.error('❌ ' + this._formatSendErrorLog(origin, userId, confirmationResponse, error));
         throw error;
       }
     }
-    
-    // Si es confirmación pero no estamos esperando confirmación, procesar normalmente
+
+    // Afirmación sin agenda pendiente: seguir al bot (ej. "sí" tras cotización)
     if (isConfirmation) {
       this.userContextManager.updateUserContext(userId, 'confirmation', message);
     }

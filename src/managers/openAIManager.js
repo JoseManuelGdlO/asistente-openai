@@ -2,7 +2,7 @@ const OpenAI = require('openai');
 const FirebaseService = require('../services/firebaseService');
 
 const MAX_HISTORY_ITEMS = 40;
-const MAX_TOOL_LOOPS = 8;
+const MAX_TOOL_LOOPS = 2;
 
 // El PDF solo se reenvía si el usuario lo pide: menciona el documento + una intención de repetir
 const DOC_MENTION_REGEX = /(pdf|dossier|documento|archivo|folleto|temario|catalogo|catálogo)/;
@@ -285,6 +285,37 @@ class OpenAIManager {
   isCourseIntent(message) {
     return typeof message === 'string'
       && COURSE_INTENT_REGEX.test(message.toLowerCase());
+  }
+
+  /**
+   * Decide si enviar_pdf se ofrece al modelo en este turno.
+   * Primera barrera: si la tool no está en el request, el modelo no puede llamarla.
+   * @param {string} message
+   * @param {Object} runContext
+   * @param {Object|null} documentStore
+   * @param {string} clientCode
+   * @returns {Promise<boolean>}
+   */
+  async canOfferEnviarPdf(message, runContext, documentStore, clientCode) {
+    if (this.isResendRequest(message)) {
+      return true;
+    }
+
+    if (!this.isCourseIntent(message) || !documentStore) {
+      return false;
+    }
+
+    try {
+      const docs = await documentStore.list(clientCode);
+      if (!Array.isArray(docs) || docs.length === 0) {
+        return false;
+      }
+      const sent = runContext?.sessionSentDocuments || new Set();
+      return docs.some((doc) => !sent.has(doc.documentoId));
+    } catch (error) {
+      console.error('Error listando documentos para tool gating:', error.message);
+      return false;
+    }
   }
 
   /**
@@ -588,16 +619,30 @@ class OpenAIManager {
         .filter(Boolean)
         .join('\n\n');
 
-      const tools = this.normalizeToolsForResponses(
+      const allTools = this.normalizeToolsForResponses(
         Array.isArray(assistant.tools) ? assistant.tools : []
       );
+      const canOfferPdf = await this.canOfferEnviarPdf(
+        message,
+        runContext,
+        context.documentStore,
+        clientCode
+      );
+      const tools = canOfferPdf
+        ? allTools
+        : allTools.filter((tool) => tool.name !== 'enviar_pdf');
+
+      if (!canOfferPdf && allTools.length !== tools.length) {
+        console.log('🔒 enviar_pdf no ofrecido en este turno (sin intención de curso ni reenvío pendiente)');
+      }
+
       const responseSchema = assistant.responseSchema
         || FirebaseService.DEFAULT_RESPONSE_SCHEMA;
       const config = assistant.config || {};
 
       let loops = 0;
       let finalResponse = null;
-      // Tras una tool exitosa el modelo pierde el acceso a tools: solo puede cerrar con JSON
+      // Tras cualquier intento de tool el modelo pierde el acceso: solo puede cerrar con JSON
       let toolsLocked = false;
 
       while (loops < MAX_TOOL_LOOPS) {
@@ -634,11 +679,11 @@ class OpenAIManager {
           break;
         }
 
+        // Un intento de tool por turno: pase lo que pase, el siguiente loop es solo texto
+        toolsLocked = true;
+
         for (const call of functionCalls) {
           const result = await this.executeFunctionCall(call, runContext);
-          if (result && (result.success || result.blocked)) {
-            toolsLocked = true;
-          }
           let args = {};
           try {
             args = JSON.parse(call.arguments || '{}');
