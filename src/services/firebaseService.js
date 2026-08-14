@@ -22,7 +22,7 @@ const DEFAULT_ENVIAR_PDF_TOOL = {
     properties: {
       documento_id: {
         type: 'string',
-        description: 'Identificador del PDF (ej. lista_precios)'
+        description: 'Identificador del PDF'
       },
       caption: {
         type: ['string', 'null'],

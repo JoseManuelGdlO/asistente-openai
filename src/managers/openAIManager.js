@@ -7,6 +7,7 @@ const MAX_TOOL_LOOPS = 8;
 // El PDF solo se reenvía si el usuario lo pide: menciona el documento + una intención de repetir
 const DOC_MENTION_REGEX = /(pdf|dossier|documento|archivo|folleto|temario|catalogo|catálogo)/;
 const RESEND_INTENT_REGEX = /(reenv|de nuevo|otra vez|nuevamente|repite|repíte|no me lleg|no lo recib|no me lo mand|volver a|vuelve a|mandalo|mándalo|enviamelo|envíamelo)/;
+const COURSE_INTENT_REGEX = /(curso|capacitaci[oó]n|certificaci[oó]n|dossier|aprender\s+a\s+depilar)/;
 
 const REPLY_AFTER_PDF_INSTRUCTION = 'PDF encolado: se enviará al usuario justo después de tu texto. '
   + 'Ahora responde con el JSON final y escribe en "reply" el texto COMPLETO que exige el prompt para este flujo '
@@ -277,6 +278,16 @@ class OpenAIManager {
   }
 
   /**
+   * Detecta intención explícita de curso en el mensaje actual
+   * @param {string} message
+   * @returns {boolean}
+   */
+  isCourseIntent(message) {
+    return typeof message === 'string'
+      && COURSE_INTENT_REGEX.test(message.toLowerCase());
+  }
+
+  /**
    * Ejecuta enviar_pdf (encola; el envío real es tras el reply)
    * @param {Object} args
    * @param {Object|null} runContext
@@ -290,7 +301,24 @@ class OpenAIManager {
 
     const documentoId = args.documento_id || args.documentoId;
     if (!documentoId) {
-      return { error: 'documento_id es requerido' };
+      return {
+        success: false,
+        blocked: true,
+        error: 'documento_id es requerido',
+        instruction: 'Responde solo con texto. No vuelvas a llamar enviar_pdf en este turno.'
+      };
+    }
+
+    if (!ctx.allowDocumentSend) {
+      console.log(`🚫 enviar_pdf bloqueado (sin intención de curso o reenvío): ${documentoId}`);
+      return {
+        success: false,
+        blocked: true,
+        documento_id: documentoId,
+        error: 'El mensaje actual no pide información de un curso ni el reenvío explícito de un documento.',
+        instruction: 'Responde solo con texto a la consulta actual. No vuelvas a llamar enviar_pdf '
+          + 'ni menciones que enviarás un documento.'
+      };
     }
 
     if (ctx.sentDocuments && ctx.sentDocuments.has(documentoId)) {
@@ -320,8 +348,11 @@ class OpenAIManager {
     const doc = await ctx.documentStore.get(ctx.clientId, documentoId);
     if (!doc) {
       return {
+        success: false,
+        blocked: true,
         error: `Documento "${documentoId}" no encontrado`,
-        disponibles: (await ctx.documentStore.list(ctx.clientId)).map((d) => d.documentoId)
+        instruction: 'Responde solo con texto. No vuelvas a llamar enviar_pdf en este turno '
+          + 'ni intentes otro documento_id.'
       };
     }
 
@@ -522,6 +553,7 @@ class OpenAIManager {
     }
 
     // Contexto local por request: evita que peticiones concurrentes se pisen
+    const allowResend = this.isResendRequest(message);
     const runContext = {
       userId,
       clientId: clientCode,
@@ -530,7 +562,8 @@ class OpenAIManager {
       documentStore: context.documentStore || null,
       sentDocuments: new Set(),
       sessionSentDocuments: new Set(),
-      allowResend: this.isResendRequest(message),
+      allowResend,
+      allowDocumentSend: allowResend || this.isCourseIntent(message),
       pendingDocuments: [],
       toolTrace: []
     };

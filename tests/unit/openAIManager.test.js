@@ -76,6 +76,14 @@ describe('OpenAIManager helpers', () => {
     expect(manager.parseReply({ output_text: 'texto plano' })).toBe('texto plano');
     expect(manager.parseReply({ output: [] })).toMatch(/no pude generar/);
   });
+
+  it('isCourseIntent solo acepta intención explícita de curso', () => {
+    expect(manager.isCourseIntent('Quiero información del curso')).toBe(true);
+    expect(manager.isCourseIntent('¿Dan capacitación?')).toBe(true);
+    expect(manager.isCourseIntent('Quiero aprender a depilar')).toBe(true);
+    expect(manager.isCourseIntent('¿Qué tipos de depilaciones tienes?')).toBe(false);
+    expect(manager.isCourseIntent('Precio de bikini')).toBe(false);
+  });
 });
 
 describe('OpenAIManager.processMessage', () => {
@@ -154,7 +162,7 @@ describe('OpenAIManager.processMessage', () => {
       }
     };
 
-    const reply = await manager.processMessage('521', 'precios', 'CLIENTE001', {
+    const reply = await manager.processMessage('521', 'información del curso', 'CLIENTE001', {
       documentStore,
       ultraMsgManager,
       instanceId: 'inst1'
@@ -205,7 +213,7 @@ describe('OpenAIManager.processMessage', () => {
       });
     manager.openai = { responses: { create } };
 
-    const reply = await manager.processMessage('521', 'precios', 'CLIENTE001', {
+    const reply = await manager.processMessage('521', 'información del curso', 'CLIENTE001', {
       documentStore,
       ultraMsgManager,
       instanceId: 'inst1'
@@ -265,6 +273,76 @@ describe('OpenAIManager.processMessage', () => {
     expect(ultraMsgManager.sendDocument).not.toHaveBeenCalled();
     expect(documentStore.get).not.toHaveBeenCalled();
     expect(create.mock.calls[1][0].tool_choice).toBe('none');
+  });
+
+  it('bloquea enviar_pdf si el mensaje actual no tiene intención de curso o reenvío', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn(),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const ultraMsgManager = { sendDocument: jest.fn() };
+    const create = jest.fn()
+      .mockResolvedValueOnce({
+        output: [{
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'enviar_pdf',
+          arguments: JSON.stringify({ documento_id: 'lista_precios' })
+        }]
+      })
+      .mockResolvedValue({
+        output_text: '{"reply":"Tenemos opciones faciales, corporales e íntimas"}',
+        output: [{ type: 'message', role: 'assistant', content: [] }]
+      });
+    manager.openai = { responses: { create } };
+
+    const reply = await manager.processMessage(
+      '521',
+      '¿Qué tipos de depilaciones tienes?',
+      'CLIENTE001',
+      { documentStore, ultraMsgManager }
+    );
+
+    expect(reply).toMatch(/faciales/);
+    expect(documentStore.get).not.toHaveBeenCalled();
+    expect(ultraMsgManager.sendDocument).not.toHaveBeenCalled();
+    expect(create.mock.calls[1][0].tool_choice).toBe('none');
+    const toolOutput = create.mock.calls[1][0].input.find((item) => item.type === 'function_call_output');
+    expect(JSON.parse(toolOutput.output)).toMatchObject({
+      blocked: true,
+      documento_id: 'lista_precios'
+    });
+  });
+
+  it('no revela documentos disponibles cuando el documento_id no existe', async () => {
+    const manager = new OpenAIManager(createFirebaseStub());
+    const documentStore = {
+      get: jest.fn().mockResolvedValue(null),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+
+    const result = await manager.executeEnviarPdf(
+      { documento_id: 'lista_precios' },
+      {
+        clientId: 'CLIENTE001',
+        documentStore,
+        ultraMsgManager: { sendDocument: jest.fn() },
+        allowDocumentSend: true
+      }
+    );
+
+    expect(result.blocked).toBe(true);
+    expect(result.disponibles).toBeUndefined();
+    expect(result.instruction).toMatch(/solo con texto/i);
+    expect(documentStore.list).not.toHaveBeenCalled();
   });
 
   it('permite reenviar el PDF si el usuario lo pide explícitamente', async () => {
@@ -502,7 +580,7 @@ describe('OpenAIManager.processMessage', () => {
       }
     };
 
-    const reply = await manager.processMessage('521', 'precios', 'CLIENTE001', {
+    const reply = await manager.processMessage('521', 'información del curso', 'CLIENTE001', {
       documentStore,
       ultraMsgManager,
       instanceId: 'inst1'
@@ -553,7 +631,7 @@ describe('OpenAIManager.processMessage', () => {
     });
     manager.openai = { responses: { create } };
 
-    const reply = await manager.processMessage('521', 'precios', 'CLIENTE001', {
+    const reply = await manager.processMessage('521', 'información del curso', 'CLIENTE001', {
       documentStore,
       ultraMsgManager,
       instanceId: 'inst1'
