@@ -168,6 +168,402 @@ describe('OpenAIManager.processMessage', () => {
     expect(savedItems.some((i) => i.type === 'function_call_output')).toBe(true);
   });
 
+  it('no reenvía el mismo PDF y bloquea tools tras el primer éxito', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn().mockResolvedValue({
+        documentoId: 'pdfhani',
+        filename: 'pdfhani.pdf',
+        buffer: Buffer.from('%PDF-1.4')
+      }),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const ultraMsgManager = { sendDocument: jest.fn().mockResolvedValue({}) };
+
+    const pdfCall = (callId) => ({
+      output: [{
+        type: 'function_call',
+        call_id: callId,
+        name: 'enviar_pdf',
+        arguments: JSON.stringify({ documento_id: 'pdfhani' })
+      }]
+    });
+
+    const create = jest.fn()
+      .mockResolvedValueOnce(pdfCall('call_1'))
+      .mockResolvedValueOnce(pdfCall('call_2'))
+      .mockResolvedValue({
+        output_text: '{"reply":"Listo"}',
+        output: [{ type: 'message', role: 'assistant', content: [] }]
+      });
+    manager.openai = { responses: { create } };
+
+    const reply = await manager.processMessage('521', 'precios', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager,
+      instanceId: 'inst1'
+    });
+
+    expect(reply).toBe('Listo');
+    expect(ultraMsgManager.sendDocument).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].tool_choice).toBeUndefined();
+    expect(create.mock.calls[1][0].tool_choice).toBe('none');
+  });
+
+  it('no reenvía un PDF ya enviado en la conversación', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      }),
+      getOrCreateBotSession: jest.fn().mockResolvedValue({
+        items: [],
+        sentDocumentIds: ['pdfhani']
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn().mockResolvedValue({
+        documentoId: 'pdfhani',
+        filename: 'pdfhani.pdf',
+        buffer: Buffer.from('%PDF-1.4')
+      }),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const ultraMsgManager = { sendDocument: jest.fn().mockResolvedValue({}) };
+
+    const create = jest.fn()
+      .mockResolvedValueOnce({
+        output: [{
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'enviar_pdf',
+          arguments: JSON.stringify({ documento_id: 'pdfhani' })
+        }]
+      })
+      .mockResolvedValue({
+        output_text: '{"reply":"Tenemos zonas faciales, corporales e íntimas"}',
+        output: [{ type: 'message', role: 'assistant', content: [] }]
+      });
+    manager.openai = { responses: { create } };
+
+    const reply = await manager.processMessage('521', 'que tipos de depilaciones tienes?', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager,
+      instanceId: 'inst1'
+    });
+
+    expect(reply).toMatch(/zonas faciales/);
+    expect(ultraMsgManager.sendDocument).not.toHaveBeenCalled();
+    expect(documentStore.get).not.toHaveBeenCalled();
+    expect(create.mock.calls[1][0].tool_choice).toBe('none');
+  });
+
+  it('permite reenviar el PDF si el usuario lo pide explícitamente', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      }),
+      getOrCreateBotSession: jest.fn().mockResolvedValue({
+        items: [],
+        sentDocumentIds: ['pdfhani']
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn().mockResolvedValue({
+        documentoId: 'pdfhani',
+        filename: 'pdfhani.pdf',
+        buffer: Buffer.from('%PDF-1.4')
+      }),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const ultraMsgManager = { sendDocument: jest.fn().mockResolvedValue({}) };
+
+    manager.openai = {
+      responses: {
+        create: jest.fn()
+          .mockResolvedValueOnce({
+            output: [{
+              type: 'function_call',
+              call_id: 'call_1',
+              name: 'enviar_pdf',
+              arguments: JSON.stringify({ documento_id: 'pdfhani' })
+            }]
+          })
+          .mockResolvedValue({
+            output_text: '{"reply":"Te lo reenvío"}',
+            output: [{ type: 'message', role: 'assistant', content: [] }]
+          })
+      }
+    };
+
+    const reply = await manager.processMessage('521', 'me puedes mandar el pdf otra vez?', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager,
+      instanceId: 'inst1'
+    });
+
+    expect(reply).toBe('Te lo reenvío');
+    expect(ultraMsgManager.sendDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it('persiste los documento_id enviados en la sesión', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn().mockResolvedValue({
+        documentoId: 'pdfhani',
+        filename: 'pdfhani.pdf',
+        buffer: Buffer.from('%PDF-1.4')
+      }),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const ultraMsgManager = { sendDocument: jest.fn().mockResolvedValue({}) };
+
+    manager.openai = {
+      responses: {
+        create: jest.fn()
+          .mockResolvedValueOnce({
+            output: [{
+              type: 'function_call',
+              call_id: 'call_1',
+              name: 'enviar_pdf',
+              arguments: JSON.stringify({ documento_id: 'pdfhani' })
+            }]
+          })
+          .mockResolvedValue({
+            output_text: '{"reply":"Listo"}',
+            output: [{ type: 'message', role: 'assistant', content: [] }]
+          })
+      }
+    };
+
+    await manager.processMessage('521', 'cursos', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager,
+      instanceId: 'inst1'
+    });
+
+    const saved = firebase.saveBotSession.mock.calls[0][2];
+    expect(saved.sentDocumentIds).toContain('pdfhani');
+  });
+
+  it('el output de la tool instruye a no resumir el reply', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn().mockResolvedValue({
+        documentoId: 'pdfhani',
+        filename: 'pdfhani.pdf',
+        buffer: Buffer.from('%PDF-1.4')
+      }),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const ultraMsgManager = { sendDocument: jest.fn().mockResolvedValue({}) };
+
+    const create = jest.fn()
+      .mockResolvedValueOnce({
+        output: [{
+          type: 'function_call',
+          call_id: 'call_1',
+          name: 'enviar_pdf',
+          arguments: JSON.stringify({ documento_id: 'pdfhani' })
+        }]
+      })
+      .mockResolvedValue({
+        output_text: '{"reply":"Listo"}',
+        output: [{ type: 'message', role: 'assistant', content: [] }]
+      });
+    manager.openai = { responses: { create } };
+
+    await manager.processMessage('521', 'cursos', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager,
+      instanceId: 'inst1'
+    });
+
+    const secondInput = create.mock.calls[1][0].input;
+    const toolOutput = secondInput.find((i) => i.type === 'function_call_output');
+    expect(JSON.parse(toolOutput.output).instruction).toMatch(/COMPLETO/);
+  });
+
+  it('envía el reply de texto antes que el PDF cuando hay sendReply', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn().mockResolvedValue({
+        documentoId: 'pdfhani',
+        filename: 'pdfhani.pdf',
+        buffer: Buffer.from('%PDF-1.4')
+      }),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const order = [];
+    const ultraMsgManager = {
+      sendDocument: jest.fn().mockImplementation(async () => {
+        order.push('document');
+      })
+    };
+    const sendReply = jest.fn().mockImplementation(async () => {
+      order.push('reply');
+    });
+
+    manager.openai = {
+      responses: {
+        create: jest.fn()
+          .mockResolvedValueOnce({
+            output: [{
+              type: 'function_call',
+              call_id: 'call_1',
+              name: 'enviar_pdf',
+              arguments: JSON.stringify({ documento_id: 'pdfhani' })
+            }]
+          })
+          .mockResolvedValueOnce({
+            output_text: '{"reply":"Aquí va el dossier"}',
+            output: [{ type: 'message', role: 'assistant', content: [] }]
+          })
+      }
+    };
+
+    const reply = await manager.processMessage('521', 'cursos', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager,
+      instanceId: 'inst1',
+      sendReply
+    });
+
+    expect(reply).toBe('Aquí va el dossier');
+    expect(sendReply).toHaveBeenCalledWith('Aquí va el dossier');
+    expect(ultraMsgManager.sendDocument).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['reply', 'document']);
+  });
+
+  it('si OpenAI falla tras encolar PDF, no envía el documento', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn().mockResolvedValue({
+        documentoId: 'pdfhani',
+        filename: 'pdfhani.pdf',
+        buffer: Buffer.from('%PDF-1.4')
+      }),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const ultraMsgManager = { sendDocument: jest.fn().mockResolvedValue({}) };
+
+    manager.openai = {
+      responses: {
+        create: jest.fn()
+          .mockResolvedValueOnce({
+            output: [{
+              type: 'function_call',
+              call_id: 'call_1',
+              name: 'enviar_pdf',
+              arguments: JSON.stringify({ documento_id: 'pdfhani' })
+            }]
+          })
+          .mockRejectedValueOnce(new Error('boom'))
+      }
+    };
+
+    const reply = await manager.processMessage('521', 'precios', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager,
+      instanceId: 'inst1'
+    });
+
+    expect(reply).toMatch(/error procesando/i);
+    expect(ultraMsgManager.sendDocument).not.toHaveBeenCalled();
+    const saved = firebase.saveBotSession.mock.calls[0][2];
+    expect(saved.sentDocumentIds).toContain('pdfhani');
+  });
+
+  it('si se agotan los loops sin texto, cierra con una llamada sin tools', async () => {
+    const firebase = createFirebaseStub({
+      getAssistantByClientId: jest.fn().mockResolvedValue({
+        prompt: 'bot',
+        tools: [{ type: 'function', name: 'enviar_pdf' }],
+        status: 'active'
+      })
+    });
+    const manager = new OpenAIManager(firebase);
+    const documentStore = {
+      get: jest.fn().mockResolvedValue({
+        documentoId: 'pdfhani',
+        filename: 'pdfhani.pdf',
+        buffer: Buffer.from('%PDF-1.4')
+      }),
+      list: jest.fn().mockResolvedValue([{ documentoId: 'pdfhani' }])
+    };
+    const ultraMsgManager = { sendDocument: jest.fn().mockResolvedValue({}) };
+
+    let call = 0;
+    const create = jest.fn().mockImplementation((request) => {
+      call += 1;
+      if (!request.tools) {
+        return Promise.resolve({
+          output_text: '{"reply":"Te envié el PDF"}',
+          output: [{ type: 'message', role: 'assistant', content: [] }]
+        });
+      }
+      return Promise.resolve({
+        output: [{
+          type: 'function_call',
+          call_id: `call_${call}`,
+          name: 'enviar_pdf',
+          arguments: JSON.stringify({ documento_id: 'pdfhani' })
+        }]
+      });
+    });
+    manager.openai = { responses: { create } };
+
+    const reply = await manager.processMessage('521', 'precios', 'CLIENTE001', {
+      documentStore,
+      ultraMsgManager,
+      instanceId: 'inst1'
+    });
+
+    expect(reply).toBe('Te envié el PDF');
+    expect(ultraMsgManager.sendDocument).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[create.mock.calls.length - 1][0].tools).toBeUndefined();
+  });
+
   it('si OpenAI falla, persiste parcial, desbloquea y devuelve error', async () => {
     const firebase = createFirebaseStub();
     const manager = new OpenAIManager(firebase);

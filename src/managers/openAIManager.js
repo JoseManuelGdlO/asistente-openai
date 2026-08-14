@@ -4,6 +4,15 @@ const FirebaseService = require('../services/firebaseService');
 const MAX_HISTORY_ITEMS = 40;
 const MAX_TOOL_LOOPS = 8;
 
+// El PDF solo se reenvía si el usuario lo pide: menciona el documento + una intención de repetir
+const DOC_MENTION_REGEX = /(pdf|dossier|documento|archivo|folleto|temario|catalogo|catálogo)/;
+const RESEND_INTENT_REGEX = /(reenv|de nuevo|otra vez|nuevamente|repite|repíte|no me lleg|no lo recib|no me lo mand|volver a|vuelve a|mandalo|mándalo|enviamelo|envíamelo)/;
+
+const REPLY_AFTER_PDF_INSTRUCTION = 'PDF encolado: se enviará al usuario justo después de tu texto. '
+  + 'Ahora responde con el JSON final y escribe en "reply" el texto COMPLETO que exige el prompt para este flujo '
+  + '(mensaje íntegro, sin resumir ni acortar). PROHIBIDO responder solo "te comparto el dossier", '
+  + '"aquí tienes la información" o cualquier resumen equivalente. No vuelvas a llamar enviar_pdf.';
+
 class OpenAIManager {
   constructor(firebaseService = null) {
     this.openai = new OpenAI({
@@ -213,7 +222,62 @@ class OpenAIManager {
   }
 
   /**
-   * Ejecuta enviar_pdf
+   * Envía documentos encolados tras el reply de texto
+   * @param {Object|null} runContext
+   * @returns {Promise<void>}
+   */
+  async flushPendingDocuments(runContext) {
+    const pending = runContext?.pendingDocuments;
+    if (!pending || !pending.length || !runContext.ultraMsgManager) {
+      return;
+    }
+
+    for (const item of pending) {
+      console.log(`📤 Enviando documento pendiente: ${item.filename || item.documentoId}`);
+      await runContext.ultraMsgManager.sendDocument(
+        item.userId,
+        {
+          filename: item.filename,
+          document: item.document,
+          caption: item.caption || ''
+        },
+        item.instanceId
+      );
+    }
+    runContext.pendingDocuments = [];
+  }
+
+  /**
+   * Entrega reply (opcional) y luego los PDFs encolados
+   * @param {Object} context
+   * @param {Object|null} runContext
+   * @param {string} reply
+   * @param {Object} [extra]
+   * @returns {Promise<string|Object>}
+   */
+  async deliverReplyThenDocuments(context, runContext, reply, extra = {}) {
+    if (typeof context?.sendReply === 'function') {
+      await context.sendReply(reply);
+    }
+    await this.flushPendingDocuments(runContext);
+    return this.wrapProcessResult(context, reply, extra);
+  }
+
+  /**
+   * Detecta si el usuario pide explícitamente que le reenvíen el documento
+   * @param {string} message
+   * @returns {boolean}
+   */
+  isResendRequest(message) {
+    if (typeof message !== 'string' || !message.trim()) {
+      return false;
+    }
+    const text = message.toLowerCase();
+    return DOC_MENTION_REGEX.test(text) && RESEND_INTENT_REGEX.test(text);
+  }
+
+  /**
+   * Ejecuta enviar_pdf (encola; el envío real es tras el reply)
    * @param {Object} args
    * @param {Object|null} runContext
    * @returns {Promise<Object>}
@@ -229,6 +293,30 @@ class OpenAIManager {
       return { error: 'documento_id es requerido' };
     }
 
+    if (ctx.sentDocuments && ctx.sentDocuments.has(documentoId)) {
+      console.log(`↩️ enviar_pdf omitido (ya encolado en este turno): ${documentoId}`);
+      return {
+        success: true,
+        already_sent: true,
+        documento_id: documentoId,
+        message: 'Este PDF ya se envió en este turno. No vuelvas a llamar enviar_pdf: responde ahora con el JSON final.',
+        instruction: REPLY_AFTER_PDF_INSTRUCTION
+      };
+    }
+
+    if (!ctx.allowResend && ctx.sessionSentDocuments && ctx.sessionSentDocuments.has(documentoId)) {
+      console.log(`🚫 enviar_pdf bloqueado (ya enviado en esta conversación): ${documentoId}`);
+      return {
+        success: false,
+        blocked: true,
+        already_sent_session: true,
+        documento_id: documentoId,
+        error: 'Este PDF ya se envió antes en esta conversación y el usuario no pidió que se lo reenvíes.',
+        instruction: 'No vuelvas a llamar enviar_pdf. Responde con texto la pregunta actual del usuario, '
+          + 'sin mencionar el documento ni decir que lo estás enviando.'
+      };
+    }
+
     const doc = await ctx.documentStore.get(ctx.clientId, documentoId);
     if (!doc) {
       return {
@@ -237,21 +325,35 @@ class OpenAIManager {
       };
     }
 
-    const documentBase64 = doc.buffer.toString('base64');
-    await ctx.ultraMsgManager.sendDocument(
-      ctx.userId,
-      {
-        filename: doc.filename,
-        document: documentBase64,
-        caption: args.caption || ''
-      },
-      ctx.instanceId
-    );
+    if (!ctx.pendingDocuments) {
+      ctx.pendingDocuments = [];
+    }
+    ctx.pendingDocuments.push({
+      userId: ctx.userId,
+      documentoId: doc.documentoId,
+      filename: doc.filename,
+      document: doc.buffer.toString('base64'),
+      caption: args.caption || '',
+      instanceId: ctx.instanceId
+    });
+
+    if (ctx.sentDocuments) {
+      ctx.sentDocuments.add(documentoId);
+      ctx.sentDocuments.add(doc.documentoId);
+    }
+    if (ctx.sessionSentDocuments) {
+      ctx.sessionSentDocuments.add(documentoId);
+      ctx.sessionSentDocuments.add(doc.documentoId);
+    }
+
+    console.log(`📄 enviar_pdf encolado (después del reply): ${doc.documentoId}`);
 
     return {
       success: true,
       documento_id: doc.documentoId,
-      filename: doc.filename
+      filename: doc.filename,
+      queued: true,
+      instruction: REPLY_AFTER_PDF_INSTRUCTION
     };
   }
 
@@ -284,17 +386,29 @@ class OpenAIManager {
   }
 
   /**
-   * Parsea reply desde output_text o message Items
+   * Texto crudo de una respuesta ('' si solo trae function_calls)
    * @param {Object} response
    * @returns {string}
    */
-  parseReply(response) {
-    const raw = response.output_text
+  extractResponseText(response) {
+    if (!response) {
+      return '';
+    }
+    return response.output_text
       || (response.output || [])
         .filter((item) => item.type === 'message')
         .map((item) => this.extractMessageText(item))
         .join('')
         .trim();
+  }
+
+  /**
+   * Parsea reply desde output_text o message Items
+   * @param {Object} response
+   * @returns {string}
+   */
+  parseReply(response) {
+    const raw = this.extractResponseText(response);
 
     if (!raw) {
       return 'Lo siento, no pude generar una respuesta. ¿Puedes intentar de nuevo?';
@@ -310,6 +424,44 @@ class OpenAIManager {
     }
 
     return raw;
+  }
+
+  /**
+   * Arma el body de responses.create para un turno
+   * @param {Object} params
+   * @returns {Object}
+   */
+  buildResponsesRequest({ instructions, items, tools, responseSchema, config = {}, toolChoice = null }) {
+    const request = {
+      model: this.model,
+      instructions,
+      input: items,
+      store: false,
+      tools: tools && tools.length ? tools : undefined,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'whatsapp_reply',
+          strict: true,
+          schema: responseSchema
+        }
+      }
+    };
+
+    if (toolChoice && tools && tools.length) {
+      request.tool_choice = toolChoice;
+    }
+
+    if (config.temperature !== undefined) {
+      request.temperature = config.temperature;
+    }
+    if (config.max_output_tokens !== undefined) {
+      request.max_output_tokens = config.max_output_tokens;
+    } else if (config.max_tokens !== undefined) {
+      request.max_output_tokens = config.max_tokens;
+    }
+
+    return request;
   }
 
   /**
@@ -352,16 +504,18 @@ class OpenAIManager {
   async processMessage(userId, message, clientCode = 'default', context = {}) {
     const assistant = await this.firebaseService.getAssistantByClientId(clientCode);
     if (!assistant || assistant.status === 'deleted') {
-      return this.wrapProcessResult(
+      return this.deliverReplyThenDocuments(
         context,
+        null,
         '❌ Error: Configuración del asistente incompleta. Contacta al administrador.'
       );
     }
 
     const locked = await this.firebaseService.tryLockBotSession(userId, clientCode);
     if (!locked) {
-      return this.wrapProcessResult(
+      return this.deliverReplyThenDocuments(
         context,
+        null,
         'Por favor espera a que termine la respuesta anterior.',
         { locked: true }
       );
@@ -374,6 +528,10 @@ class OpenAIManager {
       instanceId: context.instanceId || null,
       ultraMsgManager: context.ultraMsgManager || null,
       documentStore: context.documentStore || null,
+      sentDocuments: new Set(),
+      sessionSentDocuments: new Set(),
+      allowResend: this.isResendRequest(message),
+      pendingDocuments: [],
       toolTrace: []
     };
 
@@ -382,6 +540,9 @@ class OpenAIManager {
     try {
       const session = await this.firebaseService.getOrCreateBotSession(userId, clientCode);
       items = Array.isArray(session.items) ? [...session.items] : [];
+      if (Array.isArray(session.sentDocumentIds)) {
+        runContext.sessionSentDocuments = new Set(session.sentDocumentIds);
+      }
 
       const userItem = { type: 'message', role: 'user', content: message };
       items.push(userItem);
@@ -403,37 +564,25 @@ class OpenAIManager {
 
       let loops = 0;
       let finalResponse = null;
+      // Tras una tool exitosa el modelo pierde el acceso a tools: solo puede cerrar con JSON
+      let toolsLocked = false;
 
       while (loops < MAX_TOOL_LOOPS) {
         loops += 1;
         await this.firebaseService.refreshBotSessionLock(userId, clientCode);
 
-        const request = {
-          model: this.model,
+        const request = this.buildResponsesRequest({
           instructions,
-          input: items,
-          store: false,
-          tools: tools.length ? tools : undefined,
-          text: {
-            format: {
-              type: 'json_schema',
-              name: 'whatsapp_reply',
-              strict: true,
-              schema: responseSchema
-            }
-          }
-        };
+          items,
+          tools,
+          responseSchema,
+          config,
+          toolChoice: toolsLocked ? 'none' : null
+        });
 
-        if (config.temperature !== undefined) {
-          request.temperature = config.temperature;
-        }
-        if (config.max_output_tokens !== undefined) {
-          request.max_output_tokens = config.max_output_tokens;
-        } else if (config.max_tokens !== undefined) {
-          request.max_output_tokens = config.max_tokens;
-        }
-
-        console.log(`Responses create (loop ${loops}) para ${userId}_${clientCode}`);
+        console.log(
+          `Responses create (loop ${loops}${toolsLocked ? ', tool_choice=none' : ''}) para ${userId}_${clientCode}`
+        );
         const response = await this.openai.responses.create(request);
         finalResponse = response;
 
@@ -454,6 +603,9 @@ class OpenAIManager {
 
         for (const call of functionCalls) {
           const result = await this.executeFunctionCall(call, runContext);
+          if (result && (result.success || result.blocked)) {
+            toolsLocked = true;
+          }
           let args = {};
           try {
             args = JSON.parse(call.arguments || '{}');
@@ -474,18 +626,49 @@ class OpenAIManager {
       }
 
       if (!finalResponse) {
-        await this.persistSessionItems(userId, clientCode, items);
-        return this.wrapProcessResult(
+        await this.persistSessionItems(userId, clientCode, items, runContext);
+        // Sin reply válido: no enviar PDFs encolados
+        runContext.pendingDocuments = [];
+        return this.deliverReplyThenDocuments(
           context,
+          runContext,
           'Hubo un error procesando tu mensaje. Intenta de nuevo.',
           { tools: runContext.toolTrace, items }
         );
       }
 
-      const reply = this.parseReply(finalResponse);
-      await this.persistSessionItems(userId, clientCode, items);
+      // Se agotaron los loops sin texto: última llamada sin tools para obtener el reply
+      if (!this.extractResponseText(finalResponse)) {
+        try {
+          console.log(`Responses create (cierre sin tools) para ${userId}_${clientCode}`);
+          await this.firebaseService.refreshBotSessionLock(userId, clientCode);
+          const closingResponse = await this.openai.responses.create(
+            this.buildResponsesRequest({
+              instructions,
+              items,
+              tools: [],
+              responseSchema,
+              config
+            })
+          );
+          if (this.extractResponseText(closingResponse)) {
+            finalResponse = closingResponse;
+            for (const item of (closingResponse.output || [])) {
+              const serialized = this.serializeOutputItem(item);
+              if (serialized) {
+                items.push(serialized);
+              }
+            }
+          }
+        } catch (closingError) {
+          console.error('Error en llamada de cierre sin tools:', closingError.message);
+        }
+      }
 
-      return this.wrapProcessResult(context, reply, {
+      const reply = this.parseReply(finalResponse);
+      await this.persistSessionItems(userId, clientCode, items, runContext);
+
+      return this.deliverReplyThenDocuments(context, runContext, reply, {
         tools: runContext.toolTrace,
         items
       });
@@ -493,13 +676,18 @@ class OpenAIManager {
       console.error('Error procesando mensaje con OpenAI:', error.message);
       if (Array.isArray(items) && items.length) {
         try {
-          await this.persistSessionItems(userId, clientCode, items);
+          await this.persistSessionItems(userId, clientCode, items, runContext);
         } catch (saveError) {
           console.error('Error persistiendo sesión tras fallo:', saveError.message);
         }
       }
-      return this.wrapProcessResult(
+      // Error: descartar PDFs encolados para no mandar documento sin contexto
+      if (runContext) {
+        runContext.pendingDocuments = [];
+      }
+      return this.deliverReplyThenDocuments(
         context,
+        runContext,
         'Hubo un error procesando tu mensaje. Intenta de nuevo.',
         { tools: runContext.toolTrace, items }
       );
@@ -517,14 +705,19 @@ class OpenAIManager {
    * @param {string} userId
    * @param {string} clientCode
    * @param {Array} items
+   * @param {Object|null} runContext
    */
-  async persistSessionItems(userId, clientCode, items) {
+  async persistSessionItems(userId, clientCode, items, runContext = null) {
     const cleaned = this.dropIncompleteToolCalls(items);
     const trimmed = this.trimHistoryItems(cleaned, MAX_HISTORY_ITEMS);
-    await this.firebaseService.saveBotSession(userId, clientCode, {
+    const payload = {
       items: trimmed,
       lockedUntil: null
-    });
+    };
+    if (runContext?.sessionSentDocuments) {
+      payload.sentDocumentIds = Array.from(runContext.sessionSentDocuments);
+    }
+    await this.firebaseService.saveBotSession(userId, clientCode, payload);
   }
 
   /**

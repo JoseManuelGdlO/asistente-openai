@@ -163,7 +163,32 @@
         events.push({ kind: 'tool', name: call.name, arguments: call.arguments, result });
       }
     }
-    return events;
+    // Tools se ejecutan antes del reply en el historial; mostrar texto y luego PDF
+    return reorderPlaygroundEvents(events);
+  }
+
+  function reorderPlaygroundEvents(events) {
+    const out = [];
+    let pendingTools = [];
+    for (const event of events) {
+      if (event.kind === 'tool') {
+        pendingTools.push(event);
+        continue;
+      }
+      if (event.kind === 'message' && event.role === 'assistant') {
+        out.push(event);
+        out.push(...pendingTools);
+        pendingTools = [];
+        continue;
+      }
+      if (pendingTools.length) {
+        out.push(...pendingTools);
+        pendingTools = [];
+      }
+      out.push(event);
+    }
+    if (pendingTools.length) out.push(...pendingTools);
+    return out;
   }
 
   function toolBadgeHtml(event) {
@@ -923,8 +948,8 @@
           result: tool.result || {}
         }));
         appendPlaygroundEvents(playgroundLog, [
-          ...toolEvents,
-          { kind: 'message', role: 'assistant', text: result.reply || '' }
+          { kind: 'message', role: 'assistant', text: result.reply || '' },
+          ...toolEvents
         ]);
       } catch (err) {
         appendPlaygroundEvents(playgroundLog, [{

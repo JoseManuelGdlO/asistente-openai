@@ -398,15 +398,16 @@ class WebhookManager {
     const instanceId = this.resolveInstanceId(clientId, messageData, webhookToken);
     console.log('📱 Usando instancia UltraMsg:', instanceId, '(cliente:', clientId + ')');
 
-    // Procesar con Responses API (tools pueden enviar PDFs via UltraMsg)
+    // Procesar con Responses API (tools encolan PDFs; sendReply va antes del flush)
     const aiResponse = await this.openAIManager.processMessage(from, msg_body, clientId, {
       instanceId,
       ultraMsgManager: this.ultraMsgManager,
-      documentStore: this.documentStore
+      documentStore: this.documentStore,
+      sendReply: async (text) => {
+        await this.sendUltraNotice(sendReplyUltra, from, text, clientId);
+      }
     });
     
-    // Enviar respuesta via UltraMsg usando la instancia correcta
-    await this.sendUltraNotice(sendReplyUltra, from, aiResponse, clientId);
     return { response: aiResponse, reason: 'ai_reply' };
   }
 
@@ -550,9 +551,11 @@ class WebhookManager {
 
       const aiResponse = await this.openAIManager.processMessage(fromPhone, text, clientId, {
         ultraMsgManager: this.ultraMsgManager,
-        documentStore: this.documentStore
+        documentStore: this.documentStore,
+        sendReply: async (textReply) => {
+          await sendReplyOwn(textReply);
+        }
       });
-      await sendReplyOwn(aiResponse);
 
       return { processed: true, response: aiResponse, userId: fromPhone, reason: 'ai_reply' };
     });
