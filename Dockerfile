@@ -19,6 +19,7 @@ RUN addgroup -S app && adduser -S app -G app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY src ./src
+COPY public ./public
 
 RUN mkdir -p /app/uploads && chown -R app:app /app/uploads
 

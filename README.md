@@ -14,6 +14,7 @@ Un asistente inteligente de WhatsApp que integra OpenAI GPT-4 para responder men
 - **🎮 Sistema de Comandos**: Control remoto de bots por cliente con autenticación
 - **🔥 Firebase Integration**: Gestión dinámica de clientes en la nube
 - **📊 Múltiples Clientes**: Soporte para múltiples consultorios con asistentes independientes
+- **🖥️ Panel admin**: SPA en el mismo contenedor (`/`) para gestionar consultorios, assistants, PDFs y sesiones
 
 ## 📁 Estructura del Proyecto
 
@@ -21,9 +22,9 @@ Un asistente inteligente de WhatsApp que integra OpenAI GPT-4 para responder men
 src/
 ├── index.js                    # 🚀 Punto de entrada principal
 ├── managers/                   # 🔌 Gestores de servicios externos
-│   ├── openAIManager.js       # 🤖 Gestor de OpenAI
+│   ├── openAIManager.js       # 🤖 Gestor OpenAI Responses API
 │   ├── ultramsgManager.js     # 📱 Gestor de UltraMsg
-│   └── facebookTokenManager.js # 🔑 Gestor de tokens Facebook
+│   └── ownSystemManager.js    # 🏗️ Backend WhatsApp propio (OWN_SYSTEM)
 ├── services/                   # ⚙️ Servicios de negocio
 │   ├── confirmationManager.js  # ✅ Gestor de confirmaciones
 │   ├── userContextManager.js   # 👤 Gestor de contexto de usuario
@@ -33,6 +34,7 @@ src/
 │   └── schedulerController.js # 🎛️ Controlador del scheduler
 ├── utils/                      # 🛠️ Utilidades (futuro)
 └── README.md                   # 📚 Documentación de la estructura
+public/                         # Panel admin (HTML + JS)
 ```
 
 ## ⚙️ Configuración
@@ -48,7 +50,7 @@ Crea un archivo `.env` en la raíz del proyecto:
 ```env
 # OpenAI Configuration
 OPENAI_API_KEY=sk-your-openai-api-key
-ASISTENTE_ID=asst-your-assistant-id
+OPENAI_MODEL=gpt-4o-mini
 
 # UltraMsg Configuration
 ULTRAMSG_TOKEN=tu-token-de-ultramsg
@@ -60,6 +62,9 @@ FIREBASE_PROJECT_ID=tu-proyecto-id
 FIREBASE_CLIENT_EMAIL=tu-service-account@proyecto.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nTu-clave-privada-aqui\n-----END PRIVATE KEY-----\n"
 FIREBASE_DATABASE_URL=https://tu-proyecto-id.firebaseio.com
+
+# Admin panel + API de gestión
+ADMIN_API_TOKEN=change-me-to-a-long-random-secret
 
 # Server Configuration
 PORT=3000
@@ -83,11 +88,11 @@ Si tienes clientes configurados en variables de entorno:
 npm run migrate-firebase
 ```
 
-### 6. Crear Asistente de OpenAI
+### 6. Seed de cliente + Assistant (Firestore)
 ```bash
 npm run create-assistant
 ```
-
+Crea el par `clients/{id}` + `Assistants/{id}` (prompt, tools, schema). Variables opcionales: `SEED_CLIENT_ID`, `SEED_CLIENT_NAME`, etc.
 ## 🚀 Ejecutar el Servidor
 
 ### Desarrollo
@@ -105,30 +110,62 @@ npm start
 npm run ngrok
 ```
 
+## 🖥️ Panel admin
+
+La misma app sirve una SPA en `/`. Entra con el valor de `ADMIN_API_TOKEN` (se guarda en `sessionStorage` y se envía como `Authorization: Bearer …`).
+
+Desde el panel puedes:
+
+- Ver health, bots, scheduler e instancias UltraMsg
+- Crear, editar y eliminar consultorios
+- Editar el Assistant (prompt + tools/config/responseSchema en JSON)
+- Probar prompt y tools en el playground (OpenAI real, sin WhatsApp; sesión `playground_{clientId}`)
+- Listar, subir y borrar PDFs
+- Listar y borrar sesiones (historial por usuario/consultorio); resetear al cambiar el prompt
+
+Los endpoints de gestión (`/clients`, `/assistants`, `/playground`, `/bots`, `/scheduler`, `/ultramsg`, `/sessions`, documentos) **requieren** ese token. Siguen públicos: `/webhook`, `/webhook-own` y `/health`.
+
 ## 📡 Endpoints Disponibles
 
 ### Webhooks
 - `GET /webhook` - Verificación de webhook UltraMsg
 - `POST /webhook` - Recepción de mensajes de WhatsApp
 
-### Gestión de Threads
-- `POST /reset_threads` - Resetear todos los threads de OpenAI
+### Gestión de sesiones (requieren `ADMIN_API_TOKEN`)
+- `GET /sessions` - Listar sesiones (`?userId=` / `?clientCode=` opcionales)
+- `POST /reset_sessions` - Borrar todas las sesiones (`bot_sessions`)
+- `DELETE /sessions/user/:userId` - Borrar todas las sesiones de un usuario
+- `DELETE /sessions/client/:clientCode` - Borrar todas las sesiones de un consultorio
+- `DELETE /sessions/:userId/:clientCode` - Borrar una sesión concreta
 
 ### Contexto de Usuario
 - `POST /mark-agenda-sent` - Marcar agenda enviada a un usuario
 - `GET /user-context/:userId` - Obtener contexto de un usuario
 - `POST /clear-user-context/:userId` - Limpiar contexto de un usuario
 
-### Gestión de Clientes (Firebase)
+### Gestión de Clientes (Firebase, requieren `ADMIN_API_TOKEN`)
 - `POST /clients` - Crear nuevo cliente
 - `GET /clients` - Listar todos los clientes
 - `GET /clients/:clientId` - Obtener cliente específico
 - `PUT /clients/:clientId` - Actualizar cliente
 - `DELETE /clients/:clientId` - Eliminar cliente
 - `GET /clients/stats/overview` - Estadísticas de clientes
+- `GET /clients/status` - Estado actual sin recargar
 - `POST /clients/reload` - Recargar clientes desde Firebase
+- `GET /clients/:clientId/documents` - Listar PDFs
+- `POST /clients/:clientId/documents` - Subir PDF
+- `DELETE /clients/:clientId/documents/:documentoId` - Eliminar PDF
 
-### Scheduler
+### Assistants (Firestore, 1:1, requieren `ADMIN_API_TOKEN`)
+- `GET /assistants` - Listar todos los Assistants
+- `GET /assistants/:clientId` - Obtener prompt/tools/config de un consultorio
+- `PUT /assistants/:clientId` - Actualizar prompt/tools/config (resetea el playground de ese consultorio)
+
+### Playground (requieren `ADMIN_API_TOKEN`)
+- `GET /playground/:clientId` - Historial de la sesión `playground_{clientId}`
+- `POST /playground/:clientId/chat` - Enviar un mensaje de prueba (`{ message, reset? }`)
+
+### Scheduler (requieren `ADMIN_API_TOKEN`)
 - `GET /scheduler/status` - Estado de tareas programadas
 - `POST /scheduler/run/:taskName` - Ejecutar tarea manualmente
 - `POST /scheduler/stop` - Detener todas las tareas
@@ -137,9 +174,8 @@ npm run ngrok
 ### Configuración de Grupos
 - `GET /group-settings` - Ver configuración de comportamiento en grupos
 
-### Sistema de Comandos
+### Sistema de Comandos (requieren `ADMIN_API_TOKEN`)
 - `GET /bots/status` - Ver estado de todos los bots
-- `GET /clients` - Ver configuración de clientes
 - `POST /bots/command` - Ejecutar comando manualmente
 
 ### Utilidad
@@ -218,25 +254,28 @@ npm run test-firebase
 
 ## 📚 Documentación
 
-- `src/README.md` - Documentación detallada de la estructura
-- `SCHEDULER_GUIDE.md` - Guía completa del sistema de tareas programadas
-- `COMMANDS_GUIDE.md` - Guía completa del sistema de comandos
-- `FIREBASE_MIGRATION_GUIDE.md` - Guía completa de migración a Firebase
+- `docs/DOCUMENTACION.md` - Documentación completa del sistema (Responses + Firebase)
+- `src/README.md` - Estructura de carpetas
+- `docs/SCHEDULER_GUIDE.md` - Guía del sistema de tareas programadas
+- `docs/COMMANDS_GUIDE.md` - Guía del sistema de comandos
+- `docs/FIREBASE_MIGRATION_GUIDE.md` - Guía de migración a Firebase
+- `docs/FIREBASE_ULTRAMSG_GUIDE.md` - Firebase + UltraMsg por cliente
 
 ## 🔧 Scripts Disponibles
 
 - `npm start` - Iniciar servidor en producción
 - `npm run dev` - Iniciar servidor en desarrollo con nodemon
 - `npm run ngrok` - Exponer servidor con ngrok
-- `npm run test-ultramsg` - Probar conexión con UltraMsg
+- `npm test` - Suite automatizada (Jest + Supertest, sin Firebase/OpenAI reales)
+- `npm run test:watch` - Jest en modo watch
+- `npm run test-ultramsg` - Probar conexión con UltraMsg (manual, servidor en marcha)
 - `npm run test-scheduler` - Probar sistema de tareas
 - `npm run test-webhook` - Probar webhook
 - `npm run test-groups` - Probar detección de grupos
 - `npm run test-commands` - Probar sistema de comandos
 - `npm run test-firebase` - Probar conexión con Firebase
-- `npm run migrate-firebase` - Migrar clientes a Firebase
-- `npm run create-assistant` - Crear nuevo asistente de OpenAI
-- `npm run list-assistants` - Listar asistentes existentes
+- `npm run migrate-firebase` - Migrar/seed clientes a Firebase (par client + Assistant)
+- `npm run create-assistant` - Seed par client + Assistant en Firestore
 
 ## 🏗️ Arquitectura
 

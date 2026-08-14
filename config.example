@@ -3,7 +3,7 @@
 
 # OpenAI Configuration
 OPENAI_API_KEY=sk-your-openai-api-key-here
-ASISTENTE_ID=asst-your-assistant-id-here
+OPENAI_MODEL=gpt-4o-mini
 
 # WhatsApp Configuration
 WHATSAPP_TOKEN=your-whatsapp-access-token-here

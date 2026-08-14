@@ -2,9 +2,9 @@ const FirebaseService = require('./firebaseService');
 const DocumentStore = require('./documentStore');
 
 class CommandManager {
-  constructor(documentStore = null) {
+  constructor(documentStore = null, firebaseService = null) {
     // Servicio de Firebase para gestionar clientes
-    this.firebaseService = new FirebaseService();
+    this.firebaseService = firebaseService || new FirebaseService();
     this.documentStore = documentStore || new DocumentStore();
     
     // Configuración de clientes desde Firebase
@@ -194,7 +194,7 @@ class CommandManager {
       case 'get_status':
         const status = this.botStatus.get(clientId);
         const statusText = status === 'active' ? '🟢 ACTIVO' : '🔴 INACTIVO';
-        return `📊 Estado del bot de ${client.name}:\n${statusText}\nAsistente: ${client.assistantId}`;
+        return `📊 Estado del bot de ${client.name}:\n${statusText}\nAssistant: Assistants/${clientId}`;
         
       case 'restart_bot':
         this.botStatus.set(clientId, 'active');
@@ -383,16 +383,34 @@ class CommandManager {
   }
 
   /**
-   * Obtiene el ID del asistente para un número de teléfono específico
-   * @param {string} assistantPhone - Número de teléfono del asistente (destinatario)
-   * @returns {string|null} - ID del asistente o null si no se encuentra
+   * Lista Assistants de Firestore (excluye deleted). Incluye clientName del cache si existe.
+   * @returns {Promise<Array>}
    */
-  async getAssistantIdByPhone(assistantPhone) {
+  async listAssistants() {
+    const assistants = await this.firebaseService.getAllAssistants();
+    return assistants.map((assistant) => {
+      const client = this.clientConfig[assistant.id];
+      return {
+        ...assistant,
+        clientName: client?.name || null
+      };
+    });
+  }
+
+  /**
+   * Obtiene la config Assistants/{clientId} (relación 1:1)
+   * @param {string} clientId
+   * @returns {Promise<Object|null>}
+   */
+  async getAssistantConfig(clientId) {
     try {
-      const client = await this.firebaseService.getClientByAssistantPhone(assistantPhone);
-      return client ? client.assistantId : null;
+      const assistant = await this.firebaseService.getAssistantByClientId(clientId);
+      if (!assistant || assistant.status === 'deleted') {
+        return null;
+      }
+      return assistant;
     } catch (error) {
-      console.error('❌ Error obteniendo asistente por teléfono:', error);
+      console.error('❌ Error obteniendo Assistant por clientId:', error);
       return null;
     }
   }
@@ -429,7 +447,7 @@ class CommandManager {
     return `🏥 Información de ${client.name}:\n\n` +
            `📞 Admin: ${client.adminPhone}\n` +
            `📱 Asistente: ${client.assistantPhone}\n` +
-           `🤖 ID Asistente: ${client.assistantId}\n` +
+           `🤖 Assistant: Assistants/${clientId}\n` +
            `📊 Estado: ${statusText}\n` +
            `🔑 ID: ${clientId}`;
   }
@@ -446,7 +464,7 @@ class CommandManager {
         status: this.botStatus.get(clientId),
         adminPhone: this.clientConfig[clientId].adminPhone,
         assistantPhone: this.clientConfig[clientId].assistantPhone,
-        assistantId: this.clientConfig[clientId].assistantId
+        assistantDocId: clientId
       };
     });
     return status;
@@ -461,15 +479,19 @@ class CommandManager {
   }
 
   /**
-   * Crea un nuevo cliente
-   * @param {Object} clientData - Datos del cliente
-   * @returns {Promise<Object>} - Cliente creado
+   * Crea par client + Assistant (1:1)
+   * @param {Object} clientData - Datos del consultorio (+ prompt/tools/config opcionales)
+   * @param {Object} [assistantData]
+   * @returns {Promise<{client: Object, assistant: Object}>}
    */
-  async createClient(clientData) {
+  async createClient(clientData, assistantData = {}) {
     try {
-      const newClient = await this.firebaseService.createClient(clientData);
-      await this.reloadClients(); // Recargar configuración
-      return newClient;
+      const result = await this.firebaseService.createClientWithAssistant(
+        clientData,
+        assistantData
+      );
+      await this.reloadClients();
+      return result;
     } catch (error) {
       console.error('❌ Error creando cliente:', error);
       throw error;
@@ -477,15 +499,25 @@ class CommandManager {
   }
 
   /**
-   * Actualiza un cliente existente
+   * Actualiza un cliente existente (no crea Assistants huérfanos)
    * @param {string} clientId - ID del cliente
    * @param {Object} updateData - Datos a actualizar
    * @returns {Promise<Object>} - Cliente actualizado
    */
   async updateClient(clientId, updateData) {
     try {
-      const updatedClient = await this.firebaseService.updateClient(clientId, updateData);
-      await this.reloadClients(); // Recargar configuración
+      // No permitir crear/alterar Assistant desde PUT /clients
+      const {
+        prompt,
+        tools,
+        config,
+        responseSchema,
+        assistantId,
+        ...clientFields
+      } = updateData;
+
+      const updatedClient = await this.firebaseService.updateClient(clientId, clientFields);
+      await this.reloadClients();
       return updatedClient;
     } catch (error) {
       console.error('❌ Error actualizando cliente:', error);
@@ -494,19 +526,29 @@ class CommandManager {
   }
 
   /**
-   * Elimina un cliente
+   * Elimina el par client + Assistant
    * @param {string} clientId - ID del cliente
-   * @returns {Promise<boolean>} - True si se eliminó correctamente
+   * @returns {Promise<boolean>}
    */
   async deleteClient(clientId) {
     try {
-      const result = await this.firebaseService.deleteClient(clientId);
-      await this.reloadClients(); // Recargar configuración
+      const result = await this.firebaseService.deleteClientWithAssistant(clientId);
+      await this.reloadClients();
       return result;
     } catch (error) {
       console.error('❌ Error eliminando cliente:', error);
       throw error;
     }
+  }
+
+  /**
+   * Actualiza Assistant de un cliente
+   * @param {string} clientId
+   * @param {Object} data
+   * @returns {Promise<Object>}
+   */
+  async updateAssistant(clientId, data) {
+    return this.firebaseService.updateAssistant(clientId, data);
   }
 }
 

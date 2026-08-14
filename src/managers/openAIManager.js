@@ -1,80 +1,20 @@
 const OpenAI = require('openai');
+const FirebaseService = require('../services/firebaseService');
+
+const MAX_HISTORY_ITEMS = 40;
+const MAX_TOOL_LOOPS = 8;
 
 class OpenAIManager {
-  constructor() {
+  constructor(firebaseService = null) {
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY
     });
-    
-    // Store thread IDs per user and client combination
-    this.userThreads = new Map();
-    
-    // Mapa para guardar el estado de los runs por thread
-    this.threadRuns = new Map();
+    this.firebaseService = firebaseService || new FirebaseService();
+    this.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
   }
 
   /**
-   * Obtiene o crea un thread para un usuario y cliente específico
-   * @param {string} userId - ID del usuario
-   * @param {string} clientCode - Código del cliente
-   * @returns {string} - ID del thread
-   */
-  async getOrCreateThread(userId, clientCode) {
-    const threadKey = `${userId}_${clientCode}`;
-    let threadId = this.userThreads.get(threadKey);
-    if (!threadId) {
-      console.log('Creando nuevo thread para usuario:', userId, 'cliente:', clientCode);
-      const thread = await this.openai.beta.threads.create();
-      threadId = thread.id;
-      this.userThreads.set(threadKey, threadId);
-    } else {
-      console.log('Usando thread existente:', threadId, 'para cliente:', clientCode);
-    }
-    return threadId;
-  }
-
-  /**
-   * Verifica si hay un run activo para un thread
-   * @param {string} threadId - ID del thread
-   * @returns {boolean} - True si hay un run activo
-   */
-  hasActiveRun(threadId) {
-    const runStatus = this.threadRuns.get(threadId);
-    return runStatus && runStatus !== 'completed' && runStatus !== 'failed';
-  }
-
-  /**
-   * Agrega un mensaje a un thread
-   * @param {string} threadId - ID del thread
-   * @param {string} content - Contenido del mensaje
-   * @returns {Object} - Mensaje creado
-   */
-  async addMessageToThread(threadId, content) {
-    const threadMessage = await this.openai.beta.threads.messages.create(threadId, {
-      role: "user",
-      content: content
-    });
-    console.log('Mensaje agregado al thread:', threadMessage.id);
-    return threadMessage;
-  }
-
-  /**
-   * Obtiene mensajes anteriores de un thread
-   * @param {string} threadId - ID del thread
-   * @param {number} limit - Número de mensajes a obtener
-   * @returns {Array} - Lista de mensajes
-   */
-  async getPreviousMessages(threadId, limit = 5) {
-    const previousMessages = await this.openai.beta.threads.messages.list(threadId, {
-      order: 'desc',
-      limit: limit
-    });
-    console.log('Mensajes anteriores en el thread:', JSON.stringify(previousMessages.data, null, 2));
-    return previousMessages.data;
-  }
-
-  /**
-   * Construye additional_instructions con documentos disponibles
+   * Construye instrucciones de documentos disponibles
    * @param {string} clientCode
    * @param {Object} documentStore
    * @returns {Promise<string>}
@@ -98,97 +38,184 @@ class OpenAIManager {
   }
 
   /**
-   * Crea y ejecuta un run
-   * @param {string} threadId - ID del thread
-   * @param {string} assistantId - ID del asistente a usar
-   * @param {string} [additionalInstructions]
-   * @returns {Object} - Run creado
+   * Ajusta tools al contrato strict de Responses: required incluye todas las properties.
+   * Las keys que no estaban en required se vuelven nullable (siguen siendo opcionales).
+   * @param {Array} tools
+   * @returns {Array}
    */
-  async createRun(threadId, assistantId, additionalInstructions = '') {
-    console.log('Creando run con asistente:', assistantId);
-    const payload = {
-      assistant_id: assistantId
-    };
-    if (additionalInstructions) {
-      payload.additional_instructions = additionalInstructions;
+  normalizeToolsForResponses(tools) {
+    if (!Array.isArray(tools)) {
+      return [];
     }
 
-    const run = await this.openai.beta.threads.runs.create(threadId, payload);
-    console.log('Run creado:', run.id);
-    
-    // Guardar estado del run como in_progress
-    this.threadRuns.set(threadId, 'in_progress');
-    
-    return run;
+    return tools.map((tool) => {
+      if (!tool || tool.type !== 'function' || !tool.parameters || typeof tool.parameters !== 'object') {
+        return tool;
+      }
+      if (tool.strict !== true) {
+        return tool;
+      }
+
+      const properties = tool.parameters.properties && typeof tool.parameters.properties === 'object'
+        ? { ...tool.parameters.properties }
+        : {};
+      const required = Array.isArray(tool.parameters.required)
+        ? [...tool.parameters.required]
+        : [];
+
+      for (const key of Object.keys(properties)) {
+        if (required.includes(key)) {
+          continue;
+        }
+        required.push(key);
+        properties[key] = this.makeJsonSchemaNullable(properties[key]);
+      }
+
+      return {
+        ...tool,
+        parameters: {
+          ...tool.parameters,
+          properties,
+          required,
+          additionalProperties: tool.parameters.additionalProperties === undefined
+            ? false
+            : tool.parameters.additionalProperties
+        }
+      };
+    });
   }
 
   /**
-   * Espera a que termine un run
-   * @param {string} threadId - ID del thread
-   * @param {string} runId - ID del run
-   * @param {Object|null} runContext - Contexto del request (aislado por llamada)
-   * @returns {Object} - Estado final del run
+   * Añade null al type de un schema JSON (campo opcional en strict)
+   * @param {Object} schema
+   * @returns {Object}
    */
-  async waitForRunCompletion(threadId, runId, runContext = null) {
-    let runStatusObj;
-    let retryCount = 0;
-    const maxRetries = 150; // 5 minutos total
-    
-    do {
-      await new Promise(r => setTimeout(r, 2000)); // 2 segundos entre intentos
-      runStatusObj = await this.openai.beta.threads.runs.retrieve(threadId, runId);
-      this.threadRuns.set(threadId, runStatusObj.status);
-      console.log(`Estado del run: ${runStatusObj.status} (intento ${retryCount + 1}/${maxRetries})`);
-      
-      if (runStatusObj.status === 'failed') {
-        console.error('Error en el run:', runStatusObj.last_error);
-        break;
+  makeJsonSchemaNullable(schema) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+      return { type: ['string', 'null'] };
+    }
+    const next = { ...schema };
+    if (Array.isArray(next.type)) {
+      if (!next.type.includes('null')) {
+        next.type = [...next.type, 'null'];
       }
-
-      // Si requiere acción, manejar tool_calls
-      if (runStatusObj.status === "requires_action") {
-        console.log('El run requiere acción, procesando tool_calls...');
-        console.log('Tool calls:', JSON.stringify(runStatusObj.required_action.submit_tool_outputs.tool_calls, null, 2));
-        await this.handleRequiredAction(runStatusObj, threadId, runId, runContext);
-      }
-
-      retryCount++;
-      if (retryCount >= maxRetries) {
-        console.error(`Se alcanzó el máximo número de reintentos (${maxRetries}). El asistente está tardando más de lo esperado.`);
-        console.error(`Tiempo total esperado: ${(maxRetries * 2)} segundos (${Math.round((maxRetries * 2) / 60)} minutos)`);
-        break;
-      }
-    } while (runStatusObj.status !== "completed" && runStatusObj.status !== "failed");
-
-    // Guardar estado final del run
-    this.threadRuns.set(threadId, runStatusObj.status);
-    
-    return runStatusObj;
+    } else if (typeof next.type === 'string') {
+      next.type = [next.type, 'null'];
+    } else {
+      next.type = ['string', 'null'];
+    }
+    return next;
   }
 
   /**
-   * Maneja required_action y tool_calls
-   * @param {Object} runStatus - Estado del run
-   * @param {string} threadId - ID del thread
-   * @param {string} runId - ID del run
-   * @param {Object|null} runContext - Contexto del request (aislado por llamada)
+   * Quita function_call sin function_call_output (pares rotos no se pueden reanudar)
+   * @param {Array} items
+   * @returns {Array}
    */
-  async handleRequiredAction(runStatus, threadId, runId, runContext = null) {
-    const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
-    const tool_outputs = await this.processToolCalls(toolCalls, runContext);
+  dropIncompleteToolCalls(items) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return Array.isArray(items) ? items : [];
+    }
 
-    // Enviar los resultados a OpenAI
-    await this.openai.beta.threads.runs.submitToolOutputs(
-      threadId,
-      runId,
-      { tool_outputs }
-    );
+    const callIdsWithOutput = new Set();
+    for (const item of items) {
+      if (item?.type === 'function_call_output' && item.call_id) {
+        callIdsWithOutput.add(item.call_id);
+      }
+    }
+
+    return items.filter((item) => {
+      if (item?.type === 'function_call' && item.call_id && !callIdsWithOutput.has(item.call_id)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  /**
+   * Recorta historial sin romper pares function_call / function_call_output
+   * @param {Array} items
+   * @param {number} maxItems
+   * @returns {Array}
+   */
+  trimHistoryItems(items, maxItems = MAX_HISTORY_ITEMS) {
+    if (!Array.isArray(items) || items.length <= maxItems) {
+      return Array.isArray(items) ? items : [];
+    }
+
+    let start = items.length - maxItems;
+
+    // Si el corte cae en un function_call_output, retroceder para incluir su function_call
+    while (start > 0 && items[start]?.type === 'function_call_output') {
+      start -= 1;
+    }
+
+    // Si aún queda un output huérfano al inicio (no hay call que incluir), descartarlo
+    while (start < items.length && items[start]?.type === 'function_call_output') {
+      start += 1;
+    }
+
+    return items.slice(start);
+  }
+
+  /**
+   * Serializa un Item de output para reenviarlo en input
+   * @param {Object} item
+   * @returns {Object|null}
+   */
+  serializeOutputItem(item) {
+    if (!item || !item.type) {
+      return null;
+    }
+
+    if (item.type === 'function_call') {
+      return {
+        type: 'function_call',
+        call_id: item.call_id,
+        name: item.name,
+        arguments: item.arguments
+      };
+    }
+
+    if (item.type === 'message') {
+      const text = this.extractMessageText(item);
+      return {
+        type: 'message',
+        role: item.role || 'assistant',
+        content: text
+      };
+    }
+
+    // reasoning y otros tipos no se persisten en historial propio
+    return null;
+  }
+
+  /**
+   * Extrae texto de un Item message
+   * @param {Object} item
+   * @returns {string}
+   */
+  extractMessageText(item) {
+    if (!item) return '';
+    if (typeof item.content === 'string') return item.content;
+    if (!Array.isArray(item.content)) return '';
+
+    return item.content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part?.type === 'output_text' || part?.type === 'text') {
+          return part.text || '';
+        }
+        return '';
+      })
+      .join('')
+      .trim();
   }
 
   /**
    * Ejecuta enviar_pdf
    * @param {Object} args
-   * @param {Object|null} runContext - Contexto del request actual
+   * @param {Object|null} runContext
    * @returns {Promise<Object>}
    */
   async executeEnviarPdf(args, runContext = null) {
@@ -229,84 +256,115 @@ class OpenAIManager {
   }
 
   /**
-   * Procesa tool_calls
-   * @param {Array} toolCalls - Lista de tool calls
-   * @param {Object|null} runContext - Contexto del request actual
-   * @returns {Array} - Tool outputs
+   * Ejecuta una function_call de Responses
+   * @param {Object} functionCall
+   * @param {Object|null} runContext
+   * @returns {Promise<Object>}
    */
-  async processToolCalls(toolCalls, runContext = null) {
-    const tool_outputs = [];
-    for (const toolCall of toolCalls) {
-      const functionName = toolCall.function.name;
-      let args = {};
+  async executeFunctionCall(functionCall, runContext = null) {
+    const functionName = functionCall.name;
+    let args = {};
+    try {
+      args = JSON.parse(functionCall.arguments || '{}');
+    } catch (_error) {
+      args = {};
+    }
+
+    if (functionName === 'enviar_pdf') {
       try {
-        args = JSON.parse(toolCall.function.arguments || '{}');
+        console.log('📄 Ejecutando enviar_pdf:', args);
+        return await this.executeEnviarPdf(args, runContext);
       } catch (error) {
-        args = {};
+        console.error('❌ Error en enviar_pdf:', error.message);
+        return { error: error.message || 'Error enviando PDF' };
       }
-      let output = null;
-
-      if (functionName === 'enviar_pdf') {
-        try {
-          console.log('📄 Ejecutando enviar_pdf:', args);
-          output = await this.executeEnviarPdf(args, runContext);
-        } catch (error) {
-          console.error('❌ Error en enviar_pdf:', error.message);
-          output = { error: error.message || 'Error enviando PDF' };
-        }
-      } else {
-        output = { error: `Función ${functionName} no implementada.` };
-      }
-
-      tool_outputs.push({
-        tool_call_id: toolCall.id,
-        output: JSON.stringify(output)
-      });
     }
-    return tool_outputs;
+
+    return { error: `Función ${functionName} no implementada.` };
   }
 
   /**
-   * Obtiene la respuesta del asistente
-   * @param {string} threadId - ID del thread
-   * @returns {string} - Respuesta del asistente
+   * Parsea reply desde output_text o message Items
+   * @param {Object} response
+   * @returns {string}
    */
-  async getAssistantResponse(threadId) {
-    console.log('Run completado, obteniendo mensajes...');
-    // Obtener la respuesta del assistant
-    const messages = await this.openai.beta.threads.messages.list(threadId, {
-      order: 'desc',
-      limit: 1
-    });
-    
-    // Verificar que el mensaje sea del asistente y tenga contenido
-    const lastMsg = messages.data[0];
-    if (lastMsg && lastMsg.role === "assistant" && lastMsg.content && lastMsg.content[0]) {
-      const aiResponse = lastMsg.content[0].text.value;
-      console.log('Respuesta del asistente:', aiResponse);
-      return aiResponse;
-    } else {
-      console.error('No se encontró una respuesta válida del asistente');
-      return "Lo siento, hubo un error procesando tu solicitud. ¿Podrías intentarlo de nuevo?";
+  parseReply(response) {
+    const raw = response.output_text
+      || (response.output || [])
+        .filter((item) => item.type === 'message')
+        .map((item) => this.extractMessageText(item))
+        .join('')
+        .trim();
+
+    if (!raw) {
+      return 'Lo siento, no pude generar una respuesta. ¿Puedes intentar de nuevo?';
     }
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.reply === 'string') {
+        return parsed.reply;
+      }
+    } catch (_error) {
+      // Si no es JSON, devolver texto plano
+    }
+
+    return raw;
   }
 
   /**
-   * Procesa un mensaje completo con OpenAI
-   * @param {string} userId - ID del usuario
-   * @param {string} message - Mensaje del usuario
-   * @param {string} assistantId - ID del asistente a usar
-   * @param {string} clientCode - Código del cliente (opcional, para threads)
-   * @param {Object} context - Contexto para tools (instanceId, ultraMsgManager, documentStore)
-   * @returns {string} - Respuesta del asistente
+   * Devuelve string (webhook) u objeto con traza (playground)
+   * @param {Object} context
+   * @param {string} reply
+   * @param {Object} [extra]
+   * @returns {string|Object}
    */
-  async processMessage(userId, message, assistantId, clientCode = 'default', context = {}) {
-    // Obtener o crear thread para el usuario y cliente
-    const threadId = await this.getOrCreateThread(userId, clientCode);
+  wrapProcessResult(context, reply, extra = {}) {
+    if (!context || !context.returnTrace) {
+      return reply;
+    }
+    return {
+      reply,
+      tools: Array.isArray(extra.tools) ? extra.tools : [],
+      locked: Boolean(extra.locked),
+      items: Array.isArray(extra.items) ? extra.items : []
+    };
+  }
 
-    // Verificar si hay un run activo
-    if (this.hasActiveRun(threadId)) {
-      throw new Error('Por favor espera a que termine la respuesta anterior.');
+  /**
+   * Lee una sesión (incluye items). Null si no existe.
+   * @param {string} userId
+   * @param {string} clientCode
+   * @returns {Promise<Object|null>}
+   */
+  async getSession(userId, clientCode) {
+    return this.firebaseService.getBotSession(userId, clientCode);
+  }
+
+  /**
+   * Procesa un mensaje con Responses API + historial en Firestore
+   * @param {string} userId
+   * @param {string} message
+   * @param {string} clientCode
+   * @param {Object} context
+   * @returns {Promise<string|Object>}
+   */
+  async processMessage(userId, message, clientCode = 'default', context = {}) {
+    const assistant = await this.firebaseService.getAssistantByClientId(clientCode);
+    if (!assistant || assistant.status === 'deleted') {
+      return this.wrapProcessResult(
+        context,
+        '❌ Error: Configuración del asistente incompleta. Contacta al administrador.'
+      );
+    }
+
+    const locked = await this.firebaseService.tryLockBotSession(userId, clientCode);
+    if (!locked) {
+      return this.wrapProcessResult(
+        context,
+        'Por favor espera a que termine la respuesta anterior.',
+        { locked: true }
+      );
     }
 
     // Contexto local por request: evita que peticiones concurrentes se pisen
@@ -315,111 +373,209 @@ class OpenAIManager {
       clientId: clientCode,
       instanceId: context.instanceId || null,
       ultraMsgManager: context.ultraMsgManager || null,
-      documentStore: context.documentStore || null
+      documentStore: context.documentStore || null,
+      toolTrace: []
     };
 
-    // Agregar el mensaje al thread
-    await this.addMessageToThread(threadId, message);
+    let items = null;
 
-    // Obtener mensajes anteriores para contexto
-    await this.getPreviousMessages(threadId, 5);
+    try {
+      const session = await this.firebaseService.getOrCreateBotSession(userId, clientCode);
+      items = Array.isArray(session.items) ? [...session.items] : [];
 
-    const additionalInstructions = await this.buildDocumentsInstructions(
-      clientCode,
-      context.documentStore
-    );
+      const userItem = { type: 'message', role: 'user', content: message };
+      items.push(userItem);
 
-    // Crear y ejecutar el run con el asistente específico
-    const run = await this.createRun(threadId, assistantId, additionalInstructions);
-
-    // Esperar a que termine el run (pasa runContext a tool calls)
-    const runStatusObj = await this.waitForRunCompletion(threadId, run.id, runContext);
-
-    // Obtener respuesta del asistente
-    if (runStatusObj.status === "completed") {
-      return await this.getAssistantResponse(threadId);
-    } else {
-      console.error('El run falló o no se completó:', runStatusObj.status);
-      if (runStatusObj.last_error) {
-        console.error('Error del run:', runStatusObj.last_error);
-      }
-      return "Hubo un error procesando tu mensaje. Intenta de nuevo.";
-    }
-  }
-
-  /**
-   * Resetea todos los threads
-   */
-  resetThreads() {
-    this.userThreads.clear();
-    console.log('=== Threads reseteados ===');
-  }
-
-  /**
-   * Resetea el thread de un usuario específico para un cliente específico
-   * @param {string} userId - ID del usuario (número de teléfono)
-   * @param {string} clientCode - Código del cliente
-   * @returns {boolean} - True si se encontró y reseteó el thread
-   */
-  resetUserThread(userId, clientCode) {
-    const threadKey = `${userId}_${clientCode}`;
-    const hadThread = this.userThreads.has(threadKey);
-    
-    if (hadThread) {
-      this.userThreads.delete(threadKey);
-      console.log(`=== Thread reseteado para usuario: ${userId}, cliente: ${clientCode} ===`);
-    } else {
-      console.log(`=== No se encontró thread para usuario: ${userId}, cliente: ${clientCode} ===`);
-    }
-    
-    return hadThread;
-  }
-
-  /**
-   * Resetea todos los threads de un usuario específico (para todos los clientes)
-   * @param {string} userId - ID del usuario (número de teléfono)
-   * @returns {number} - Número de threads reseteados
-   */
-  resetAllUserThreads(userId) {
-    let resetCount = 0;
-    const threadsToDelete = [];
-    
-    // Encontrar todos los threads del usuario
-    for (const [threadKey, threadId] of this.userThreads.entries()) {
-      if (threadKey.startsWith(`${userId}_`)) {
-        threadsToDelete.push(threadKey);
-      }
-    }
-    
-    // Eliminar los threads encontrados
-    threadsToDelete.forEach(threadKey => {
-      this.userThreads.delete(threadKey);
-      resetCount++;
-    });
-    
-    console.log(`=== ${resetCount} threads reseteados para usuario: ${userId} ===`);
-    return resetCount;
-  }
-
-  /**
-   * Obtiene información de todos los threads activos
-   * @returns {Array} - Lista de threads con información
-   */
-  getAllThreadsInfo() {
-    const threadsInfo = [];
-    
-    for (const [threadKey, threadId] of this.userThreads.entries()) {
-      const [userId, clientCode] = threadKey.split('_');
-      threadsInfo.push({
-        threadKey,
-        threadId,
-        userId,
+      const docsInstructions = await this.buildDocumentsInstructions(
         clientCode,
-        hasActiveRun: this.hasActiveRun(threadId)
+        context.documentStore
+      );
+      const instructions = [assistant.prompt || '', docsInstructions]
+        .filter(Boolean)
+        .join('\n\n');
+
+      const tools = this.normalizeToolsForResponses(
+        Array.isArray(assistant.tools) ? assistant.tools : []
+      );
+      const responseSchema = assistant.responseSchema
+        || FirebaseService.DEFAULT_RESPONSE_SCHEMA;
+      const config = assistant.config || {};
+
+      let loops = 0;
+      let finalResponse = null;
+
+      while (loops < MAX_TOOL_LOOPS) {
+        loops += 1;
+        await this.firebaseService.refreshBotSessionLock(userId, clientCode);
+
+        const request = {
+          model: this.model,
+          instructions,
+          input: items,
+          store: false,
+          tools: tools.length ? tools : undefined,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'whatsapp_reply',
+              strict: true,
+              schema: responseSchema
+            }
+          }
+        };
+
+        if (config.temperature !== undefined) {
+          request.temperature = config.temperature;
+        }
+        if (config.max_output_tokens !== undefined) {
+          request.max_output_tokens = config.max_output_tokens;
+        } else if (config.max_tokens !== undefined) {
+          request.max_output_tokens = config.max_tokens;
+        }
+
+        console.log(`Responses create (loop ${loops}) para ${userId}_${clientCode}`);
+        const response = await this.openai.responses.create(request);
+        finalResponse = response;
+
+        const output = Array.isArray(response.output) ? response.output : [];
+        const functionCalls = output.filter((item) => item.type === 'function_call');
+
+        // Persistir todos los items serializables (mensajes + function_calls; sin reasoning)
+        for (const item of output) {
+          const serialized = this.serializeOutputItem(item);
+          if (serialized) {
+            items.push(serialized);
+          }
+        }
+
+        if (functionCalls.length === 0) {
+          break;
+        }
+
+        for (const call of functionCalls) {
+          const result = await this.executeFunctionCall(call, runContext);
+          let args = {};
+          try {
+            args = JSON.parse(call.arguments || '{}');
+          } catch (_error) {
+            args = {};
+          }
+          runContext.toolTrace.push({
+            name: call.name,
+            arguments: args,
+            result
+          });
+          items.push({
+            type: 'function_call_output',
+            call_id: call.call_id,
+            output: JSON.stringify(result)
+          });
+        }
+      }
+
+      if (!finalResponse) {
+        await this.persistSessionItems(userId, clientCode, items);
+        return this.wrapProcessResult(
+          context,
+          'Hubo un error procesando tu mensaje. Intenta de nuevo.',
+          { tools: runContext.toolTrace, items }
+        );
+      }
+
+      const reply = this.parseReply(finalResponse);
+      await this.persistSessionItems(userId, clientCode, items);
+
+      return this.wrapProcessResult(context, reply, {
+        tools: runContext.toolTrace,
+        items
       });
+    } catch (error) {
+      console.error('Error procesando mensaje con OpenAI:', error.message);
+      if (Array.isArray(items) && items.length) {
+        try {
+          await this.persistSessionItems(userId, clientCode, items);
+        } catch (saveError) {
+          console.error('Error persistiendo sesión tras fallo:', saveError.message);
+        }
+      }
+      return this.wrapProcessResult(
+        context,
+        'Hubo un error procesando tu mensaje. Intenta de nuevo.',
+        { tools: runContext.toolTrace, items }
+      );
+    } finally {
+      try {
+        await this.firebaseService.unlockBotSession(userId, clientCode);
+      } catch (unlockError) {
+        console.error('Error liberando lock de sesión:', unlockError.message);
+      }
     }
-    
-    return threadsInfo;
+  }
+
+  /**
+   * Guarda items de sesión sin pares de tools rotos
+   * @param {string} userId
+   * @param {string} clientCode
+   * @param {Array} items
+   */
+  async persistSessionItems(userId, clientCode, items) {
+    const cleaned = this.dropIncompleteToolCalls(items);
+    const trimmed = this.trimHistoryItems(cleaned, MAX_HISTORY_ITEMS);
+    await this.firebaseService.saveBotSession(userId, clientCode, {
+      items: trimmed,
+      lockedUntil: null
+    });
+  }
+
+  /**
+   * Resetea todas las sesiones (bot_sessions)
+   * @returns {Promise<number>}
+   */
+  async resetSessions() {
+    const deleted = await this.firebaseService.resetAllBotSessions();
+    console.log(`=== Sesiones reseteadas (${deleted}) ===`);
+    return deleted;
+  }
+
+  /**
+   * Borra una sesión concreta
+   * @param {string} userId
+   * @param {string} clientCode
+   * @returns {Promise<boolean>}
+   */
+  async deleteSession(userId, clientCode) {
+    return this.firebaseService.deleteBotSession(userId, clientCode);
+  }
+
+  /**
+   * Borra todas las sesiones de un usuario
+   * @param {string} userId
+   * @returns {Promise<number>}
+   */
+  async deleteSessionsByUserId(userId) {
+    const deleted = await this.firebaseService.deleteBotSessionsByUserId(userId);
+    console.log(`=== Sesiones eliminadas para usuario ${userId}: ${deleted} ===`);
+    return deleted;
+  }
+
+  /**
+   * Borra todas las sesiones de un consultorio
+   * @param {string} clientCode
+   * @returns {Promise<number>}
+   */
+  async deleteSessionsByClientCode(clientCode) {
+    const deleted = await this.firebaseService.deleteBotSessionsByClientCode(clientCode);
+    console.log(`=== Sesiones eliminadas para consultorio ${clientCode}: ${deleted} ===`);
+    return deleted;
+  }
+
+  /**
+   * Lista sesiones (resumen, sin items)
+   * @param {{ userId?: string, clientCode?: string }} [filters]
+   * @returns {Promise<Object[]>}
+   */
+  async listSessions(filters = {}) {
+    return this.firebaseService.listBotSessions(filters);
   }
 }
 

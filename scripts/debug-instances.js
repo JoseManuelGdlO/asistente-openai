@@ -1,4 +1,4 @@
-const UltraMsgManager = require('./src/managers/ultramsgManager');
+const UltraMsgManager = require('../src/managers/ultramsgManager');
 require('dotenv').config();
 
 async function debugInstances() {

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel admin · Asistente WhatsApp</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login-view" class="login-wrap" hidden>
+    <form id="login-form" class="card login-card">
+      <h1>Panel admin</h1>
+      <p class="muted">Introduce el token <code>ADMIN_API_TOKEN</code> del servidor.</p>
+      <label for="login-token">Token</label>
+      <input id="login-token" type="password" autocomplete="current-password" required>
+      <p id="login-error" class="error" hidden></p>
+      <button type="submit">Entrar</button>
+    </form>
+  </div>
+
+  <div id="app-view" class="app" hidden>
+    <aside class="sidebar">
+      <div class="brand">
+        <strong>Asistente</strong>
+        <span class="muted">Admin</span>
+      </div>
+      <nav>
+        <a href="#/" data-nav="dashboard">Dashboard</a>
+        <a href="#/clients" data-nav="clients">Consultorios</a>
+        <a href="#/sessions" data-nav="sessions">Sesiones</a>
+      </nav>
+      <button type="button" id="logout-btn" class="btn-ghost">Cerrar sesión</button>
+    </aside>
+    <main id="content" class="content"></main>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

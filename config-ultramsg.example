@@ -3,7 +3,7 @@
 
 # OpenAI Configuration
 OPENAI_API_KEY=sk-your-openai-api-key-here
-ASISTENTE_ID=asst-your-assistant-id-here
+OPENAI_MODEL=gpt-4o-mini
 
 # UltraMsg Configuration (reemplaza Meta/WhatsApp)
 ULTRAMSG_TOKEN=your-ultramsg-token-here
@@ -17,20 +17,14 @@ FIREBASE_CLIENT_EMAIL=your-service-account-email@project.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here\n-----END PRIVATE KEY-----\n"
 FIREBASE_DATABASE_URL=https://your-project-id.firebaseio.com
 
-# ==================== CONFIGURACIÓN DE CLIENTES (LEGACY - YA NO SE USA) ====================
-# Los clientes ahora se gestionan desde Firebase
-# Esta configuración se mantiene solo para referencia
+# ==================== CLIENTES ====================
+# Los consultorios viven en Firestore: clients/{id} + Assistants/{id}
+# Seed: npm run create-assistant (SEED_CLIENT_ID, SEED_ADMIN_PHONE, etc.)
 
-# Cliente 1 (ejemplo)
-# CLIENTE001_PHONE=5216181344331@c.us          # Número del administrador
-# CLIENTE001_ASSISTANT_PHONE=6182191002        # Número donde llegan los mensajes del asistente
-# CLIENTE001_NAME=Consultorio Dr. García
-# CLIENTE001_ASSISTANT=asst-abc123
-
-# ==================== ADMIN API (documentos) ====================
-# Token para GET/POST /clients/:clientId/documents
+# ==================== ADMIN API ====================
+# Token para documentos y gestión de sesiones
 # Header: Authorization: Bearer <token>  o  x-admin-token: <token>
 ADMIN_API_TOKEN=change-me-to-a-long-random-secret
 
 # Server Configuration
-PORT=3000 
+PORT=3000

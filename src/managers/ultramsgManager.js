@@ -3,17 +3,23 @@ const FirebaseService = require('../services/firebaseService');
 require('dotenv').config();
 
 class UltraMsgManager {
-  constructor() {
+  constructor(firebaseService = null) {
     this.instances = new Map();
     this.defaultInstance = null;
-    this.firebaseService = new FirebaseService();
+    this.firebaseService = firebaseService || new FirebaseService();
     this.initialized = false;
   }
 
   // Inicializar múltiples instancias de UltraMsg desde Firebase
-  async initializeInstances() {
-    if (this.initialized) {
-      return; // Ya inicializado
+  async initializeInstances(force = false) {
+    if (this.initialized && !force) {
+      return;
+    }
+
+    if (force) {
+      this.instances.clear();
+      this.defaultInstance = null;
+      this.initialized = false;
     }
 
     try {
@@ -275,27 +281,59 @@ class UltraMsgManager {
     }
   }
 
-  // Verificar estado de una instancia específica
+  _ultramsgErrorMessage(error) {
+    const data = error.response?.data;
+    if (!data) return error.message;
+    if (typeof data === 'string') return data;
+    if (typeof data.error === 'string') return data.error;
+    if (data.error) return JSON.stringify(data.error);
+    return error.message;
+  }
+
+  // Verificar estado de una instancia específica (nunca lanza: el panel no debe caer)
   async getInstanceStatus(instanceId = null) {
+    const instance = instanceId ? this.getInstance(instanceId) : this.getDefaultInstance();
+
+    if (!instance) {
+      return {
+        connected: false,
+        error: `No se encontró la instancia UltraMsg: ${instanceId || 'default'}`,
+        instanceId: instanceId || null
+      };
+    }
+
     try {
-      const instance = instanceId ? this.getInstance(instanceId) : this.getDefaultInstance();
-      
-      if (!instance) {
-        throw new Error(`No se encontró la instancia UltraMsg: ${instanceId || 'default'}`);
+      const url = `https://api.ultramsg.com/${instance.instanceId}/instance/status?token=${instance.token}`;
+      const response = await axios.get(url, { timeout: 8000 });
+      const data = response.data || {};
+
+      if (data.error) {
+        const message = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+        console.warn(`⚠️ UltraMsg ${instance.name} (${instance.instanceId}): ${message}`);
+        return {
+          connected: false,
+          error: message,
+          instanceName: instance.name,
+          instanceId: instance.instanceId
+        };
       }
 
-      const url = `https://api.ultramsg.com/${instance.instanceId}/instance/status?token=${instance.token}`;
-      
-      const response = await axios.get(url);
-
+      const substatus = data.status?.accountStatus?.substatus;
       return {
-        ...response.data,
+        ...data,
+        connected: substatus === 'connected',
         instanceName: instance.name,
         instanceId: instance.instanceId
       };
     } catch (error) {
-      console.error('❌ Error obteniendo estado de UltraMsg:', error.response?.data || error.message);
-      throw error;
+      const message = this._ultramsgErrorMessage(error);
+      console.warn(`⚠️ UltraMsg ${instance.name} (${instance.instanceId}): ${message}`);
+      return {
+        connected: false,
+        error: message,
+        instanceName: instance.name,
+        instanceId: instance.instanceId
+      };
     }
   }
 
@@ -325,12 +363,8 @@ class UltraMsgManager {
 
   // Verificar si una instancia específica está conectada
   async isConnected(instanceId = null) {
-    try {
-      const status = await this.getInstanceStatus(instanceId);
-      return status.status.accountStatus.substatus === 'connected';
-    } catch (error) {
-      return false;
-    }
+    const status = await this.getInstanceStatus(instanceId);
+    return Boolean(status.connected);
   }
 
   // Obtener mensajes de una instancia específica
@@ -359,25 +393,11 @@ class UltraMsgManager {
 
   // Verificar estado de todas las instancias
   async getAllInstancesStatus() {
-    const statuses = {};
-    
-    for (const [instanceId, instance] of this.instances) {
-      try {
-        const status = await this.getInstanceStatus(instanceId);
-        statuses[instanceId] = {
-          ...status,
-          connected: status.status.accountStatus.substatus === 'connected'
-        };
-      } catch (error) {
-        statuses[instanceId] = {
-          error: error.message,
-          connected: false,
-          instanceName: instance.name
-        };
-      }
-    }
-    
-    return statuses;
+    const entries = Array.from(this.instances.entries());
+    const results = await Promise.all(
+      entries.map(async ([instanceId]) => [instanceId, await this.getInstanceStatus(instanceId)])
+    );
+    return Object.fromEntries(results);
   }
 
   // Métodos de compatibilidad (para mantener la API existente)

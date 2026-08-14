@@ -1,6 +1,7 @@
 /**
  * Autenticación por token admin (Bearer o x-admin-token).
  * Requiere process.env.ADMIN_API_TOKEN.
+ * Protege el panel y los endpoints de gestión (clientes, assistants, documentos, etc.).
  */
 function requireAdminAuth(req, res, next) {
   const expected = process.env.ADMIN_API_TOKEN;
