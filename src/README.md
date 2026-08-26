@@ -18,6 +18,7 @@ src/
 │   ├── documentStore.js        # PDFs por consultorio
 │   ├── confirmationManager.js  # Confirmaciones cortas
 │   ├── userContextManager.js   # Contexto de agenda/usuario
+│   ├── messageDebounceManager.js # Buffer/flush de chat antes de la IA
 │   └── scheduler.js            # Cron jobs
 ├── controllers/
 │   ├── webhookManager.js       # Webhooks UltraMsg / own
@@ -41,7 +42,7 @@ Cablea dependencias reales, recarga periódica de clientes y `listen`.
 ### `services/`
 - `firebaseService.js`: CRUD de `clients`, `Assistants`, `bot_sessions`
 - `commandManager.js`: resolución cliente/Assistant y comandos admin
-- `documentStore.js`, `confirmationManager.js`, `userContextManager.js`, `scheduler.js`
+- `documentStore.js`, `confirmationManager.js`, `userContextManager.js`, `messageDebounceManager.js`, `scheduler.js`
 
 ### `controllers/`
 - `webhookManager.js`: orquesta mensajes entrantes

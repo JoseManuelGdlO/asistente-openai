@@ -28,3 +28,8 @@ ADMIN_API_TOKEN=change-me-to-a-long-random-secret
 
 # Server Configuration
 PORT=3000
+
+# Debounce de mensajes de chat (junta burbujas seguidas en un turno)
+# 0 desactiva el buffer y procesa al momento
+MESSAGE_DEBOUNCE_MS=2500
+MESSAGE_DEBOUNCE_MAX_MS=8000

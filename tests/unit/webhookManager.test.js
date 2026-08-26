@@ -8,6 +8,13 @@ function createManager(overrides = {}) {
     tryClaimWebhookMessage: jest.fn().mockResolvedValue(true),
     markWebhookMessageCompleted: jest.fn().mockResolvedValue(undefined),
     releaseWebhookMessage: jest.fn().mockResolvedValue(undefined),
+    isBotSessionLocked: jest.fn().mockResolvedValue(false),
+    enqueuePendingChatMessage: jest.fn().mockResolvedValue({
+      accepted: true,
+      flushAt: new Date(Date.now() + 2500)
+    }),
+    claimPendingChatFlush: jest.fn().mockResolvedValue({ claimed: false, reason: 'empty' }),
+    sessionId: (userId, clientCode) => `${userId}_${clientCode}`,
     ...overrides.firebaseService
   };
 
@@ -198,5 +205,38 @@ describe('WebhookManager', () => {
     });
     expect(result.reason).toBe('assistant_missing');
     expect(ultraMsgManager.sendMessage).toHaveBeenCalled();
+  });
+
+  it('encola chat y no llama a OpenAI en el request (debounce > 0)', async () => {
+    const prev = process.env.MESSAGE_DEBOUNCE_MS;
+    process.env.MESSAGE_DEBOUNCE_MS = '2500';
+    const { wm, openAIManager, firebaseService } = createManager();
+    try {
+      const result = await wm.processMessage({
+        from: '521555@c.us',
+        to: '521000@c.us',
+        body: 'hola'
+      });
+      expect(result.reason).toBe('ai_queued');
+      expect(openAIManager.processMessage).not.toHaveBeenCalled();
+      expect(firebaseService.enqueuePendingChatMessage).toHaveBeenCalled();
+    } finally {
+      process.env.MESSAGE_DEBOUNCE_MS = prev;
+    }
+  });
+
+  it('ignora chat si la sesión está locked', async () => {
+    const { wm, openAIManager } = createManager({
+      firebaseService: {
+        isBotSessionLocked: jest.fn().mockResolvedValue(true)
+      }
+    });
+    const result = await wm.processMessage({
+      from: '521555@c.us',
+      to: '521000@c.us',
+      body: 'hola'
+    });
+    expect(result.reason).toBe('ignored_locked');
+    expect(openAIManager.processMessage).not.toHaveBeenCalled();
   });
 });

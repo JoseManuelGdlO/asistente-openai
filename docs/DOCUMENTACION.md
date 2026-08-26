@@ -116,7 +116,9 @@ Claim en webhook_dedup (ultra:{id} / own:{id})
 Identificar consultorio por número del asistente
 Cargar Assistants/{clientId} (par 1:1 obligatorio)
         ↓
-OpenAI Responses API (instructions + historial Items + tools)
+Buffer de debounce por sesión (MESSAGE_DEBOUNCE_MS; ACK HTTP 200)
+        ↓
+Al vencer el silencio: un lock + un lote unido a OpenAI Responses API
         ↓
 Respuesta de texto → UltraMsg → WhatsApp del paciente
 (Si la IA pidió enviar_pdf → también se envía el PDF)
@@ -188,9 +190,11 @@ Para no mezclar conversaciones:
 - En cada turno se reenvía `input = items` + el mensaje nuevo.
 - Límite ~40 Items al guardar (sin romper pares function_call / function_call_output).
 - Lock `lockedUntil` (TTL inicial **180s**): evita dos respuestas concurrentes a la misma sesión.
+- **Debounce**: `pendingMessages[]` + `flushAt`. Varios textos seguidos se juntan con `\n` y se mandan en un solo turno. Timer `MESSAGE_DEBOUNCE_MS` (default **2500**), tope `MESSAGE_DEBOUNCE_MAX_MS` (default **8000**) desde el primer mensaje del lote. `MESSAGE_DEBOUNCE_MS=0` desactiva el buffer (procesa al momento).
+- El lock **no** se toma durante la espera del debounce. El HTTP 200 del webhook se envía al **encolar**; el flush a la IA corre en segundo plano.
 - **Heartbeat**: en cada loop de tools se renueva `lockedUntil` (`refreshBotSessionLock`), para que un ciclo lento de hasta 8 tools no deje entrar otra petición.
 - Si `responses.create` falla a mitad, se persiste el Item `user` (y pares de tools completos). Los `function_call` sin `function_call_output` se descartan. El lock se libera en `finally`.
-- Si el lock está ocupado, no se appenda el mensaje: se responde *“Por favor espera a que termine la respuesta anterior.”*
+- Si el lock está ocupado (IA pensando), el mensaje nuevo **se ignora**: no se appendea, no se llama a OpenAI y no se envía nada por WhatsApp.
 
 **Endpoints** (requieren `ADMIN_API_TOKEN`):
 
@@ -209,8 +213,8 @@ Firma: `OpenAIManager.processMessage(userId, message, clientCode, context)`.
 Pasos internos:
 
 1. Cargar `Assistants/{clientCode}`; si no existe, devolver aviso de config incompleta (no lanza).
-2. Adquirir lock de `bot_sessions/{userId_clientCode}` (180s). Si está ocupado, devolver aviso de espera.
-3. Cargar o crear sesión; append Item `user`.
+2. Adquirir lock de `bot_sessions/{userId_clientCode}` (180s). Si está ocupado, no enviar reply (playground: `locked: true` y `reply` vacío). El flush de debounce pasa `alreadyLocked`.
+3. Cargar o crear sesión; append Item `user` (el lote ya unido si vino del debounce).
 4. Construir `instructions` = prompt + documentos disponibles.
 5. Llamar `responses.create` con `input`, `tools`, `text.format`, `store: false`. Al inicio de cada loop, renovar el lock.
 6. Si hay `function_call` → ejecutar `enviar_pdf`, append outputs, repetir (máx. 8 loops).
@@ -258,9 +262,9 @@ Variables opcionales: `SEED_CLIENT_ID`, `SEED_CLIENT_NAME`, `SEED_ADMIN_PHONE`, 
 
 ### 5.10 Costes y rendimiento (visión práctica)
 
-- Cada mensaje normal = al menos una llamada Responses (más si hay tools).
+- Cada lote de debounce = al menos una llamada Responses (más si hay tools). Varios textos en 2–3 s cuentan como un turno.
 - Las confirmaciones cortas evitan ese coste.
-- Si el usuario manda varios mensajes mientras la sesión está locked, el segundo puede fallar con el mensaje de espera.
+- Si el usuario manda un mensaje mientras la sesión está locked, se ignora (sin aviso de espera).
 
 ---
 
@@ -292,7 +296,7 @@ https://tu-dominio.com/webhook
 
 El servidor valida el token (`?token=` o header `x-webhook-token`).
 
-Tras identificar el mensaje se hace claim en `webhook_dedup`. Avisos de negocio (consultorio no identificado, bot apagado, Assistant faltante) se envían por WhatsApp y el webhook responde **200**. Si el envío o un fallo inesperado lanza, se libera el claim y se responde **500** para que UltraMsg reintente.
+Tras identificar el mensaje se hace claim en `webhook_dedup`. El chat de paciente se **encola** en el debounce y el webhook responde **200** sin esperar a OpenAI. Avisos de negocio (consultorio no identificado, bot apagado, Assistant faltante) se envían por WhatsApp y también responden **200**. Si el envío o un fallo inesperado lanza, se libera el claim y se responde **500** para que UltraMsg reintente. Comandos, confirmaciones y PDFs no entran al buffer.
 
 ---
 
@@ -469,12 +473,13 @@ En la pestaña **Assistant** hay un chat de prueba que llama a OpenAI y Firestor
 - Usuario fijo: `playground_{clientId}` (no se mezcla con pacientes).
 - Usa el Assistant **ya guardado** (prompt/tools/schema de Firestore). Probar el textarea sin guardar queda pendiente.
 - `enviar_pdf` resuelve PDFs reales del consultorio pero no envía WhatsApp; en el chat aparece `PDF simulado: archivo.pdf` (o el error si el id no existe).
+- El chat usa el **mismo debounce** que WhatsApp (`MESSAGE_DEBOUNCE_MS` / `MESSAGE_DEBOUNCE_MAX_MS`): varios envíos seguidos se juntan con `\n` en un turno. El POST responde al encolar (`queued: true`); el panel hace poll de `GET` hasta el reply. Si hay lock, el mensaje se ignora. Con `MESSAGE_DEBOUNCE_MS=0` procesa al momento (tests).
 - La sesión persiste en `bot_sessions`. Se reinicia con **Nueva conversación**, al **guardar** el Assistant, o al resetear sesiones del consultorio. Cambiar de consultorio carga la sesión playground de ese agente (no borra la anterior).
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| GET | `/playground/:clientId` | Historial (`items`) de la sesión playground |
-| POST | `/playground/:clientId/chat` | Envía un mensaje `{ message, reset? }` y devuelve `reply`, `tools`, `simulatedDocuments` |
+| GET | `/playground/:clientId` | Historial (`items`), `pendingMessages`, `flushAt`, `locked` |
+| POST | `/playground/:clientId/chat` | Encola `{ message, reset? }`; `queued` o `reply` si debounce=0 |
 
 ---
 
@@ -586,8 +591,8 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| GET | `/playground/:clientId` | Lee `items` de `playground_{clientId}` |
-| POST | `/playground/:clientId/chat` | Chat de prueba (OpenAI real, sin WhatsApp) |
+| GET | `/playground/:clientId` | Lee `items`, pending de debounce y lock de `playground_{clientId}` |
+| POST | `/playground/:clientId/chat` | Chat de prueba (mismo debounce que WhatsApp; sin envío real) |
 
 ### Documentos (requieren `ADMIN_API_TOKEN`)
 
@@ -645,6 +650,8 @@ Copia `config-ultramsg.example` a `.env` y completa. Lo esencial:
 | `ULTRAMSG_TOKEN` / `INSTANCE_ID` / `WEBHOOK_TOKEN` | WhatsApp (fallback) |
 | `FIREBASE_CREDENTIALS` | JSON de service account |
 | `ADMIN_API_TOKEN` | Panel admin y API de gestión (clientes, assistants, playground, documentos, sesiones, bots, scheduler, UltraMsg) |
+| `MESSAGE_DEBOUNCE_MS` | Silencio antes de flush a la IA (default `2500`; `0` desactiva el buffer) |
+| `MESSAGE_DEBOUNCE_MAX_MS` | Tope del lote desde el primer mensaje (default `8000`) |
 | `PORT` | Puerto (default 3000) |
 | `UPLOADS_DIR` | Carpeta de PDFs (opcional) |
 

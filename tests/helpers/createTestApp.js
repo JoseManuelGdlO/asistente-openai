@@ -43,6 +43,8 @@ function createStubDeps(overrides = {}) {
     deleteSessionsByUserId: fnAsync(0),
     deleteSessionsByClientCode: fnAsync(0),
     deleteSession: fnAsync(true),
+    getSession: fnAsync(null),
+    processMessage: fnAsync({ reply: 'ok', tools: [], locked: false }),
     firebaseService,
     ...overrides.openAIManager
   };

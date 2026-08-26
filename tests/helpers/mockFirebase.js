@@ -99,10 +99,14 @@ function createInMemoryFirestore() {
       for (const [id, data] of col.entries()) {
         const matches = this.filters.every(({ field, op, value }) => {
           if (op === '==') return data[field] === value;
-          if (op === '<') {
+          if (op === '<' || op === '<=' || op === '>' || op === '>=') {
             const left = toMillis(data[field]);
             const right = toMillis(value);
-            return left != null && right != null && left < right;
+            if (left == null || right == null) return false;
+            if (op === '<') return left < right;
+            if (op === '<=') return left <= right;
+            if (op === '>') return left > right;
+            return left >= right;
           }
           return false;
         });

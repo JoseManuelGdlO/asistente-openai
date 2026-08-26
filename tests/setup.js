@@ -13,3 +13,5 @@ process.env.FIREBASE_CREDENTIALS = process.env.FIREBASE_CREDENTIALS || JSON.stri
   auth_uri: 'https://accounts.google.com/o/oauth2/auth',
   token_uri: 'https://oauth2.googleapis.com/token'
 });
+process.env.MESSAGE_DEBOUNCE_MS = process.env.MESSAGE_DEBOUNCE_MS || '0';
+process.env.MESSAGE_DEBOUNCE_MAX_MS = process.env.MESSAGE_DEBOUNCE_MAX_MS || '8000';

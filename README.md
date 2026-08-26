@@ -28,6 +28,7 @@ src/
 ├── services/                   # ⚙️ Servicios de negocio
 │   ├── confirmationManager.js  # ✅ Gestor de confirmaciones
 │   ├── userContextManager.js   # 👤 Gestor de contexto de usuario
+│   ├── messageDebounceManager.js # Buffer/flush de chat antes de la IA
 │   └── scheduler.js           # ⏰ Scheduler de tareas
 ├── controllers/                # 🎮 Controladores de endpoints
 │   ├── webhookManager.js      # 🌐 Controlador de webhooks
@@ -65,6 +66,10 @@ FIREBASE_DATABASE_URL=https://tu-proyecto-id.firebaseio.com
 
 # Admin panel + API de gestión
 ADMIN_API_TOKEN=change-me-to-a-long-random-secret
+
+# Debounce de mensajes de chat (junta burbujas seguidas en un turno)
+MESSAGE_DEBOUNCE_MS=2500
+MESSAGE_DEBOUNCE_MAX_MS=8000
 
 # Server Configuration
 PORT=3000
@@ -163,7 +168,7 @@ Los endpoints de gestión (`/clients`, `/assistants`, `/playground`, `/bots`, `/
 
 ### Playground (requieren `ADMIN_API_TOKEN`)
 - `GET /playground/:clientId` - Historial de la sesión `playground_{clientId}`
-- `POST /playground/:clientId/chat` - Enviar un mensaje de prueba (`{ message, reset? }`)
+- `POST /playground/:clientId/chat` - Enviar un mensaje de prueba (`{ message, reset? }`; debounce igual que WhatsApp)
 
 ### Scheduler (requieren `ADMIN_API_TOKEN`)
 - `GET /scheduler/status` - Estado de tareas programadas

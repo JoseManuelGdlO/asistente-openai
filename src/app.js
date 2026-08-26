@@ -3,6 +3,7 @@ const path = require('path');
 const cors = require('cors');
 const multer = require('multer');
 const requireAdminAuth = require('./middleware/requireAdminAuth');
+const { readDebounceConfig } = require('./services/messageDebounceManager');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
 
@@ -23,6 +24,38 @@ function stripEmptyUltraMsgFields(data) {
 
 function playgroundUserId(clientId) {
   return `playground_${clientId}`;
+}
+
+function timestampToIso(value) {
+  if (!value) return null;
+  if (typeof value.toDate === 'function') {
+    return value.toDate().toISOString();
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function timestampToMs(value) {
+  if (!value) return null;
+  if (typeof value.toMillis === 'function') {
+    return value.toMillis();
+  }
+  if (typeof value.toDate === 'function') {
+    return value.toDate().getTime();
+  }
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isSessionLockedNow(session) {
+  const ms = timestampToMs(session?.lockedUntil);
+  return Number.isFinite(ms) && ms > Date.now();
 }
 
 function createUploadPdf() {
@@ -105,6 +138,10 @@ function createApp(deps = {}) {
           console.log('Assistant faltante; se envió aviso (UltraMsg)');
         } else if (result.reason === 'media_download_failed') {
           console.log('Error descargando adjunto; se envió aviso (UltraMsg)');
+        } else if (result.reason === 'ai_queued') {
+          console.log('Mensaje encolado para debounce (UltraMsg)');
+        } else if (result.reason === 'ignored_locked') {
+          console.log('Mensaje ignorado: sesión ocupada (UltraMsg)');
         } else {
           console.log('Mensaje procesado exitosamente');
         }
@@ -145,6 +182,10 @@ function createApp(deps = {}) {
           console.log('Bot inactivo; se envió aviso (own system)');
         } else if (result.reason === 'assistant_missing') {
           console.log('Assistant faltante; se envió aviso (own system)');
+        } else if (result.reason === 'ai_queued') {
+          console.log('Mensaje encolado para debounce (own system)');
+        } else if (result.reason === 'ignored_locked') {
+          console.log('Mensaje ignorado: sesión ocupada (own system)');
         } else {
           console.log('Mensaje procesado exitosamente (own system)');
         }
@@ -682,11 +723,17 @@ function createApp(deps = {}) {
 
       const userId = playgroundUserId(clientId);
       const session = await openAIManager.getSession(userId, clientId);
+      const debounce = readDebounceConfig();
       res.json({
         ok: true,
         userId,
         clientId,
-        items: Array.isArray(session?.items) ? session.items : []
+        items: Array.isArray(session?.items) ? session.items : [],
+        pendingMessages: Array.isArray(session?.pendingMessages) ? session.pendingMessages : [],
+        flushAt: timestampToIso(session?.flushAt),
+        locked: isSessionLockedNow(session),
+        debounceMs: debounce.debounceMs,
+        debounceMaxMs: debounce.maxMs
       });
     } catch (error) {
       console.error('Error leyendo playground:', error);
@@ -732,12 +779,68 @@ function createApp(deps = {}) {
         }
       };
 
-      const result = await openAIManager.processMessage(userId, message, clientId, {
+      const processContext = {
         ultraMsgManager: fakeTransport,
         documentStore,
         returnTrace: true
-      });
+      };
 
+      const debounceManager = webhookManager?.debounceManager;
+      if (debounceManager && typeof debounceManager.queueChatMessage === 'function') {
+        const queued = await debounceManager.queueChatMessage({
+          userId,
+          clientCode: clientId,
+          text: message,
+          flushContext: {
+            origin: 'playground',
+            clientId
+          },
+          processContext
+        });
+
+        if (!queued.accepted) {
+          return res.json({
+            ok: true,
+            userId,
+            queued: false,
+            reason: 'ignored_locked',
+            reply: '',
+            tools: [],
+            simulatedDocuments: [],
+            locked: true
+          });
+        }
+
+        if (queued.reason === 'processed') {
+          const payload = typeof queued.reply === 'string'
+            ? { reply: queued.reply, tools: [], locked: false, items: [] }
+            : (queued.reply || {});
+          return res.json({
+            ok: true,
+            userId,
+            queued: false,
+            reason: 'ai_reply',
+            reply: payload.reply,
+            tools: payload.tools || [],
+            simulatedDocuments: captured,
+            locked: Boolean(payload.locked)
+          });
+        }
+
+        return res.json({
+          ok: true,
+          userId,
+          queued: true,
+          reason: 'ai_queued',
+          reply: '',
+          tools: [],
+          simulatedDocuments: [],
+          locked: false,
+          flushAt: queued.flushAt ? timestampToIso(queued.flushAt) : null
+        });
+      }
+
+      const result = await openAIManager.processMessage(userId, message, clientId, processContext);
       const payload = typeof result === 'string'
         ? { reply: result, tools: [], locked: false, items: [] }
         : result;

@@ -604,6 +604,36 @@ class FirebaseService {
     return `${userId}_${clientCode}`;
   }
 
+  _toMillis(value) {
+    if (!value) return 0;
+    if (typeof value.toDate === 'function') {
+      const ms = value.toDate()?.getTime?.();
+      return Number.isFinite(ms) ? ms : 0;
+    }
+    const ms = new Date(value).getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  _isSessionLocked(data, now = Date.now()) {
+    if (!data) return false;
+    const lockMs = this._toMillis(data.lockedUntil);
+    return Boolean(lockMs && lockMs > now);
+  }
+
+  /**
+   * True si lockedUntil de la sesión sigue vigente
+   * @param {string} userId
+   * @param {string} clientCode
+   * @returns {Promise<boolean>}
+   */
+  async isBotSessionLocked(userId, clientCode) {
+    const session = await this.getBotSession(userId, clientCode);
+    if (!session) {
+      return false;
+    }
+    return this._isSessionLocked(session);
+  }
+
   /**
    * Obtiene una sesión de conversación
    * @param {string} userId
@@ -623,7 +653,10 @@ class FirebaseService {
         ...data,
         createdAt: data.createdAt?.toDate?.() || data.createdAt,
         updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
-        lockedUntil: data.lockedUntil?.toDate?.() || data.lockedUntil
+        lockedUntil: data.lockedUntil?.toDate?.() || data.lockedUntil,
+        pendingStartedAt: data.pendingStartedAt?.toDate?.() || data.pendingStartedAt || null,
+        flushAt: data.flushAt?.toDate?.() || data.flushAt || null,
+        pendingMessages: Array.isArray(data.pendingMessages) ? data.pendingMessages : []
       };
     } catch (error) {
       console.error('❌ Error obteniendo bot_session:', error);
@@ -648,6 +681,10 @@ class FirebaseService {
       userId,
       clientCode,
       items: [],
+      pendingMessages: [],
+      pendingStartedAt: null,
+      flushAt: null,
+      pendingFlushContext: null,
       lockedUntil: null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -702,6 +739,10 @@ class FirebaseService {
             userId,
             clientCode,
             items: [],
+            pendingMessages: [],
+            pendingStartedAt: null,
+            flushAt: null,
+            pendingFlushContext: null,
             lockedUntil,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -759,6 +800,190 @@ class FirebaseService {
       },
       { merge: true }
     );
+  }
+
+  _sanitizeFlushContext(flushContext) {
+    if (!flushContext || typeof flushContext !== 'object') {
+      return {};
+    }
+    const blocked = new Set(['apiKey', 'OWN_API_KEY', 'ownApiKey']);
+    const rest = {};
+    for (const [key, value] of Object.entries(flushContext)) {
+      if (!blocked.has(key)) {
+        rest[key] = value;
+      }
+    }
+    return rest;
+  }
+
+  /**
+   * Appendea texto al buffer de debounce. No toma el lock.
+   * @param {string} userId
+   * @param {string} clientCode
+   * @param {string} text
+   * @param {Object} [flushContext]
+   * @param {{ debounceMs?: number, maxMs?: number, now?: number }} [options]
+   * @returns {Promise<{ accepted: boolean, reason?: string, flushAt?: Date }>}
+   */
+  async enqueuePendingChatMessage(userId, clientCode, text, flushContext = {}, options = {}) {
+    const id = this.sessionId(userId, clientCode);
+    const ref = this.botSessionsCollection.doc(id);
+    const now = Number.isFinite(options.now) ? options.now : Date.now();
+    const debounceMs = Number.isFinite(options.debounceMs) ? Math.max(0, options.debounceMs) : 2500;
+    const maxMs = Number.isFinite(options.maxMs) ? Math.max(debounceMs, options.maxMs) : Math.max(debounceMs, 8000);
+    const sanitizedContext = this._sanitizeFlushContext(flushContext);
+    const message = typeof text === 'string' ? text : String(text ?? '');
+
+    let result = { accepted: false, reason: 'locked' };
+
+    await this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const data = snap.exists ? (snap.data() || {}) : {};
+
+      if (snap.exists && this._isSessionLocked(data, now)) {
+        result = { accepted: false, reason: 'locked' };
+        return;
+      }
+
+      const pendingMessages = Array.isArray(data.pendingMessages) ? [...data.pendingMessages] : [];
+      pendingMessages.push(message);
+
+      const startedMs = pendingMessages.length === 1
+        ? now
+        : (this._toMillis(data.pendingStartedAt) || now);
+      const flushAtMs = Math.min(now + debounceMs, startedMs + maxMs);
+      const flushAt = new Date(flushAtMs);
+      const pendingStartedAt = new Date(startedMs);
+      const nextContext = {
+        ...(data.pendingFlushContext && typeof data.pendingFlushContext === 'object'
+          ? data.pendingFlushContext
+          : {}),
+        ...sanitizedContext
+      };
+
+      const payload = {
+        userId,
+        clientCode,
+        pendingMessages,
+        pendingStartedAt,
+        flushAt,
+        pendingFlushContext: nextContext,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+
+      if (!snap.exists) {
+        tx.set(ref, {
+          items: [],
+          lockedUntil: null,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          ...payload
+        });
+      } else {
+        tx.update(ref, payload);
+      }
+
+      result = { accepted: true, flushAt };
+    });
+
+    return result;
+  }
+
+  /**
+   * Reclama el lote pendiente y toma el lock en la misma transacción.
+   * @param {string} userId
+   * @param {string} clientCode
+   * @param {{ lockMs?: number, now?: number }} [options]
+   * @returns {Promise<{ claimed: boolean, reason?: string, flushAt?: Date, messages?: string[], flushContext?: Object }>}
+   */
+  async claimPendingChatFlush(userId, clientCode, options = {}) {
+    const id = this.sessionId(userId, clientCode);
+    const ref = this.botSessionsCollection.doc(id);
+    const now = Number.isFinite(options.now) ? options.now : Date.now();
+    const lockMs = Number.isFinite(options.lockMs) ? options.lockMs : 180000;
+
+    let result = { claimed: false, reason: 'empty' };
+
+    await this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) {
+        result = { claimed: false, reason: 'empty' };
+        return;
+      }
+
+      const data = snap.data() || {};
+      const pendingMessages = Array.isArray(data.pendingMessages) ? data.pendingMessages : [];
+      if (!pendingMessages.length) {
+        result = { claimed: false, reason: 'empty' };
+        return;
+      }
+
+      const flushAtMs = this._toMillis(data.flushAt);
+      if (flushAtMs && flushAtMs > now) {
+        result = {
+          claimed: false,
+          reason: 'too_early',
+          flushAt: data.flushAt?.toDate?.() || data.flushAt || new Date(flushAtMs)
+        };
+        return;
+      }
+
+      if (this._isSessionLocked(data, now)) {
+        result = { claimed: false, reason: 'locked' };
+        return;
+      }
+
+      const lockedUntil = new Date(now + lockMs);
+      const flushContext = data.pendingFlushContext && typeof data.pendingFlushContext === 'object'
+        ? data.pendingFlushContext
+        : {};
+
+      tx.update(ref, {
+        pendingMessages: [],
+        pendingStartedAt: null,
+        flushAt: null,
+        pendingFlushContext: null,
+        lockedUntil,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      result = {
+        claimed: true,
+        messages: pendingMessages,
+        flushContext
+      };
+    });
+
+    return result;
+  }
+
+  /**
+   * Sesiones con flushAt vencido y mensajes pendientes (sweep post-restart).
+   * @param {Date} [now]
+   * @returns {Promise<Array<{ userId: string, clientCode: string, flushAt: Date|null }>>}
+   */
+  async listSessionsDueForFlush(now = new Date()) {
+    try {
+      const snapshot = await this.botSessionsCollection
+        .where('flushAt', '<=', now)
+        .get();
+      return snapshot.docs
+        .map((doc) => {
+          const data = doc.data() || {};
+          const pending = Array.isArray(data.pendingMessages) ? data.pendingMessages : [];
+          if (!pending.length || !data.userId || !data.clientCode) {
+            return null;
+          }
+          return {
+            userId: data.userId,
+            clientCode: data.clientCode,
+            flushAt: data.flushAt?.toDate?.() || data.flushAt || null
+          };
+        })
+        .filter(Boolean);
+    } catch (error) {
+      console.error('❌ Error listando sesiones due for flush:', error);
+      throw error;
+    }
   }
 
   /**

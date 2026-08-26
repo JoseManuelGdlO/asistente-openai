@@ -83,4 +83,123 @@ describe('FirebaseService bot_sessions', () => {
     await service.saveBotSession('u3', 'C3', { items: [] });
     expect(await service.resetAllBotSessions()).toBe(1);
   });
+
+  it('enqueue appendea y reinicia flushAt', async () => {
+    const t0 = 1_000_000;
+    const first = await service.enqueuePendingChatMessage(
+      '521',
+      'C1',
+      'sii perdoname',
+      { origin: 'ultramsg', from: '521', clientId: 'C1' },
+      { debounceMs: 2500, maxMs: 8000, now: t0 }
+    );
+    expect(first.accepted).toBe(true);
+    expect(first.flushAt.getTime()).toBe(t0 + 2500);
+
+    const second = await service.enqueuePendingChatMessage(
+      '521',
+      'C1',
+      'perdon perdon',
+      { origin: 'ultramsg', instanceId: 'inst-2' },
+      { debounceMs: 2500, maxMs: 8000, now: t0 + 400 }
+    );
+    expect(second.accepted).toBe(true);
+    expect(second.flushAt.getTime()).toBe(t0 + 400 + 2500);
+
+    const session = await service.getBotSession('521', 'C1');
+    expect(session.pendingMessages).toEqual(['sii perdoname', 'perdon perdon']);
+    expect(session.pendingFlushContext.instanceId).toBe('inst-2');
+    expect(session.pendingFlushContext.from).toBe('521');
+  });
+
+  it('enqueue respeta el máximo desde el primer mensaje del lote', async () => {
+    const t0 = 5_000_000;
+    await service.enqueuePendingChatMessage('521', 'C1', 'a', {}, {
+      debounceMs: 2500,
+      maxMs: 8000,
+      now: t0
+    });
+    const late = await service.enqueuePendingChatMessage('521', 'C1', 'b', {}, {
+      debounceMs: 2500,
+      maxMs: 8000,
+      now: t0 + 7000
+    });
+    expect(late.flushAt.getTime()).toBe(t0 + 8000);
+  });
+
+  it('enqueue ignora el mensaje si el lock está ocupado', async () => {
+    await service.tryLockBotSession('521', 'C1', 180000);
+    const result = await service.enqueuePendingChatMessage('521', 'C1', 'si', {});
+    expect(result).toEqual({ accepted: false, reason: 'locked' });
+    const session = await service.getBotSession('521', 'C1');
+    expect(session.pendingMessages).toEqual([]);
+  });
+
+  it('claim too_early si flushAt no ha vencido', async () => {
+    const t0 = 8_000_000;
+    await service.enqueuePendingChatMessage('521', 'C1', 'hola', {}, {
+      debounceMs: 2500,
+      maxMs: 8000,
+      now: t0
+    });
+    const tooEarly = await service.claimPendingChatFlush('521', 'C1', { now: t0 + 100 });
+    expect(tooEarly.claimed).toBe(false);
+    expect(tooEarly.reason).toBe('too_early');
+    const session = await service.getBotSession('521', 'C1');
+    expect(session.pendingMessages).toEqual(['hola']);
+    expect(session.lockedUntil).toBeFalsy();
+  });
+
+  it('claim toma el lote y el lock; enqueue posterior se ignora', async () => {
+    const t0 = Date.now();
+    await service.enqueuePendingChatMessage(
+      '521',
+      'C1',
+      'sii perdoname',
+      { origin: 'ultramsg', from: '521', clientId: 'C1', apiKey: 'secret' },
+      { debounceMs: 2500, maxMs: 8000, now: t0 }
+    );
+    await service.enqueuePendingChatMessage('521', 'C1', 'si', {}, {
+      debounceMs: 2500,
+      maxMs: 8000,
+      now: t0 + 200
+    });
+
+    const claimed = await service.claimPendingChatFlush('521', 'C1', {
+      now: t0 + 3000,
+      lockMs: 180000
+    });
+    expect(claimed.claimed).toBe(true);
+    expect(claimed.messages).toEqual(['sii perdoname', 'si']);
+    expect(claimed.flushContext.apiKey).toBeUndefined();
+    expect(claimed.flushContext.from).toBe('521');
+
+    expect(await service.isBotSessionLocked('521', 'C1')).toBe(true);
+
+    const ignored = await service.enqueuePendingChatMessage('521', 'C1', 'otro', {});
+    expect(ignored.reason).toBe('locked');
+
+    const session = await service.getBotSession('521', 'C1');
+    expect(session.pendingMessages).toEqual([]);
+    expect(session.flushAt).toBeNull();
+  });
+
+  it('listSessionsDueForFlush solo incluye lotes vencidos con pending', async () => {
+    const now = Date.now();
+    await service.enqueuePendingChatMessage('u1', 'C1', 'ya', {}, {
+      debounceMs: 0,
+      maxMs: 0,
+      now: now - 10
+    });
+    await service.enqueuePendingChatMessage('u2', 'C1', 'luego', {}, {
+      debounceMs: 60_000,
+      maxMs: 60_000,
+      now
+    });
+
+    const due = await service.listSessionsDueForFlush(new Date());
+    expect(due).toEqual([
+      expect.objectContaining({ userId: 'u1', clientCode: 'C1' })
+    ]);
+  });
 });

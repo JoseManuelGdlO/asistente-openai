@@ -566,6 +566,13 @@ class OpenAIManager {
   async processMessage(userId, message, clientCode = 'default', context = {}) {
     const assistant = await this.firebaseService.getAssistantByClientId(clientCode);
     if (!assistant || assistant.status === 'deleted') {
+      if (context.alreadyLocked) {
+        try {
+          await this.firebaseService.unlockBotSession(userId, clientCode);
+        } catch (unlockError) {
+          console.error('Error liberando lock de sesión:', unlockError.message);
+        }
+      }
       return this.deliverReplyThenDocuments(
         context,
         null,
@@ -573,14 +580,11 @@ class OpenAIManager {
       );
     }
 
-    const locked = await this.firebaseService.tryLockBotSession(userId, clientCode);
-    if (!locked) {
-      return this.deliverReplyThenDocuments(
-        context,
-        null,
-        'Por favor espera a que termine la respuesta anterior.',
-        { locked: true }
-      );
+    if (!context.alreadyLocked) {
+      const locked = await this.firebaseService.tryLockBotSession(userId, clientCode);
+      if (!locked) {
+        return this.wrapProcessResult(context, '', { locked: true });
+      }
     }
 
     // Contexto local por request: evita que peticiones concurrentes se pisen

@@ -202,9 +202,13 @@
   }
 
   function playgroundEventHtml(event) {
+    if (event.kind === 'status') {
+      return `<div class="playground-status-msg">${escapeHtml(event.text || '')}</div>`;
+    }
     if (event.kind === 'tool') return toolBadgeHtml(event);
+    const pending = event.pending ? ' pending' : '';
     const cls = event.role === 'user' ? 'playground-msg user' : 'playground-msg assistant';
-    return `<div class="${cls}">${escapeHtml(event.text || '')}</div>`;
+    return `<div class="${cls}${pending}">${escapeHtml(event.text || '')}</div>`;
   }
 
   function renderPlaygroundLog(logEl, events) {
@@ -810,7 +814,7 @@
             <h2 class="playground-title">Probar Assistant</h2>
             <button type="button" id="playground-reset" class="btn-sm btn-secondary">Nueva conversación</button>
           </div>
-          <p class="muted">Usa el Assistant guardado. Gasta tokens de OpenAI. No envía WhatsApp.</p>
+          <p class="muted">Usa el Assistant guardado. Gasta tokens de OpenAI. No envía WhatsApp. Varios mensajes seguidos se juntan (debounce) como en WhatsApp.</p>
           <div id="playground-log" class="playground-log"></div>
           <form id="playground-form" class="playground-composer">
             <textarea id="playground-input" rows="3" placeholder="Escribe un mensaje de prueba…"></textarea>
@@ -836,26 +840,67 @@
 
     const playgroundLog = document.getElementById('playground-log');
     const playgroundInput = document.getElementById('playground-input');
-    const playgroundSend = document.getElementById('playground-send');
+    let playgroundWatchId = 0;
+
+    function playgroundEventsFromState(res) {
+      const events = playgroundItemsToEvents(res.items || []);
+      for (const text of res.pendingMessages || []) {
+        events.push({ kind: 'message', role: 'user', text, pending: true });
+      }
+      if ((res.pendingMessages || []).length) {
+        const waitMs = Number(res.debounceMs) || 2500;
+        events.push({
+          kind: 'status',
+          text: `En cola: se mandará a la IA tras ~${Math.round(waitMs / 1000)}s de silencio (lote unido).`
+        });
+      } else if (res.locked) {
+        events.push({ kind: 'status', text: 'La IA está respondiendo… los mensajes de ahora se ignoran.' });
+      }
+      return events;
+    }
 
     function clearPlaygroundLog() {
+      playgroundWatchId += 1;
       renderPlaygroundLog(playgroundLog, []);
+    }
+
+    async function refreshPlaygroundView() {
+      const res = await api(`/playground/${encodeURIComponent(clientId)}`);
+      renderPlaygroundLog(playgroundLog, playgroundEventsFromState(res));
+      return res;
     }
 
     async function loadPlayground() {
       try {
-        const res = await api(`/playground/${encodeURIComponent(clientId)}`);
-        renderPlaygroundLog(playgroundLog, playgroundItemsToEvents(res.items || []));
+        const res = await refreshPlaygroundView();
+        if ((res.pendingMessages || []).length || res.locked) {
+          watchPlaygroundUntilIdle();
+        }
       } catch (err) {
         renderPlaygroundLog(playgroundLog, []);
         showFlash(document.getElementById('form-flash'), err.message, 'err');
       }
     }
 
-    function setPlaygroundBusy(busy) {
-      playgroundInput.disabled = busy;
-      playgroundSend.disabled = busy;
-      document.getElementById('playground-reset').disabled = busy;
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function watchPlaygroundUntilIdle() {
+      const id = ++playgroundWatchId;
+      while (id === playgroundWatchId) {
+        try {
+          const res = await refreshPlaygroundView();
+          const pending = res.pendingMessages || [];
+          if (!pending.length && !res.locked) {
+            break;
+          }
+        } catch (err) {
+          showFlash(document.getElementById('form-flash'), err.message, 'err');
+          break;
+        }
+        await sleep(400);
+      }
     }
 
     document.getElementById('assistant-form').addEventListener('submit', async (event) => {
@@ -932,8 +977,6 @@
       const message = playgroundInput.value.trim();
       if (!message) return;
 
-      setPlaygroundBusy(true);
-      appendPlaygroundEvents(playgroundLog, [{ kind: 'message', role: 'user', text: message }]);
       playgroundInput.value = '';
 
       try {
@@ -941,16 +984,24 @@
           method: 'POST',
           body: { message }
         });
-        const toolEvents = (result.tools || []).map((tool) => ({
-          kind: 'tool',
-          name: tool.name,
-          arguments: tool.arguments || {},
-          result: tool.result || {}
-        }));
-        appendPlaygroundEvents(playgroundLog, [
-          { kind: 'message', role: 'assistant', text: result.reply || '' },
-          ...toolEvents
-        ]);
+
+        if (result.reason === 'ignored_locked' || result.locked) {
+          showFlash(
+            document.getElementById('form-flash'),
+            'Mensaje ignorado: la sesión está ocupada (igual que en WhatsApp).',
+            'err'
+          );
+          watchPlaygroundUntilIdle();
+          return;
+        }
+
+        if (result.queued) {
+          watchPlaygroundUntilIdle();
+          playgroundInput.focus();
+          return;
+        }
+
+        await refreshPlaygroundView();
       } catch (err) {
         appendPlaygroundEvents(playgroundLog, [{
           kind: 'message',
@@ -958,7 +1009,6 @@
           text: err.message || 'Error enviando el mensaje'
         }]);
       } finally {
-        setPlaygroundBusy(false);
         playgroundInput.focus();
       }
     });

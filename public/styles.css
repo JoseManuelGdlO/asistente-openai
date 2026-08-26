@@ -332,6 +332,18 @@ textarea.json { min-height: 140px; }
   background: #d1fae5;
 }
 
+.playground-msg.user.pending {
+  opacity: 0.72;
+  border: 1px dashed #6ee7b7;
+}
+
+.playground-status-msg {
+  align-self: center;
+  font-size: 0.8rem;
+  color: var(--muted, #667085);
+  text-align: center;
+}
+
 .playground-msg.assistant {
   align-self: flex-start;
   background: #fff;

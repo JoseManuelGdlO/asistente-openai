@@ -10,6 +10,7 @@ function createFirebaseStub(overrides = {}) {
       status: 'active'
     }),
     tryLockBotSession: jest.fn().mockResolvedValue(true),
+    isBotSessionLocked: jest.fn().mockResolvedValue(false),
     getOrCreateBotSession: jest.fn().mockResolvedValue({ items: [] }),
     refreshBotSessionLock: jest.fn().mockResolvedValue(undefined),
     saveBotSession: jest.fn().mockResolvedValue({}),
@@ -97,13 +98,47 @@ describe('OpenAIManager.processMessage', () => {
     expect(firebase.tryLockBotSession).not.toHaveBeenCalled();
   });
 
-  it('devuelve espera si el lock está ocupado', async () => {
+  it('no envía aviso si el lock está ocupado', async () => {
     const firebase = createFirebaseStub({
       tryLockBotSession: jest.fn().mockResolvedValue(false)
     });
     const manager = new OpenAIManager(firebase);
-    const reply = await manager.processMessage('521', 'hola', 'CLIENTE001');
-    expect(reply).toMatch(/espera/);
+    const sendReply = jest.fn();
+    const reply = await manager.processMessage('521', 'hola', 'CLIENTE001', { sendReply });
+    expect(reply).toBe('');
+    expect(sendReply).not.toHaveBeenCalled();
+  });
+
+  it('con returnTrace marca locked y reply vacío si el lock está ocupado', async () => {
+    const firebase = createFirebaseStub({
+      tryLockBotSession: jest.fn().mockResolvedValue(false)
+    });
+    const manager = new OpenAIManager(firebase);
+    const reply = await manager.processMessage('521', 'hola', 'CLIENTE001', { returnTrace: true });
+    expect(reply).toEqual({
+      reply: '',
+      tools: [],
+      locked: true,
+      items: []
+    });
+  });
+
+  it('alreadyLocked no vuelve a adquirir lock', async () => {
+    const firebase = createFirebaseStub();
+    const manager = new OpenAIManager(firebase);
+    manager.openai = {
+      responses: {
+        create: jest.fn().mockResolvedValue({
+          output_text: '{"reply":"Claro"}',
+          output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '{"reply":"Claro"}' }] }]
+        })
+      }
+    };
+
+    const reply = await manager.processMessage('521', 'hola', 'CLIENTE001', { alreadyLocked: true });
+    expect(reply).toBe('Claro');
+    expect(firebase.tryLockBotSession).not.toHaveBeenCalled();
+    expect(firebase.unlockBotSession).toHaveBeenCalled();
   });
 
   it('renueva lock, persiste y desbloquea en un turno simple', async () => {

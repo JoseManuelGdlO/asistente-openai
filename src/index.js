@@ -29,6 +29,7 @@ const webhookManager = new WebhookManager(
   documentStore
 );
 const schedulerController = new SchedulerController(scheduler);
+webhookManager.debounceManager.startSweep();
 
 async function reinitUltraMsgInstances() {
   console.log('🔄 Re-inicializando instancias UltraMsg...');
@@ -74,6 +75,8 @@ app.listen(port, async () => {
     console.log('- ULTRAMSG_INSTANCE_ID:', process.env.ULTRAMSG_INSTANCE_ID ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- ULTRAMSG_WEBHOOK_TOKEN:', process.env.ULTRAMSG_WEBHOOK_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- ADMIN_API_TOKEN:', process.env.ADMIN_API_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- MESSAGE_DEBOUNCE_MS:', process.env.MESSAGE_DEBOUNCE_MS || '2500 (default)');
+    console.log('- MESSAGE_DEBOUNCE_MAX_MS:', process.env.MESSAGE_DEBOUNCE_MAX_MS || '8000 (default)');
     console.log(`📄 Documentos: GET/POST http://localhost:${port}/clients/:clientId/documents`);
 
     try {

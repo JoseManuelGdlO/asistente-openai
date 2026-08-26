@@ -1,6 +1,7 @@
 const CommandManager = require('../services/commandManager');
 const DocumentStore = require('../services/documentStore');
 const OwnSystemManager = require('../managers/ownSystemManager');
+const MessageDebounceManager = require('../services/messageDebounceManager');
 
 class WebhookManager {
   constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager, documentStore = null) {
@@ -14,6 +15,14 @@ class WebhookManager {
       this.documentStore,
       openAIManager?.firebaseService || null
     );
+    this.debounceManager = new MessageDebounceManager({
+      firebaseService: openAIManager?.firebaseService || null,
+      openAIManager,
+      ultraMsgManager,
+      ownSystemManager: this.ownSystemManager,
+      getClientConfig: () => this.commandManager.clientConfig || {},
+      documentStore: this.documentStore
+    });
   }
 
   get firebaseService() {
@@ -412,17 +421,33 @@ class WebhookManager {
     const instanceId = this.resolveInstanceId(clientId, messageData, webhookToken);
     console.log('📱 Usando instancia UltraMsg:', instanceId, '(cliente:', clientId + ')');
 
-    // Procesar con Responses API (tools encolan PDFs; sendReply va antes del flush)
-    const aiResponse = await this.openAIManager.processMessage(from, msg_body, clientId, {
-      instanceId,
-      ultraMsgManager: this.ultraMsgManager,
-      documentStore: this.documentStore,
-      sendReply: async (text) => {
-        await this.sendUltraNotice(sendReplyUltra, from, text, clientId);
+    const queued = await this.debounceManager.queueChatMessage({
+      userId: from,
+      clientCode: clientId,
+      text: msg_body,
+      flushContext: {
+        origin: 'ultramsg',
+        from,
+        clientId,
+        instanceId
+      },
+      processContext: {
+        instanceId,
+        ultraMsgManager: this.ultraMsgManager,
+        documentStore: this.documentStore,
+        sendReply: async (text) => {
+          await this.sendUltraNotice(sendReplyUltra, from, text, clientId);
+        }
       }
     });
-    
-    return { response: aiResponse, reason: 'ai_reply' };
+
+    if (!queued.accepted) {
+      return { response: null, reason: 'ignored_locked' };
+    }
+    if (queued.reason === 'processed') {
+      return { response: queued.reply, reason: 'ai_reply' };
+    }
+    return { response: null, reason: 'ai_queued' };
   }
 
   /**
@@ -563,15 +588,34 @@ class WebhookManager {
 
       console.log('🤖 Usando Assistant Firestore (own) para cliente:', clientId);
 
-      const aiResponse = await this.openAIManager.processMessage(fromPhone, text, clientId, {
-        ultraMsgManager: this.ultraMsgManager,
-        documentStore: this.documentStore,
-        sendReply: async (textReply) => {
-          await sendReplyOwn(textReply);
+      const queued = await this.debounceManager.queueChatMessage({
+        userId: fromPhone,
+        clientCode: clientId,
+        text,
+        flushContext: {
+          origin: 'own',
+          fromPhone,
+          fromJid,
+          clientId,
+          tenantId,
+          deviceId
+        },
+        processContext: {
+          ultraMsgManager: this.ultraMsgManager,
+          documentStore: this.documentStore,
+          sendReply: async (textReply) => {
+            await sendReplyOwn(textReply);
+          }
         }
       });
 
-      return { processed: true, response: aiResponse, userId: fromPhone, reason: 'ai_reply' };
+      if (!queued.accepted) {
+        return { processed: true, response: null, userId: fromPhone, reason: 'ignored_locked' };
+      }
+      if (queued.reason === 'processed') {
+        return { processed: true, response: queued.reply, userId: fromPhone, reason: 'ai_reply' };
+      }
+      return { processed: true, response: null, userId: fromPhone, reason: 'ai_queued' };
     });
   }
 
