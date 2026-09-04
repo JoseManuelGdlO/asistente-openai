@@ -150,9 +150,10 @@ CLIENTE002_ASSISTANT=asst-def456
 - Envía confirmaciones automáticas
 
 ### **🔴 INACTIVO**
-- El bot no responde a mensajes normales
+- El bot no responde a mensajes de clientes (los ignora en silencio)
 - Solo responde a comandos
-- Muestra mensaje: "Bot está apagado. Escribe #CLIENTE001 /on para encenderlo."
+- Si escribe el número admin, recibe el aviso: "Bot está apagado. Escribe #CLIENTE001 /on para encenderlo."
+- Así el usuario puede conversar con el cliente sin interferencia del bot
 
 ## 🎯 Ejemplos de Uso
 

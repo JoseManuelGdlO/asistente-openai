@@ -167,7 +167,7 @@ describe('WebhookManager', () => {
     expect(result.response).toMatch(/consultorio/);
   });
 
-  it('envía aviso si el bot está apagado', async () => {
+  it('ignora el mensaje si el bot está apagado (cliente normal)', async () => {
     const { wm, ultraMsgManager } = createManager({
       commandManager: {
         getClientByAssistantPhone: jest.fn().mockResolvedValue('CLIENTE001'),
@@ -175,6 +175,7 @@ describe('WebhookManager', () => {
         processMessage: jest.fn().mockResolvedValue({ isCommand: false }),
         isCommand: jest.fn(() => false),
         isBotActive: jest.fn(() => false),
+        isAuthorizedNumber: jest.fn(() => false),
         getAssistantConfig: jest.fn()
       }
     });
@@ -184,6 +185,29 @@ describe('WebhookManager', () => {
       body: 'hola'
     });
     expect(result.reason).toBe('bot_inactive');
+    expect(result.response).toBeNull();
+    expect(ultraMsgManager.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('avisa al admin si el bot está apagado', async () => {
+    const { wm, ultraMsgManager } = createManager({
+      commandManager: {
+        getClientByAssistantPhone: jest.fn().mockResolvedValue('CLIENTE001'),
+        isPhoneBlacklisted: jest.fn().mockResolvedValue(false),
+        processMessage: jest.fn().mockResolvedValue({ isCommand: false }),
+        isCommand: jest.fn(() => false),
+        isBotActive: jest.fn(() => false),
+        isAuthorizedNumber: jest.fn(() => true),
+        getAssistantConfig: jest.fn()
+      }
+    });
+    const result = await wm.processMessage({
+      from: '521555@c.us',
+      to: '521000@c.us',
+      body: 'hola'
+    });
+    expect(result.reason).toBe('bot_inactive');
+    expect(result.response).toMatch(/apagado/);
     expect(ultraMsgManager.sendMessage).toHaveBeenCalled();
   });
 

@@ -399,12 +399,16 @@ class WebhookManager {
     
     console.log('🏥 Cliente detectado:', clientId, 'para número:', assistantPhone);
     
-    // Verificar si el bot está activo para este cliente
+    // Bot apagado: solo avisar al admin; clientes normales se ignoran en silencio
     if (!this.commandManager.isBotActive(clientId)) {
-      console.log('🤖 Bot inactivo para cliente:', clientId);
-      const offMsg = '🤖 Bot está apagado. Escribe #' + clientId + ' /on para encenderlo.';
-      await this.sendUltraNotice(sendReplyUltra, from, offMsg, clientId);
-      return { response: offMsg, reason: 'bot_inactive' };
+      if (this.commandManager.isAuthorizedNumber(from, clientId)) {
+        console.log('🤖 Bot inactivo para cliente:', clientId, '— aviso al admin');
+        const offMsg = '🤖 Bot está apagado. Escribe #' + clientId + ' /on para encenderlo.';
+        await this.sendUltraNotice(sendReplyUltra, from, offMsg, clientId);
+        return { response: offMsg, reason: 'bot_inactive' };
+      }
+      console.log('🤖 Bot inactivo para cliente:', clientId, '— mensaje ignorado');
+      return { response: null, reason: 'bot_inactive' };
     }
     
     // Verificar par 1:1 Assistants/{clientId}
@@ -570,11 +574,16 @@ class WebhookManager {
 
       console.log('🏥 Cliente detectado (own):', clientId, 'para assistantPhone:', assistantPhone);
 
-      // Verificar si el bot está activo para este cliente
+      // Bot apagado: solo avisar al admin; clientes normales se ignoran en silencio
       if (!this.commandManager.isBotActive(clientId)) {
-        const offMsg = "🤖 Bot está apagado. Escribe #" + clientId + " /on para encenderlo.";
-        await sendReplyOwn(offMsg);
-        return { processed: true, response: offMsg, userId: fromPhone, reason: 'bot_inactive' };
+        if (this.commandManager.isAuthorizedNumber(fromPhone, clientId)) {
+          console.log('🤖 Bot inactivo para cliente (own):', clientId, '— aviso al admin');
+          const offMsg = "🤖 Bot está apagado. Escribe #" + clientId + " /on para encenderlo.";
+          await sendReplyOwn(offMsg);
+          return { processed: true, response: offMsg, userId: fromPhone, reason: 'bot_inactive' };
+        }
+        console.log('🤖 Bot inactivo para cliente (own):', clientId, '— mensaje ignorado');
+        return { processed: true, response: null, userId: fromPhone, reason: 'bot_inactive' };
       }
 
       // Verificar par 1:1 Assistants/{clientId}

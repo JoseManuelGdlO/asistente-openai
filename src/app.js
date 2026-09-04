@@ -133,7 +133,7 @@ function createApp(deps = {}) {
         } else if (result.reason === 'client_not_found') {
           console.log('Consultorio no identificado; se envió aviso (UltraMsg)');
         } else if (result.reason === 'bot_inactive') {
-          console.log('Bot inactivo; se envió aviso (UltraMsg)');
+          console.log('Bot inactivo; aviso solo a admin o mensaje ignorado (UltraMsg)');
         } else if (result.reason === 'assistant_missing') {
           console.log('Assistant faltante; se envió aviso (UltraMsg)');
         } else if (result.reason === 'media_download_failed') {
@@ -179,7 +179,7 @@ function createApp(deps = {}) {
         } else if (result.reason === 'confirmation_processed') {
           console.log('Mensaje de confirmación procesado (own system)');
         } else if (result.reason === 'bot_inactive') {
-          console.log('Bot inactivo; se envió aviso (own system)');
+          console.log('Bot inactivo; aviso solo a admin o mensaje ignorado (own system)');
         } else if (result.reason === 'assistant_missing') {
           console.log('Assistant faltante; se envió aviso (own system)');
         } else if (result.reason === 'ai_queued') {
