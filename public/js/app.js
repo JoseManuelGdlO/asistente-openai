@@ -5,7 +5,8 @@
   const appView = document.getElementById('app-view');
   const content = document.getElementById('content');
   const loginForm = document.getElementById('login-form');
-  const loginToken = document.getElementById('login-token');
+  const loginEmail = document.getElementById('login-email');
+  const loginPassword = document.getElementById('login-password');
   const loginError = document.getElementById('login-error');
   const logoutBtn = document.getElementById('logout-btn');
 
@@ -299,20 +300,32 @@
 
   loginForm.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const token = loginToken.value.trim();
-    if (!token) return;
-    setToken(token);
+    const email = loginEmail.value.trim();
+    const password = loginPassword.value;
+    if (!email || !password) return;
     try {
+      const res = await fetch('/auth/login/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        clearToken();
+        showLogin(data.error || 'Correo o contraseña incorrectos');
+        return;
+      }
+      setToken(data.token);
       await probeAuth();
-      loginToken.value = '';
+      loginPassword.value = '';
       loginError.hidden = true;
       showApp();
       goToHash('#/');
     } catch (err) {
       clearToken();
       showLogin(err.status === 503
-        ? 'ADMIN_API_TOKEN no está configurado en el servidor'
-        : 'Token inválido');
+        ? 'El inicio de sesión no está configurado en el servidor'
+        : (err.message || 'No se pudo iniciar sesión'));
     }
   });
 
@@ -325,7 +338,7 @@
   window.addEventListener('auth:required', () => {
     clearToken();
     clearHash();
-    showLogin('Sesión expirada o token inválido');
+    showLogin('Sesión expirada. Vuelve a iniciar sesión.');
   });
 
   window.addEventListener('hashchange', render);

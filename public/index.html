@@ -3,32 +3,55 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Panel admin · Asistente WhatsApp</title>
+  <title>Intelekia Chatbot</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div id="login-view" class="login-wrap" hidden>
-    <form id="login-form" class="card login-card">
-      <h1>Panel admin</h1>
-      <p class="muted">Introduce el token <code>ADMIN_API_TOKEN</code> del servidor.</p>
-      <label for="login-token">Token</label>
-      <input id="login-token" type="password" autocomplete="current-password" required>
-      <p id="login-error" class="error" hidden></p>
-      <button type="submit">Entrar</button>
-    </form>
+    <section class="login-hero">
+      <img src="/logo.svg" alt="" width="72" height="72">
+      <span class="wordmark">
+        <strong>Intelekia</strong>
+        <em>Chatbot</em>
+      </span>
+      <p>Gestiona cada chatbot, sus conversaciones y sus documentos.</p>
+    </section>
+    <section class="login-form-side">
+      <form id="login-form" class="login-card">
+        <h1>Iniciar sesión</h1>
+        <label for="login-email">Correo electrónico</label>
+        <input id="login-email" name="email" type="email" autocomplete="username" required>
+        <label for="login-password">Contraseña</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        <p id="login-error" class="error" hidden></p>
+        <button type="submit">Entrar</button>
+        <p class="login-legal">
+          <a href="/terminos">Términos y Condiciones</a>
+          <a href="/privacidad">Aviso de Privacidad</a>
+        </p>
+      </form>
+    </section>
   </div>
 
   <div id="app-view" class="app" hidden>
     <aside class="sidebar">
-      <div class="brand">
-        <strong>Asistente</strong>
-        <span class="muted">Admin</span>
-      </div>
+      <a class="brand" href="#/">
+        <img src="/logo.svg" alt="" width="36" height="36">
+        <span class="wordmark">
+          <strong>Intelekia</strong>
+          <em>Chatbot</em>
+        </span>
+      </a>
       <nav>
         <a href="#/" data-nav="dashboard">Dashboard</a>
         <a href="#/clients" data-nav="clients">Consultorios</a>
         <a href="#/sessions" data-nav="sessions">Sesiones</a>
       </nav>
+      <a href="/terminos" class="sidebar-terms">Términos y Condiciones</a>
       <button type="button" id="logout-btn" class="btn-ghost">Cerrar sesión</button>
     </aside>
     <main id="content" class="content"></main>

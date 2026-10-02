@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const path = require('path');
 const cors = require('cors');
 const multer = require('multer');
@@ -24,6 +25,38 @@ function stripEmptyUltraMsgFields(data) {
 
 function playgroundUserId(clientId) {
   return `playground_${clientId}`;
+}
+
+function matchPanelLogin(body) {
+  const expectedEmail = String(process.env.LOGIN_EMAIL || '').trim().toLowerCase();
+  const expectedPassword = String(process.env.LOGIN_PASSWORD || '');
+  const adminToken = process.env.ADMIN_API_TOKEN;
+  if (!expectedEmail || !expectedPassword || !adminToken) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'El inicio de sesión no está configurado'
+    };
+  }
+
+  const email = String((body && body.email) || '').trim().toLowerCase();
+  const password = String((body && body.password) || '');
+  const emailHash = crypto.createHash('sha256').update(email).digest();
+  const expectedEmailHash = crypto.createHash('sha256').update(expectedEmail).digest();
+  const passwordHash = crypto.createHash('sha256').update(password).digest();
+  const expectedPasswordHash = crypto.createHash('sha256').update(expectedPassword).digest();
+  const matches = crypto.timingSafeEqual(emailHash, expectedEmailHash)
+    && crypto.timingSafeEqual(passwordHash, expectedPasswordHash);
+
+  if (!matches) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Correo o contraseña incorrectos'
+    };
+  }
+
+  return { ok: true, email, token: adminToken };
 }
 
 function timestampToIso(value) {
@@ -1256,12 +1289,83 @@ function createApp(deps = {}) {
     });
   });
 
+  app.post('/auth/login', (req, res) => {
+    const result = matchPanelLogin(req.body);
+    if (!result.ok) {
+      return res.status(result.status).json({ ok: false, error: result.error });
+    }
+    return res.json({ ok: true, token: result.token });
+  });
+
+  app.post('/auth/login/confirm', async (req, res) => {
+    if (!process.env.ADMIN_API_TOKEN) {
+      return res.status(503).json({
+        ok: false,
+        error: 'El inicio de sesión no está configurado'
+      });
+    }
+
+    const firebaseService = webhookManager?.commandManager?.firebaseService;
+    const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+    const password = String((req.body && req.body.password) || '');
+    let authenticatedEmail = null;
+
+    if (firebaseService && typeof firebaseService.verifyPanelUser === 'function') {
+      try {
+        const user = await firebaseService.verifyPanelUser({ email, password });
+        if (user && user.email) authenticatedEmail = user.email;
+      } catch (err) {
+        console.error('Error verificando usuario en Firebase:', err.message);
+        return res.status(err.status || 502).json({
+          ok: false,
+          error: err.status ? err.message : 'No se pudo verificar el usuario en Firebase'
+        });
+      }
+    }
+
+    if (!authenticatedEmail) {
+      const result = matchPanelLogin(req.body);
+      if (!result.ok) {
+        return res.status(result.status).json({ ok: false, error: result.error });
+      }
+      authenticatedEmail = result.email;
+    }
+
+    if (!firebaseService || typeof firebaseService.confirmPanelLogin !== 'function') {
+      return res.status(503).json({
+        ok: false,
+        error: 'Firebase no está disponible para confirmar el inicio de sesión'
+      });
+    }
+
+    try {
+      const confirmation = await firebaseService.confirmPanelLogin({ email: authenticatedEmail });
+      return res.json({
+        ok: true,
+        token: process.env.ADMIN_API_TOKEN,
+        confirmation
+      });
+    } catch (err) {
+      console.error('Error confirmando login en Firebase:', err.message);
+      return res.status(502).json({
+        ok: false,
+        error: 'No se pudo confirmar el inicio de sesión en Firebase'
+      });
+    }
+  });
+
   // ==================== PANEL ADMIN (SPA) ====================
 
   const publicDir = path.join(__dirname, '../public');
   app.use(express.static(publicDir));
   app.get('/', (_req, res) => {
     res.sendFile(path.join(publicDir, 'index.html'));
+  });
+  app.get('/terminos', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'terminos.html'));
+  });
+  app.get('/privacidad', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'privacidad.html'));
   });
 
   return app;

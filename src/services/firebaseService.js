@@ -51,6 +51,7 @@ class FirebaseService {
     this.botSessionsCollection = this.db.collection('bot_sessions');
     this.blacklistCollection = this.db.collection('blacklist-phone');
     this.webhookDedupCollection = this.db.collection('webhook_dedup');
+    this.loginConfirmationsCollection = this.db.collection('login_confirmations');
   }
 
   /**
@@ -1226,6 +1227,103 @@ class FirebaseService {
       console.error('❌ Error de conexión con Firebase:', error);
       return false;
     }
+  }
+
+  /**
+   * Guarda la confirmación de un inicio de sesión del panel.
+   * @param {{ email: string }} params
+   * @returns {Promise<{ id: string, email: string, confirmedAt: string }>}
+   */
+  async confirmPanelLogin({ email }) {
+    const confirmedAt = new Date().toISOString();
+    const doc = await this.loginConfirmationsCollection.add({
+      email,
+      confirmedAt,
+      source: 'panel'
+    });
+    return { id: doc.id, email, confirmedAt };
+  }
+
+  async getWebApiKey() {
+    if (this.webApiKey) return this.webApiKey;
+    if (process.env.FIREBASE_WEB_API_KEY) {
+      this.webApiKey = process.env.FIREBASE_WEB_API_KEY;
+      return this.webApiKey;
+    }
+
+    const access = await admin.app().options.credential.getAccessToken();
+    const projectId = serviceAccount.project_id;
+    const headers = { Authorization: `Bearer ${access.access_token}` };
+    const listRes = await fetch(
+      `https://firebase.googleapis.com/v1beta1/projects/${projectId}/webApps`,
+      { headers }
+    );
+    if (!listRes.ok) {
+      const err = new Error('No se pudo obtener la configuración de Firebase Auth');
+      err.status = 503;
+      throw err;
+    }
+    const list = await listRes.json();
+    const appId = list.apps && list.apps[0] && list.apps[0].appId;
+    if (!appId) {
+      const err = new Error('Firebase Auth no tiene una app web configurada');
+      err.status = 503;
+      throw err;
+    }
+    const cfgRes = await fetch(
+      `https://firebase.googleapis.com/v1beta1/projects/${projectId}/webApps/${appId}/config`,
+      { headers }
+    );
+    if (!cfgRes.ok) {
+      const err = new Error('No se pudo obtener la configuración de Firebase Auth');
+      err.status = 503;
+      throw err;
+    }
+    const cfg = await cfgRes.json();
+    if (!cfg.apiKey) {
+      const err = new Error('Firebase Auth no tiene API key');
+      err.status = 503;
+      throw err;
+    }
+    this.webApiKey = cfg.apiKey;
+    return this.webApiKey;
+  }
+
+  /**
+   * Comprueba correo y contraseña contra Firebase Auth.
+   * Devuelve el usuario si las credenciales son válidas, o null si no coinciden.
+   * @param {{ email: string, password: string }} params
+   * @returns {Promise<{ email: string, uid: string }|null>}
+   */
+  async verifyPanelUser({ email, password }) {
+    const apiKey = await this.getWebApiKey();
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          returnSecureToken: true
+        })
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const code = String(data?.error?.message || '');
+      if (/INVALID_PASSWORD|EMAIL_NOT_FOUND|INVALID_LOGIN_CREDENTIALS|USER_DISABLED/.test(code)) {
+        return null;
+      }
+      const err = new Error('No se pudo verificar el usuario en Firebase');
+      err.status = 502;
+      throw err;
+    }
+    const decoded = await admin.auth().verifyIdToken(data.idToken);
+    return {
+      email: String(decoded.email || email).toLowerCase(),
+      uid: decoded.uid
+    };
   }
 }
 

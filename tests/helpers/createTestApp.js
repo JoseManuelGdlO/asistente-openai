@@ -11,6 +11,8 @@ function createStubDeps(overrides = {}) {
   const firebaseService = {
     getClientById: fnAsync(null),
     getClientStats: fnAsync({ total: 0 }),
+    confirmPanelLogin: fnAsync({ id: 'confirm-1', email: 'admin@asistente.local', confirmedAt: '2026-10-02T00:00:00.000Z' }),
+    verifyPanelUser: fnAsync(null),
     ...overrides.firebaseService
   };
 
