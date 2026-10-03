@@ -831,6 +831,26 @@ textarea.json { min-height: 140px; }
 
 .session-meta p { margin: 0; }
 
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin: 0.35rem 0 0.85rem;
+}
+
+.pager-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.pager .btn[aria-disabled="true"] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .playground-badge-ok { background: #ecfdf3; color: #067647; }
 .playground-badge-err { background: #fef3f2; color: var(--danger); }
 

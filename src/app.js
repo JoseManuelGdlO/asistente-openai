@@ -316,10 +316,27 @@ function createApp(deps = {}) {
       if (req.query.userId) filters.userId = String(req.query.userId);
       if (req.query.clientCode) filters.clientCode = String(req.query.clientCode);
 
-      const sessions = await openAIManager.listSessions(filters);
+      const parsedPage = Number.parseInt(req.query.page, 10);
+      const parsedLimit = Number.parseInt(req.query.limit, 10);
+      const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+      const limit = Number.isFinite(parsedLimit) && parsedLimit > 0
+        ? Math.min(parsedLimit, 100)
+        : 20;
+
+      const all = await openAIManager.listSessions(filters);
+      const total = all.length;
+      const totalPages = Math.max(1, Math.ceil(total / limit) || 1);
+      const safePage = Math.min(page, totalPages);
+      const start = (safePage - 1) * limit;
+      const sessions = all.slice(start, start + limit);
+
       res.json({
         ok: true,
         count: sessions.length,
+        total,
+        page: safePage,
+        limit,
+        totalPages,
         sessions
       });
     } catch (error) {

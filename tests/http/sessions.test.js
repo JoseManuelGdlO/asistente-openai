@@ -18,10 +18,31 @@ describe('Endpoints de sesiones', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.count).toBe(1);
+    expect(res.body.total).toBe(1);
+    expect(res.body.page).toBe(1);
+    expect(res.body.limit).toBe(20);
     expect(deps.openAIManager.listSessions).toHaveBeenCalledWith({
       userId: 'u1',
       clientCode: 'C1'
     });
+  });
+
+  it('GET /sessions pagina el listado', async () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({ id: `u${i}`, userId: `u${i}` }));
+    const { app } = createTestApp({
+      openAIManager: { listSessions: jest.fn().mockResolvedValue(rows) }
+    });
+    const res = await request(app)
+      .get('/sessions')
+      .query({ page: 2, limit: 10 })
+      .set(authHeader());
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(25);
+    expect(res.body.page).toBe(2);
+    expect(res.body.limit).toBe(10);
+    expect(res.body.totalPages).toBe(3);
+    expect(res.body.sessions).toHaveLength(10);
+    expect(res.body.sessions[0].id).toBe('u10');
   });
 
   it('POST /reset_sessions', async () => {

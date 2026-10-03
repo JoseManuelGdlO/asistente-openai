@@ -112,6 +112,25 @@
     return String(userId);
   }
 
+  function sessionsPagerHtml(payload, hrefForPage) {
+    const total = Number(payload.total ?? (payload.sessions || []).length);
+    const page = Number(payload.page) || 1;
+    const totalPages = Number(payload.totalPages) || 1;
+    const start = total === 0 ? 0 : ((page - 1) * (Number(payload.limit) || 20)) + 1;
+    const end = Math.min(total, start + (payload.sessions || []).length - 1);
+    const prev = page > 1
+      ? `<a class="btn btn-sm btn-secondary" href="${hrefForPage(page - 1)}">Anterior</a>`
+      : '<span class="btn btn-sm btn-secondary" aria-disabled="true">Anterior</span>';
+    const next = page < totalPages
+      ? `<a class="btn btn-sm btn-secondary" href="${hrefForPage(page + 1)}">Siguiente</a>`
+      : '<span class="btn btn-sm btn-secondary" aria-disabled="true">Siguiente</span>';
+    return `
+      <div class="pager">
+        <p class="muted">${total === 0 ? 'Sin conversaciones' : `${start}–${end} de ${total}`}</p>
+        <div class="pager-actions">${prev}<span class="muted">Página ${page} de ${totalPages}</span>${next}</div>
+      </div>`;
+  }
+
   function bindSessionDeletes(root, onDone) {
     root.querySelectorAll('[data-del-user]').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -273,7 +292,8 @@
       return {
         name: 'sessions',
         userId: (query.get('userId') || '').trim(),
-        clientCode: (query.get('clientCode') || '').trim()
+        clientCode: (query.get('clientCode') || '').trim(),
+        page: query.get('page') || '1'
       };
     }
     if (parts[0] === 'clients' && parts[1] === 'new') return { name: 'client-new' };
@@ -286,7 +306,12 @@
       };
     }
     if (parts[0] === 'clients' && parts[1]) {
-      return { name: 'client-detail', clientId: decodeURIComponent(parts[1]), tab: parts[2] || 'consultorio' };
+      return {
+        name: 'client-detail',
+        clientId: decodeURIComponent(parts[1]),
+        tab: parts[2] || 'consultorio',
+        page: query.get('page') || '1'
+      };
     }
     if (parts[0] === 'clients') return { name: 'clients' };
     return { name: 'dashboard' };
@@ -398,7 +423,7 @@
       else if (route.name === 'session-detail') await renderSessionDetail(route);
       else if (route.name === 'clients') await renderClients();
       else if (route.name === 'client-new') renderClientForm();
-      else if (route.name === 'client-detail') await renderClientDetail(route.clientId, route.tab);
+      else if (route.name === 'client-detail') await renderClientDetail(route.clientId, route.tab, route.page);
       else await renderDashboard();
     } catch (err) {
       if (err.status === 401 || err.status === 503) return;
@@ -535,9 +560,18 @@
     const query = new URLSearchParams();
     if (userId) query.set('userId', userId);
     if (clientCode) query.set('clientCode', clientCode);
-    const path = query.toString() ? `/sessions?${query}` : '/sessions';
-    const payload = await api(path);
+    if (route.page && String(route.page) !== '1') query.set('page', String(route.page));
+    query.set('limit', '20');
+    const payload = await api(`/sessions?${query}`);
     const sessions = payload.sessions || [];
+    const hrefForPage = (page) => {
+      const params = new URLSearchParams();
+      if (userId) params.set('userId', userId);
+      if (clientCode) params.set('clientCode', clientCode);
+      if (page > 1) params.set('page', String(page));
+      const q = params.toString();
+      return q ? `#/sessions?${q}` : '#/sessions';
+    };
 
     content.innerHTML = `
       <div class="page-head">
@@ -564,8 +598,9 @@
         </div>
       </form>
       <div class="card">
-        <p class="muted">${sessions.length} sesión${sessions.length === 1 ? '' : 'es'}</p>
+        ${sessionsPagerHtml(payload, hrefForPage)}
         ${sessionsTableHtml(sessions, { showClient: true })}
+        ${sessionsPagerHtml(payload, hrefForPage)}
       </div>
     `;
 
@@ -824,7 +859,7 @@
     });
   }
 
-  async function renderClientDetail(clientId, tab) {
+  async function renderClientDetail(clientId, tab, page) {
     const currentTab = ['consultorio', 'assistant', 'documentos', 'sesiones'].includes(tab) ? tab : 'consultorio';
     const clientRes = await api(`/clients/${encodeURIComponent(clientId)}`);
     const client = clientRes.client;
@@ -852,7 +887,7 @@
     } else if (currentTab === 'documentos') {
       await renderDocumentsTab(body, clientId);
     } else if (currentTab === 'sesiones') {
-      await renderSessionsTab(body, clientId);
+      await renderSessionsTab(body, clientId, page);
     } else {
       renderConsultorioTab(body, client);
     }
@@ -1233,9 +1268,22 @@
     await loadPlayground();
   }
 
-  async function renderSessionsTab(container, clientId) {
-    const payload = await api(`/sessions?clientCode=${encodeURIComponent(clientId)}`);
+  async function renderSessionsTab(container, clientId, page) {
+    const query = new URLSearchParams({
+      clientCode: clientId,
+      limit: '20'
+    });
+    if (page && String(page) !== '1') query.set('page', String(page));
+    const payload = await api(`/sessions?${query}`);
     const sessions = payload.sessions || [];
+    const hrefForPage = (nextPage) => {
+      const params = new URLSearchParams();
+      if (nextPage > 1) params.set('page', String(nextPage));
+      const q = params.toString();
+      return q
+        ? `#/clients/${encodeURIComponent(clientId)}/sesiones?${q}`
+        : `#/clients/${encodeURIComponent(clientId)}/sesiones`;
+    };
 
     container.innerHTML = `
       <div id="form-flash" hidden></div>
@@ -1246,7 +1294,9 @@
         </div>
       </div>
       <div class="card">
+        ${sessionsPagerHtml(payload, hrefForPage)}
         ${sessionsTableHtml(sessions, { showClient: false, fromClientId: clientId })}
+        ${sessionsPagerHtml(payload, hrefForPage)}
       </div>
     `;
 
