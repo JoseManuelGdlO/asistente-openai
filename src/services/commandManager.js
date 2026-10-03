@@ -382,6 +382,16 @@ class CommandManager {
     }
   }
 
+  async getClientByMetaPhoneNumberId(phoneNumberId) {
+    try {
+      const client = await this.firebaseService.getClientByMetaPhoneNumberId(phoneNumberId);
+      return client ? client.id : null;
+    } catch (error) {
+      console.error('❌ Error obteniendo cliente por phone_number_id:', error);
+      return null;
+    }
+  }
+
   /**
    * Lista Assistants de Firestore (excluye deleted). Incluye clientName del cache si existe.
    * @returns {Promise<Array>}

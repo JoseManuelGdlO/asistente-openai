@@ -5,6 +5,22 @@ const cors = require('cors');
 const multer = require('multer');
 const requireAdminAuth = require('./middleware/requireAdminAuth');
 const { readDebounceConfig } = require('./services/messageDebounceManager');
+const { publicMetaSignupConfig } = require('./services/metaConfig');
+const {
+  createInviteToken,
+  inviteUrlFor,
+  inviteFields,
+  sanitizeClient,
+  sanitizeClientsMap,
+  assertInviteUsable
+} = require('./services/metaInviteService');
+const defaultMetaSignup = require('./services/metaSignupService');
+const {
+  verifyMetaWebhookChallenge,
+  verifyMetaSignature,
+  parseMetaRawBody
+} = require('./services/metaWebhook');
+const { sendHttpError } = require('./utils/httpError');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
 
@@ -118,13 +134,52 @@ function createApp(deps = {}) {
     userContextManager,
     schedulerController,
     documentStore,
-    reinitUltraMsgInstances = async () => {}
+    reinitUltraMsgInstances = async () => {},
+    metaSignup = defaultMetaSignup
   } = deps;
+
+  const firebaseService = deps.firebaseService
+    || webhookManager?.commandManager?.firebaseService
+    || null;
+  const commandManager = webhookManager?.commandManager || null;
 
   const app = express();
   const uploadPdf = createUploadPdf();
+  const metaRaw = express.raw({ type: 'application/json', limit: '1mb' });
 
   app.use(cors());
+
+  const handleMetaChallenge = (req, res) => {
+    const result = verifyMetaWebhookChallenge(req.query);
+    if (result.ok) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.status(200).send(result.challenge);
+    }
+    return res.status(403).json({ ok: false, error: 'Challenge de webhook inválido.' });
+  };
+
+  const handleMetaEvents = async (req, res) => {
+    try {
+      const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
+      const signature = req.headers['x-hub-signature-256'] || req.headers['x-hub-signature'];
+      const verified = verifyMetaSignature(raw, signature);
+      if (!verified.ok) {
+        return res.status(401).json({ ok: false, error: 'Firma de webhook de Meta inválida.' });
+      }
+      const payload = parseMetaRawBody(raw);
+      const result = await webhookManager.handleMetaWebhook(payload);
+      return res.status(200).json({ ok: true, ...result });
+    } catch (error) {
+      console.error('Error processing Meta webhook:', error.message);
+      return res.sendStatus(500);
+    }
+  };
+
+  app.get('/api/webhooks/meta', handleMetaChallenge);
+  app.get('/api/webhooks/meta/whatsapp', handleMetaChallenge);
+  app.post('/api/webhooks/meta', metaRaw, handleMetaEvents);
+  app.post('/api/webhooks/meta/whatsapp', metaRaw, handleMetaEvents);
+
   app.use(express.json());
 
   // ==================== ENDPOINTS DE WEBHOOK ====================
@@ -302,7 +357,7 @@ function createApp(deps = {}) {
       const deleted = await openAIManager.deleteSessionsByClientCode(clientCode);
       res.json({
         ok: true,
-        message: `Sesiones eliminadas para consultorio: ${clientCode}`,
+        message: `Sesiones eliminadas para el bot: ${clientCode}`,
         deleted
       });
     } catch (error) {
@@ -310,6 +365,41 @@ function createApp(deps = {}) {
       res.status(500).json({
         ok: false,
         error: 'Error eliminando sesiones del consultorio',
+        details: error.message
+      });
+    }
+  });
+
+  app.get('/sessions/:userId/:clientCode', requireAdminAuth, async (req, res) => {
+    try {
+      const { userId, clientCode } = req.params;
+      const session = await openAIManager.getSession(userId, clientCode);
+      if (!session) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Sesión no encontrada'
+        });
+      }
+      res.json({
+        ok: true,
+        session: {
+          id: session.id || `${userId}_${clientCode}`,
+          userId: session.userId || userId,
+          clientCode: session.clientCode || clientCode,
+          items: Array.isArray(session.items) ? session.items : [],
+          pendingMessages: Array.isArray(session.pendingMessages) ? session.pendingMessages : [],
+          createdAt: timestampToIso(session.createdAt),
+          updatedAt: timestampToIso(session.updatedAt),
+          lockedUntil: timestampToIso(session.lockedUntil),
+          flushAt: timestampToIso(session.flushAt),
+          locked: isSessionLockedNow(session)
+        }
+      });
+    } catch (error) {
+      console.error('Error obteniendo sesión:', error);
+      res.status(500).json({
+        ok: false,
+        error: 'Error obteniendo sesión',
         details: error.message
       });
     }
@@ -499,7 +589,7 @@ function createApp(deps = {}) {
       const clients = webhookManager.commandManager.getClientConfig();
       res.json({
         ok: true,
-        clients: clients,
+        clients: sanitizeClientsMap(clients),
         count: Object.keys(clients).length
       });
     } catch (error) {
@@ -564,20 +654,20 @@ function createApp(deps = {}) {
         ULTRAMSG_WEBHOOK_TOKEN
       } = req.body;
 
-      if (!name || !adminPhone || !assistantPhone) {
+      if (!name || !adminPhone) {
         return res.status(400).json({
           ok: false,
-          error: 'name, adminPhone y assistantPhone son requeridos'
+          error: 'name y adminPhone son requeridos'
         });
       }
 
       const normalizedPrompt = typeof prompt === 'string' ? prompt : '';
+      const invite = createInviteToken();
 
       const clientPayload = stripEmptyUltraMsgFields({
         id,
         name,
         adminPhone,
-        assistantPhone,
         botStatus: botStatus || 'active',
         prompt: normalizedPrompt,
         tools,
@@ -585,8 +675,12 @@ function createApp(deps = {}) {
         responseSchema,
         ULTRAMSG_TOKEN,
         ULTRAMSG_INSTANCE_ID,
-        ULTRAMSG_WEBHOOK_TOKEN
+        ULTRAMSG_WEBHOOK_TOKEN,
+        ...inviteFields(invite)
       });
+      if (assistantPhone) {
+        clientPayload.assistantPhone = assistantPhone;
+      }
 
       const result = await webhookManager.commandManager.createClient(
         clientPayload,
@@ -599,8 +693,10 @@ function createApp(deps = {}) {
 
       res.status(201).json({
         ok: true,
-        client: result.client,
+        client: sanitizeClient(result.client),
         assistant: result.assistant,
+        inviteUrl: inviteUrlFor(req, invite.token),
+        inviteExpiresAt: invite.expiresAt,
         message: 'Cliente y Assistant creados exitosamente'
       });
     } catch (error) {
@@ -626,7 +722,7 @@ function createApp(deps = {}) {
 
       res.json({
         ok: true,
-        client: updatedClient,
+        client: sanitizeClient(updatedClient),
         message: 'Cliente actualizado exitosamente'
       });
     } catch (error) {
@@ -1017,7 +1113,7 @@ function createApp(deps = {}) {
 
       res.json({
         ok: true,
-        client: client
+        client: sanitizeClient(client)
       });
     } catch (error) {
       console.error('Error obteniendo cliente:', error);
@@ -1026,6 +1122,44 @@ function createApp(deps = {}) {
         error: 'Error obteniendo cliente',
         details: error.message
       });
+    }
+  });
+
+  app.post('/clients/:clientId/meta/invite', requireAdminAuth, async (req, res) => {
+    try {
+      const result = await metaSignup.regenerateInvite({
+        firebaseService,
+        clientId: req.params.clientId
+      });
+      if (commandManager?.reloadClients) {
+        await commandManager.reloadClients();
+      }
+      res.json({
+        ok: true,
+        client: sanitizeClient(result.client),
+        inviteUrl: inviteUrlFor(req, result.invite.token),
+        inviteExpiresAt: result.invite.expiresAt
+      });
+    } catch (error) {
+      return sendHttpError(res, error);
+    }
+  });
+
+  app.post('/clients/:clientId/meta/disconnect', requireAdminAuth, async (req, res) => {
+    try {
+      const result = await metaSignup.disconnectMetaWhatsapp({
+        firebaseService,
+        commandManager,
+        clientId: req.params.clientId
+      });
+      res.json({
+        ok: true,
+        client: sanitizeClient(result.client),
+        inviteUrl: inviteUrlFor(req, result.invite.token),
+        inviteExpiresAt: result.invite.expiresAt
+      });
+    } catch (error) {
+      return sendHttpError(res, error);
     }
   });
 
@@ -1354,6 +1488,63 @@ function createApp(deps = {}) {
     }
   });
 
+  app.get('/public/meta/config', (_req, res) => {
+    const config = publicMetaSignupConfig();
+    res.json({
+      ok: true,
+      configured: config.configured,
+      appId: config.appId,
+      configId: config.configId,
+      graphVersion: config.graphVersion,
+      featureType: config.featureType,
+      sessionInfoVersion: config.sessionInfoVersion
+    });
+  });
+
+  app.get('/public/meta/invite/:token', async (req, res) => {
+    try {
+      if (!firebaseService?.getClientByInviteToken) {
+        return res.status(503).json({ ok: false, error: 'Servicio no disponible' });
+      }
+      const client = await firebaseService.getClientByInviteToken(req.params.token);
+      assertInviteUsable(client);
+      const config = publicMetaSignupConfig();
+      res.json({
+        ok: true,
+        botName: client.name || client.id,
+        status: 'pending',
+        configured: config.configured,
+        config
+      });
+    } catch (error) {
+      return sendHttpError(res, error);
+    }
+  });
+
+  app.post('/public/meta/signup', async (req, res) => {
+    try {
+      const result = await metaSignup.completeEmbeddedSignup({
+        firebaseService,
+        commandManager,
+        token: req.body?.token,
+        code: req.body?.code,
+        wabaId: req.body?.wabaId || req.body?.waba_id,
+        phoneNumberId: req.body?.phoneNumberId || req.body?.phone_number_id,
+        businessId: req.body?.businessId || req.body?.business_id,
+        event: req.body?.event
+      });
+      res.status(201).json({
+        ok: true,
+        displayPhoneNumber: result.displayPhoneNumber,
+        coexistenceEnabled: result.coexistenceEnabled,
+        phoneNumberId: result.phoneNumberId,
+        wabaId: result.wabaId
+      });
+    } catch (error) {
+      return sendHttpError(res, error);
+    }
+  });
+
   // ==================== PANEL ADMIN (SPA) ====================
 
   const publicDir = path.join(__dirname, '../public');
@@ -1366,6 +1557,12 @@ function createApp(deps = {}) {
   });
   app.get('/privacidad', (_req, res) => {
     res.sendFile(path.join(publicDir, 'privacidad.html'));
+  });
+  app.get('/eliminar-datos', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'eliminar-datos.html'));
+  });
+  app.get('/vincular/:token', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'vincular.html'));
   });
 
   return app;

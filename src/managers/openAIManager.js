@@ -229,12 +229,32 @@ class OpenAIManager {
    */
   async flushPendingDocuments(runContext) {
     const pending = runContext?.pendingDocuments;
-    if (!pending || !pending.length || !runContext.ultraMsgManager) {
+    if (!pending || !pending.length) {
       return;
     }
 
+    const client = runContext.client
+      || (runContext.clientCode && runContext.getClientConfig
+        ? runContext.getClientConfig()?.[runContext.clientCode]
+        : null);
+
     for (const item of pending) {
       console.log(`📤 Enviando documento pendiente: ${item.filename || item.documentoId}`);
+      if (runContext.origin === 'meta' && runContext.metaWhatsappManager) {
+        await runContext.metaWhatsappManager.sendDocument(
+          item.userId,
+          {
+            filename: item.filename,
+            document: item.document,
+            caption: item.caption || ''
+          },
+          client
+        );
+        continue;
+      }
+      if (!runContext.ultraMsgManager) {
+        throw new Error('No hay transporte para enviar el documento');
+      }
       await runContext.ultraMsgManager.sendDocument(
         item.userId,
         {
@@ -592,8 +612,13 @@ class OpenAIManager {
     const runContext = {
       userId,
       clientId: clientCode,
+      clientCode,
       instanceId: context.instanceId || null,
+      origin: context.origin || null,
       ultraMsgManager: context.ultraMsgManager || null,
+      metaWhatsappManager: context.metaWhatsappManager || null,
+      client: context.client || null,
+      getClientConfig: context.getClientConfig || null,
       documentStore: context.documentStore || null,
       sentDocuments: new Set(),
       sessionSentDocuments: new Set(),

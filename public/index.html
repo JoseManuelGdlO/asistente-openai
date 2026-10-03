@@ -7,40 +7,56 @@
   <link rel="icon" href="/logo.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <a class="skip" href="#content">Saltar al contenido</a>
   <div id="login-view" class="login-wrap" hidden>
-    <section class="login-hero">
-      <img src="/logo.svg" alt="" width="72" height="72">
-      <span class="wordmark">
-        <strong>Intelekia</strong>
-        <em>Chatbot</em>
-      </span>
-      <p>Gestiona cada chatbot, sus conversaciones y sus documentos.</p>
-    </section>
-    <section class="login-form-side">
-      <form id="login-form" class="login-card">
-        <h1>Iniciar sesión</h1>
-        <label for="login-email">Correo electrónico</label>
-        <input id="login-email" name="email" type="email" autocomplete="username" required>
-        <label for="login-password">Contraseña</label>
-        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
-        <p id="login-error" class="error" hidden></p>
-        <button type="submit">Entrar</button>
+    <div class="login-shell">
+      <section class="login-panel">
+        <a class="login-brand" href="/">
+          <img src="/logo.svg" alt="" width="52" height="52">
+          <span class="wordmark">
+            <strong>Intelekia</strong>
+            <em>Chatbot</em>
+          </span>
+        </a>
+        <form id="login-form" class="login-card">
+          <h1>Iniciar sesión</h1>
+          <p class="login-lead">Gestiona cada chatbot, sus conversaciones y sus documentos.</p>
+          <label for="login-email">Correo electrónico</label>
+          <input id="login-email" name="email" type="email" autocomplete="username" placeholder="tu@correo.com" required>
+          <label for="login-password">Contraseña</label>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+          <p id="login-error" class="error" hidden></p>
+          <button type="submit">Entrar</button>
+        </form>
         <p class="login-legal">
           <a href="/terminos">Términos y Condiciones</a>
           <a href="/privacidad">Aviso de Privacidad</a>
+          <a href="/eliminar-datos">Eliminar datos</a>
         </p>
-      </form>
-    </section>
+      </section>
+      <aside class="login-stage" aria-hidden="true">
+        <div class="stage-frame">
+          <div class="stage-scene"></div>
+          <img class="stage-mark" src="/logo.svg" alt="">
+          <div class="stage-chip">Conversación activa</div>
+          <article class="stage-card">
+            <p>Hoy</p>
+            <h2>Cita confirmada</h2>
+            <span>Bot, 10:30</span>
+          </article>
+        </div>
+      </aside>
+    </div>
   </div>
 
   <div id="app-view" class="app" hidden>
     <aside class="sidebar">
       <a class="brand" href="#/">
-        <img src="/logo.svg" alt="" width="36" height="36">
+        <img src="/logo.svg" alt="" width="40" height="40">
         <span class="wordmark">
           <strong>Intelekia</strong>
           <em>Chatbot</em>
@@ -48,11 +64,15 @@
       </a>
       <nav>
         <a href="#/" data-nav="dashboard">Dashboard</a>
-        <a href="#/clients" data-nav="clients">Consultorios</a>
+        <a href="#/clients" data-nav="clients">Bots</a>
         <a href="#/sessions" data-nav="sessions">Sesiones</a>
       </nav>
-      <a href="/terminos" class="sidebar-terms">Términos y Condiciones</a>
-      <button type="button" id="logout-btn" class="btn-ghost">Cerrar sesión</button>
+      <div class="sidebar-foot">
+        <a href="/terminos" class="sidebar-terms">Términos</a>
+        <a href="/privacidad" class="sidebar-terms">Privacidad</a>
+        <a href="/eliminar-datos" class="sidebar-terms">Eliminar datos</a>
+        <button type="button" id="logout-btn" class="btn-ghost">Cerrar sesión</button>
+      </div>
     </aside>
     <main id="content" class="content"></main>
   </div>

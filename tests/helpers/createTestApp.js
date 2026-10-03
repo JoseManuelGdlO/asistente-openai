@@ -11,6 +11,9 @@ function createStubDeps(overrides = {}) {
   const firebaseService = {
     getClientById: fnAsync(null),
     getClientStats: fnAsync({ total: 0 }),
+    getClientByInviteToken: fnAsync(null),
+    getClientByMetaPhoneNumberId: fnAsync(null),
+    updateClient: fnAsync({ id: 'C1' }),
     confirmPanelLogin: fnAsync({ id: 'confirm-1', email: 'admin@asistente.local', confirmedAt: '2026-10-02T00:00:00.000Z' }),
     verifyPanelUser: fnAsync(null),
     ...overrides.firebaseService
@@ -35,6 +38,7 @@ function createStubDeps(overrides = {}) {
     verifyWebhookToken: jest.fn((token) => token === process.env.ULTRAMSG_WEBHOOK_TOKEN),
     handleWebhook: fnAsync({ processed: false, reason: 'invalid_message_format' }),
     handleOwnWebhook: fnAsync({ processed: false, reason: 'invalid_message_format' }),
+    handleMetaWebhook: fnAsync({ processed: false, reason: 'no_inbound_messages' }),
     commandManager,
     ...overrides.webhookManager
   };
@@ -100,12 +104,16 @@ function createStubDeps(overrides = {}) {
     documentStore,
     reinitUltraMsgInstances: overrides.reinitUltraMsgInstances || fnAsync(),
     firebaseService,
-    commandManager
+    commandManager,
+    metaSignup: overrides.metaSignup
   };
 }
 
 function createTestApp(overrides = {}) {
   const deps = createStubDeps(overrides);
+  if (!overrides.metaSignup) {
+    delete deps.metaSignup;
+  }
   const app = createApp(deps);
   return { app, deps, adminToken: ADMIN_TOKEN };
 }

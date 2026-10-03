@@ -53,6 +53,33 @@ describe('Endpoints de sesiones', () => {
     expect(deps.openAIManager.deleteSessionsByClientCode).toHaveBeenCalledWith('CLIENTE001');
   });
 
+  it('GET /sessions/:userId/:clientCode 404', async () => {
+    const { app } = createTestApp({
+      openAIManager: { getSession: jest.fn().mockResolvedValue(null) }
+    });
+    const res = await request(app).get('/sessions/521/C1').set(authHeader());
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /sessions/:userId/:clientCode 200 con items', async () => {
+    const { app, deps } = createTestApp({
+      openAIManager: {
+        getSession: jest.fn().mockResolvedValue({
+          id: '521_C1',
+          userId: '521',
+          clientCode: 'C1',
+          items: [{ type: 'message', role: 'user', content: 'hola' }],
+          pendingMessages: [],
+          updatedAt: '2026-10-02T00:00:00.000Z'
+        })
+      }
+    });
+    const res = await request(app).get('/sessions/521/C1').set(authHeader());
+    expect(res.status).toBe(200);
+    expect(res.body.session.items).toHaveLength(1);
+    expect(deps.openAIManager.getSession).toHaveBeenCalledWith('521', 'C1');
+  });
+
   it('DELETE /sessions/:userId/:clientCode', async () => {
     const { app, deps } = createTestApp({
       openAIManager: { deleteSession: jest.fn().mockResolvedValue(true) }

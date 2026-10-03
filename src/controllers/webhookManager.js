@@ -1,12 +1,15 @@
 const CommandManager = require('../services/commandManager');
 const DocumentStore = require('../services/documentStore');
 const OwnSystemManager = require('../managers/ownSystemManager');
+const MetaWhatsappManager = require('../managers/metaWhatsappManager');
 const MessageDebounceManager = require('../services/messageDebounceManager');
+const { extractMetaInboundMessages } = require('../services/metaWebhook');
 
 class WebhookManager {
-  constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager, documentStore = null) {
+  constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager, documentStore = null, metaWhatsappManager = null) {
     this.ultraMsgManager = ultraMsgManager;
     this.ownSystemManager = new OwnSystemManager();
+    this.metaWhatsappManager = metaWhatsappManager || new MetaWhatsappManager();
     this.openAIManager = openAIManager;
     this.confirmationManager = confirmationManager;
     this.userContextManager = userContextManager;
@@ -20,6 +23,7 @@ class WebhookManager {
       openAIManager,
       ultraMsgManager,
       ownSystemManager: this.ownSystemManager,
+      metaWhatsappManager: this.metaWhatsappManager,
       getClientConfig: () => this.commandManager.clientConfig || {},
       documentStore: this.documentStore
     });
@@ -287,13 +291,17 @@ class WebhookManager {
     }
   }
 
+  resolveClientRecord(clientId) {
+    return this.commandManager.clientConfig?.[clientId] || null;
+  }
+
   /**
    * Procesa un mensaje completo
    * @param {Object} messageData - Datos del mensaje de UltraMsg
    * @param {string} webhookToken - Token del webhook (opcional)
    * @returns {Promise<{response: string|null, reason: string}>}
    */
-  async processMessage(messageData, webhookToken = null) {
+  async processMessage(messageData, webhookToken = null, options = {}) {
     // Verificar si es un mensaje de grupo
     if (this.isGroupMessage(messageData)) {
       const groupInfo = this.extractGroupInfo(messageData);
@@ -303,14 +311,21 @@ class WebhookManager {
       return { response: null, reason: 'group_message_ignored' };
     }
 
-    const from = messageData.from.replace('@c.us', '');
+    const origin = options.origin || 'ultramsg';
+    const from = messageData.from.replace('@c.us', '').replace('@s.whatsapp.net', '');
     const msg_body = messageData.body || '';
     const hasDocument = this.isDocumentMessage(messageData);
     const mediaInfo = this.extractMediaInfo(messageData);
 
     // Detectar automáticamente el cliente basándose en el número de teléfono del asistente
     const assistantPhone = messageData.to || messageData.from;
-    const clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
+    let clientId = options.clientId || null;
+    if (!clientId && origin === 'meta' && messageData.phoneNumberId) {
+      clientId = await this.commandManager.getClientByMetaPhoneNumberId(messageData.phoneNumberId);
+    }
+    if (!clientId) {
+      clientId = await this.commandManager.getClientByAssistantPhone(assistantPhone);
+    }
 
     // Si tenemos cliente, comprobar blacklist: no responder a números bloqueados
     if (clientId) {
@@ -322,8 +337,18 @@ class WebhookManager {
     }
 
     const sendReplyUltra = async (text, preferredClientId = null) => {
+      const targetClientId = preferredClientId || clientId;
+      if (origin === 'meta') {
+        const client = this.resolveClientRecord(targetClientId) || options.client;
+        console.log('📱 Usando Meta Cloud API');
+        console.log('Enviando mensaje via Meta a:', from);
+        console.log('Mensaje:', text);
+        const response = await this.metaWhatsappManager.sendMessage(from, text, client);
+        console.log('Respuesta de Meta:', response);
+        return response;
+      }
       const instanceId = this.resolveInstanceId(
-        preferredClientId || clientId,
+        targetClientId,
         messageData,
         webhookToken
       );
@@ -341,7 +366,9 @@ class WebhookManager {
     if (hasDocument && mediaInfo.mediaUrl) {
       try {
         console.log('📎 Descargando documento adjunto:', mediaInfo.mediaFilename || mediaInfo.mediaUrl);
-        const mediaBuffer = await this.ultraMsgManager.downloadMedia(mediaInfo.mediaUrl);
+        const mediaBuffer = origin === 'meta'
+          ? await this.metaWhatsappManager.downloadMedia(mediaInfo.mediaUrl, options.client || this.resolveClientRecord(clientId))
+          : await this.ultraMsgManager.downloadMedia(mediaInfo.mediaUrl);
         mediaContext = {
           mediaBuffer,
           mediaFilename: mediaInfo.mediaFilename,
@@ -385,7 +412,12 @@ class WebhookManager {
 
     // Verificar si es un mensaje de confirmación
     const sendReplyUltraWithClient = (text) => sendReplyUltra(text, clientId);
-    const isConfirmationProcessed = await this.processConfirmationMessage(from, msg_body, sendReplyUltraWithClient, 'UltraMsg');
+    const isConfirmationProcessed = await this.processConfirmationMessage(
+      from,
+      msg_body,
+      sendReplyUltraWithClient,
+      origin === 'meta' ? 'Meta' : 'UltraMsg'
+    );
     if (isConfirmationProcessed) {
       return { response: null, reason: 'confirmation_processed' };
     }
@@ -422,22 +454,32 @@ class WebhookManager {
     
     console.log('🤖 Usando Assistant Firestore para cliente:', clientId);
 
-    const instanceId = this.resolveInstanceId(clientId, messageData, webhookToken);
-    console.log('📱 Usando instancia UltraMsg:', instanceId, '(cliente:', clientId + ')');
+    const instanceId = origin === 'meta'
+      ? null
+      : this.resolveInstanceId(clientId, messageData, webhookToken);
+    console.log(
+      origin === 'meta'
+        ? `📱 Usando Meta Cloud API (cliente: ${clientId})`
+        : `📱 Usando instancia UltraMsg: ${instanceId} (cliente: ${clientId})`
+    );
 
     const queued = await this.debounceManager.queueChatMessage({
       userId: from,
       clientCode: clientId,
       text: msg_body,
       flushContext: {
-        origin: 'ultramsg',
+        origin: origin === 'meta' ? 'meta' : 'ultramsg',
         from,
         clientId,
         instanceId
       },
       processContext: {
         instanceId,
-        ultraMsgManager: this.ultraMsgManager,
+        origin,
+        ultraMsgManager: origin === 'meta' ? this.debounceManager.buildFlushTransport({ origin: 'meta', clientId }) : this.ultraMsgManager,
+        metaWhatsappManager: this.metaWhatsappManager,
+        client: this.resolveClientRecord(clientId),
+        getClientConfig: () => this.commandManager.clientConfig || {},
         documentStore: this.documentStore,
         sendReply: async (text) => {
           await this.sendUltraNotice(sendReplyUltra, from, text, clientId);
@@ -666,6 +708,52 @@ class WebhookManager {
         reason: result.reason
       };
     });
+  }
+
+  /**
+   * Maneja inbound de WhatsApp Cloud API (Meta)
+   * @param {Object} payload
+   * @returns {Promise<Object>}
+   */
+  async handleMetaWebhook(payload) {
+    const inbound = extractMetaInboundMessages(payload);
+    if (!inbound.length) {
+      return { processed: false, reason: 'no_inbound_messages' };
+    }
+
+    let last = { processed: false, reason: 'no_inbound_messages' };
+    for (const message of inbound) {
+      if (!message.id) {
+        last = { processed: false, reason: 'missing_message_id' };
+        continue;
+      }
+      last = await this.withWebhookDedup(`meta:${message.id}`, async () => {
+        const clientId = await this.commandManager.getClientByMetaPhoneNumberId(message.phoneNumberId);
+        const client = clientId ? this.resolveClientRecord(clientId) : null;
+        const result = await this.processMessage(
+          {
+            id: message.id,
+            from: message.from,
+            to: message.to,
+            body: message.body,
+            type: message.type,
+            media: message.mediaId || null,
+            filename: message.filename || '',
+            phoneNumberId: message.phoneNumberId
+          },
+          null,
+          { origin: 'meta', clientId, client }
+        );
+        return {
+          processed: true,
+          response: result.response,
+          userId: message.from,
+          reason: result.reason,
+          clientId
+        };
+      });
+    }
+    return last;
   }
 }
 

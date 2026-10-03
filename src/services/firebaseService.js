@@ -1,4 +1,5 @@
 const admin = require('firebase-admin');
+const { hashInviteToken } = require('./metaInviteService');
 const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
 
 const DEFAULT_RESPONSE_SCHEMA = {
@@ -238,6 +239,66 @@ class FirebaseService {
       return null;
     } catch (error) {
       console.error('❌ Error obteniendo cliente por teléfono:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene un cliente activo por token público de vinculación Meta
+   * @param {string} token
+   * @returns {Promise<Object|null>}
+   */
+  async getClientByInviteToken(token) {
+    try {
+      const hash = hashInviteToken(token);
+      if (!hash) return null;
+      const snapshot = await this.clientsCollection
+        .where('META_INVITE_TOKEN_HASH', '==', hash)
+        .where('status', '==', 'active')
+        .limit(1)
+        .get();
+
+      if (snapshot.empty) return null;
+      const doc = snapshot.docs[0];
+      const clientData = doc.data();
+      return {
+        id: doc.id,
+        ...clientData,
+        createdAt: clientData.createdAt?.toDate(),
+        updatedAt: clientData.updatedAt?.toDate()
+      };
+    } catch (error) {
+      console.error('❌ Error obteniendo cliente por invite token:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene un cliente activo por phone_number_id de Meta
+   * @param {string} phoneNumberId
+   * @returns {Promise<Object|null>}
+   */
+  async getClientByMetaPhoneNumberId(phoneNumberId) {
+    try {
+      const id = String(phoneNumberId || '').trim();
+      if (!id) return null;
+      const snapshot = await this.clientsCollection
+        .where('META_PHONE_NUMBER_ID', '==', id)
+        .where('status', '==', 'active')
+        .limit(1)
+        .get();
+
+      if (snapshot.empty) return null;
+      const doc = snapshot.docs[0];
+      const clientData = doc.data();
+      return {
+        id: doc.id,
+        ...clientData,
+        createdAt: clientData.createdAt?.toDate(),
+        updatedAt: clientData.updatedAt?.toDate()
+      };
+    } catch (error) {
+      console.error('❌ Error obteniendo cliente por phone_number_id:', error);
       throw error;
     }
   }
@@ -992,15 +1053,48 @@ class FirebaseService {
    * @param {FirebaseFirestore.QueryDocumentSnapshot|FirebaseFirestore.DocumentSnapshot} doc
    * @returns {Object}
    */
+  _lastMessagePreview(items) {
+    let lastUser = '';
+    let lastAssistant = '';
+    for (const item of Array.isArray(items) ? items : []) {
+      if (item?.type !== 'message') continue;
+      let raw = '';
+      if (typeof item.content === 'string') raw = item.content;
+      else if (Array.isArray(item.content)) {
+        raw = item.content.map((part) => (
+          typeof part === 'string' ? part : (part?.text || '')
+        )).join('');
+      }
+      if (item.role === 'user') {
+        lastUser = raw.trim();
+      } else {
+        try {
+          const parsed = JSON.parse(raw);
+          lastAssistant = typeof parsed?.reply === 'string' ? parsed.reply : raw.trim();
+        } catch {
+          lastAssistant = raw.trim();
+        }
+      }
+    }
+    const clip = (text) => (text.length > 160 ? `${text.slice(0, 157)}…` : text);
+    return {
+      lastUser: clip(lastUser),
+      lastAssistant: clip(lastAssistant)
+    };
+  }
+
   summarizeBotSession(doc) {
     const data = doc.data() || {};
     const lockedUntil = data.lockedUntil?.toDate?.() || data.lockedUntil || null;
     const lockedUntilMs = lockedUntil ? new Date(lockedUntil).getTime() : 0;
+    const preview = this._lastMessagePreview(data.items);
     return {
       id: doc.id,
       userId: data.userId || null,
       clientCode: data.clientCode || null,
       itemsCount: Array.isArray(data.items) ? data.items.length : 0,
+      lastUser: preview.lastUser || null,
+      lastAssistant: preview.lastAssistant || null,
       lockedUntil,
       isLocked: Boolean(lockedUntilMs && lockedUntilMs > Date.now()),
       createdAt: data.createdAt?.toDate?.() || data.createdAt || null,
@@ -1023,7 +1117,9 @@ class FirebaseService {
         query = query.where('clientCode', '==', filters.clientCode);
       }
       const snapshot = await query.get();
-      return snapshot.docs.map((doc) => this.summarizeBotSession(doc));
+      return snapshot.docs
+        .map((doc) => this.summarizeBotSession(doc))
+        .sort((a, b) => this._toMillis(b.updatedAt) - this._toMillis(a.updatedAt));
     } catch (error) {
       console.error('❌ Error listando bot_sessions:', error);
       throw error;

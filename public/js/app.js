@@ -62,14 +62,23 @@
       : '<span class="badge badge-ok">Libre</span>';
   }
 
-  function sessionsTableHtml(sessions, { showClient = true } = {}) {
-    if (!sessions.length) return '<p class="empty">No hay sesiones.</p>';
+  function sessionDetailHref(session, fromClientId) {
+    const userId = encodeURIComponent(session.userId || '');
+    const clientCode = encodeURIComponent(session.clientCode || fromClientId || '');
+    if (fromClientId) {
+      return `#/clients/${encodeURIComponent(fromClientId)}/sesiones/${userId}`;
+    }
+    return `#/sessions/${userId}/${clientCode}`;
+  }
+
+  function sessionsTableHtml(sessions, { showClient = true, fromClientId = '' } = {}) {
+    if (!sessions.length) return '<p class="empty">No hay conversaciones guardadas.</p>';
     return `
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Usuario</th>
-          ${showClient ? '<th>Consultorio</th>' : ''}
-          <th>Items</th>
+          ${showClient ? '<th>Bot</th>' : ''}
+          <th>Último mensaje</th>
           <th>Lock</th>
           <th>Actualizado</th>
           <th></th>
@@ -77,20 +86,30 @@
         <tbody>
           ${sessions.map((session) => `
             <tr>
-              <td>${escapeHtml(session.userId || '')}</td>
+              <td>
+                <a href="${sessionDetailHref(session, fromClientId)}">${escapeHtml(sessionLabel(session.userId))}</a>
+                <div class="hint">${escapeHtml(session.userId || '')}</div>
+              </td>
               ${showClient ? `<td>${escapeHtml(session.clientCode || '')}</td>` : ''}
-              <td>${escapeHtml(session.itemsCount ?? 0)}</td>
+              <td class="session-preview">${escapeHtml(session.lastUser || session.lastAssistant || '—')}</td>
               <td>${sessionLockBadge(session)}</td>
               <td>${escapeHtml(formatSessionDate(session.updatedAt))}</td>
               <td class="actions">
+                <a class="btn btn-sm btn-secondary" href="${sessionDetailHref(session, fromClientId)}">Ver</a>
                 <button type="button" class="btn btn-sm btn-danger"
                   data-del-user="${escapeHtml(session.userId || '')}"
-                  data-del-client="${escapeHtml(session.clientCode || '')}">Eliminar</button>
+                  data-del-client="${escapeHtml(session.clientCode || fromClientId || '')}">Eliminar</button>
               </td>
             </tr>
           `).join('')}
         </tbody>
       </table></div>`;
+  }
+
+  function sessionLabel(userId) {
+    if (!userId) return 'Sin usuario';
+    if (String(userId).startsWith('playground_')) return 'Prueba del panel';
+    return String(userId);
   }
 
   function bindSessionDeletes(root, onDone) {
@@ -141,7 +160,13 @@
     for (const item of items || []) {
       if (item.type === 'message') {
         const role = item.role === 'user' ? 'user' : 'assistant';
-        const raw = typeof item.content === 'string' ? item.content : '';
+        let raw = '';
+        if (typeof item.content === 'string') raw = item.content;
+        else if (Array.isArray(item.content)) {
+          raw = item.content.map((part) => (
+            typeof part === 'string' ? part : (part?.text || '')
+          )).join('');
+        }
         const text = role === 'assistant' ? parseAssistantText(raw) : raw;
         events.push({ kind: 'message', role, text });
       } else if (item.type === 'function_call') {
@@ -237,6 +262,13 @@
     const query = new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : '');
     const parts = path.split('/').filter(Boolean);
     if (parts.length === 0) return { name: 'dashboard' };
+    if (parts[0] === 'sessions' && parts[1] && parts[2]) {
+      return {
+        name: 'session-detail',
+        userId: decodeURIComponent(parts[1]),
+        clientCode: decodeURIComponent(parts[2])
+      };
+    }
     if (parts[0] === 'sessions') {
       return {
         name: 'sessions',
@@ -245,6 +277,14 @@
       };
     }
     if (parts[0] === 'clients' && parts[1] === 'new') return { name: 'client-new' };
+    if (parts[0] === 'clients' && parts[1] && parts[2] === 'sesiones' && parts[3]) {
+      return {
+        name: 'session-detail',
+        clientId: decodeURIComponent(parts[1]),
+        userId: decodeURIComponent(parts[3]),
+        clientCode: decodeURIComponent(parts[1])
+      };
+    }
     if (parts[0] === 'clients' && parts[1]) {
       return { name: 'client-detail', clientId: decodeURIComponent(parts[1]), tab: parts[2] || 'consultorio' };
     }
@@ -253,7 +293,11 @@
   }
 
   function setActiveNav(name) {
-    const nav = (name === 'client-detail' || name === 'client-new') ? 'clients' : name;
+    let nav = name;
+    if (name === 'client-detail' || name === 'client-new') nav = 'clients';
+    if (name === 'session-detail') {
+      nav = location.hash.includes('/clients/') ? 'clients' : 'sessions';
+    }
     document.querySelectorAll('[data-nav]').forEach((link) => {
       link.classList.toggle('active', link.dataset.nav === nav);
     });
@@ -351,6 +395,7 @@
     try {
       if (route.name === 'dashboard') await renderDashboard();
       else if (route.name === 'sessions') await renderSessions(route);
+      else if (route.name === 'session-detail') await renderSessionDetail(route);
       else if (route.name === 'clients') await renderClients();
       else if (route.name === 'client-new') renderClientForm();
       else if (route.name === 'client-detail') await renderClientDetail(route.clientId, route.tab);
@@ -397,7 +442,7 @@
           <span class="value">${escapeHtml(health.status || 'OK')}</span>
         </div>
         <div class="card stat">
-          <span class="label">Consultorios</span>
+          <span class="label">Bots</span>
           <span class="value">${clients.length}</span>
         </div>
         <div class="card stat">
@@ -410,7 +455,7 @@
           <h2>Bots</h2>
           ${botRows.length === 0 ? '<p class="empty">No hay bots cargados.</p>' : `
             <div class="table-wrap"><table>
-              <thead><tr><th>Consultorio</th><th>Estado</th><th></th></tr></thead>
+              <thead><tr><th>Bot</th><th>Estado</th><th></th></tr></thead>
               <tbody>
                 ${botRows.map(([id, bot]) => `
                   <tr>
@@ -509,7 +554,7 @@
             <input id="filter-user" type="text" value="${escapeHtml(userId)}" placeholder="52155…">
           </div>
           <div>
-            <label for="filter-client">Consultorio</label>
+            <label for="filter-client">Bot</label>
             <input id="filter-client" type="text" value="${escapeHtml(clientCode)}" placeholder="CLIENTE001">
           </div>
         </div>
@@ -536,7 +581,7 @@
     });
 
     document.getElementById('reset-all-sessions').addEventListener('click', async () => {
-      if (!confirm('¿Borrar TODAS las sesiones de todos los consultorios? Esta acción no se puede deshacer.')) return;
+      if (!confirm('¿Borrar TODAS las sesiones de todos los bots? Esta acción no se puede deshacer.')) return;
       const flash = document.getElementById('sess-flash');
       try {
         const result = await api('/reset_sessions', { method: 'POST' });
@@ -548,6 +593,63 @@
     });
 
     bindSessionDeletes(content, render);
+  }
+
+  async function renderSessionDetail(route) {
+    const userId = route.userId;
+    const clientCode = route.clientCode || route.clientId;
+    const backHref = route.clientId
+      ? `#/clients/${encodeURIComponent(route.clientId)}/sesiones`
+      : '#/sessions';
+    const payload = await api(`/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(clientCode)}`);
+    const session = payload.session || {};
+    const events = playgroundItemsToEvents(session.items || []);
+    const pending = (session.pendingMessages || []).map((text) => ({
+      kind: 'message',
+      role: 'user',
+      text,
+      pending: true
+    }));
+    const allEvents = events.concat(pending);
+    let botName = clientCode;
+    try {
+      const clientRes = await api(`/clients/${encodeURIComponent(clientCode)}`);
+      botName = clientRes.client?.name || clientCode;
+    } catch {
+      // el listado global puede no tener ficha si el bot se borró
+    }
+
+    content.innerHTML = `
+      <div class="page-head">
+        <div>
+          <h1>${escapeHtml(sessionLabel(userId))}</h1>
+          <p class="muted">${escapeHtml(botName)} · ${escapeHtml(userId)}</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-secondary" href="${backHref}">Volver</a>
+          <button type="button" id="delete-this-session" class="btn-danger">Eliminar conversación</button>
+        </div>
+      </div>
+      <div id="sess-flash" hidden></div>
+      <div class="card stack session-meta">
+        <p>Actualizada ${escapeHtml(formatSessionDate(session.updatedAt))} · ${session.locked ? 'Sesión ocupada' : 'Libre'} · ${escapeHtml(String((session.items || []).length))} mensajes en historial</p>
+      </div>
+      <div class="card transcript-card">
+        ${allEvents.length
+          ? `<div class="playground-log transcript-log">${allEvents.map(playgroundEventHtml).join('')}</div>`
+          : '<p class="empty">Esta conversación no tiene mensajes todavía.</p>'}
+      </div>
+    `;
+
+    document.getElementById('delete-this-session').addEventListener('click', async () => {
+      if (!confirm(`¿Eliminar la conversación de ${userId}? El historial se perderá.`)) return;
+      try {
+        await api(`/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(clientCode)}`, { method: 'DELETE' });
+        location.hash = backHref;
+      } catch (err) {
+        showFlash(document.getElementById('sess-flash'), err.message, 'err');
+      }
+    });
   }
 
   function clientsFromPayload(payload) {
@@ -562,19 +664,19 @@
 
     content.innerHTML = `
       <div class="page-head">
-        <h1>Consultorios</h1>
-        <a class="btn" href="#/clients/new">Nuevo consultorio</a>
+        <h1>Bots</h1>
+        <a class="btn" href="#/clients/new">Nuevo bot</a>
       </div>
       <div class="card">
-        ${clients.length === 0 ? '<p class="empty">No hay consultorios.</p>' : `
+        ${clients.length === 0 ? '<p class="empty">No hay bots.</p>' : `
           <div class="table-wrap"><table>
-            <thead><tr><th>Nombre</th><th>Admin</th><th>Asistente</th><th>Bot</th><th></th></tr></thead>
+            <thead><tr><th>Nombre</th><th>Admin</th><th>WhatsApp</th><th>Bot</th><th></th></tr></thead>
             <tbody>
               ${clients.map((client) => `
                 <tr>
                   <td><a href="#/clients/${encodeURIComponent(client.id)}">${escapeHtml(client.name || client.id)}</a><div class="hint">${escapeHtml(client.id)}</div></td>
                   <td>${escapeHtml(client.adminPhone || '')}</td>
-                  <td>${escapeHtml(client.assistantPhone || '')}</td>
+                  <td>${escapeHtml(channelLabel(client))}</td>
                   <td>${statusBadge(client.botStatus)}</td>
                   <td class="actions">
                     <a class="btn btn-sm btn-secondary" href="#/clients/${encodeURIComponent(client.id)}">Editar</a>
@@ -589,7 +691,7 @@
 
     content.querySelectorAll('[data-delete]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        if (!confirm(`¿Eliminar el consultorio "${btn.dataset.name}"? Esta acción hace soft-delete del par cliente + Assistant.`)) return;
+        if (!confirm(`¿Eliminar el bot "${btn.dataset.name}"? Esta acción hace soft-delete del par cliente + Assistant.`)) return;
         try {
           await api(`/clients/${encodeURIComponent(btn.dataset.delete)}`, { method: 'DELETE' });
           render();
@@ -600,7 +702,17 @@
     });
   }
 
+  function channelLabel(client) {
+    if (client.meta?.connected) {
+      return client.meta.displayPhone || 'Meta';
+    }
+    if (client.hasUltraMsg) return 'UltraMsg';
+    if (client.meta?.inviteStatus === 'expired') return 'Link vencido';
+    return 'Pendiente de vincular';
+  }
+
   function clientFormFields(client = {}, isEdit) {
+    const hasUltraMsg = Boolean(client.hasUltraMsg || client.ULTRAMSG_INSTANCE_ID);
     const hasToken = Boolean(client.ULTRAMSG_TOKEN);
     const hasInstance = Boolean(client.ULTRAMSG_INSTANCE_ID);
     const hasWebhook = Boolean(client.ULTRAMSG_WEBHOOK_TOKEN);
@@ -622,7 +734,7 @@
         </div>
         <div>
           <label for="client-assistant">Teléfono del bot</label>
-          <input id="client-assistant" type="text" required value="${escapeHtml(client.assistantPhone || '')}">
+          <input id="client-assistant" type="text" value="${escapeHtml(client.assistantPhone || '')}" placeholder="${isEdit ? '' : 'Se llena al vincular WhatsApp'}">
         </div>
       </div>
       <div>
@@ -632,20 +744,21 @@
           <option value="inactive" ${client.botStatus === 'inactive' ? 'selected' : ''}>Inactivo</option>
         </select>
       </div>
+      ${isEdit && hasUltraMsg ? `
       <div>
         <label for="client-instance">UltraMsg instance ID</label>
-        <input id="client-instance" type="text" value="${escapeHtml(isEdit ? '' : (client.ULTRAMSG_INSTANCE_ID || ''))}" placeholder="${isEdit && hasInstance ? 'Configurado — deja vacío para no cambiar' : ''}">
+        <input id="client-instance" type="text" value="" placeholder="${hasInstance ? 'Configurado — deja vacío para no cambiar' : ''}">
       </div>
       <div class="grid grid-2">
         <div>
           <label for="client-token">UltraMsg token</label>
-          <input id="client-token" type="password" autocomplete="new-password" placeholder="${isEdit && hasToken ? 'Configurado — deja vacío para no cambiar' : ''}">
+          <input id="client-token" type="password" autocomplete="new-password" placeholder="${hasToken ? 'Configurado — deja vacío para no cambiar' : ''}">
         </div>
         <div>
           <label for="client-webhook">UltraMsg webhook token</label>
-          <input id="client-webhook" type="password" autocomplete="new-password" placeholder="${isEdit && hasWebhook ? 'Configurado — deja vacío para no cambiar' : ''}">
+          <input id="client-webhook" type="password" autocomplete="new-password" placeholder="${hasWebhook ? 'Configurado — deja vacío para no cambiar' : ''}">
         </div>
-      </div>
+      </div>` : ''}
       ${isEdit ? '' : `
         <div>
           <label for="client-prompt">Prompt inicial (opcional)</label>
@@ -658,18 +771,22 @@
     const body = {
       name: document.getElementById('client-name').value.trim(),
       adminPhone: document.getElementById('client-admin').value.trim(),
-      assistantPhone: document.getElementById('client-assistant').value.trim(),
       botStatus: document.getElementById('client-bot-status').value
     };
+    const assistantPhone = document.getElementById('client-assistant').value.trim();
+    if (assistantPhone) body.assistantPhone = assistantPhone;
     if (!isEdit) {
       const id = document.getElementById('client-id').value.trim();
       if (id) body.id = id;
       const prompt = document.getElementById('client-prompt').value;
       if (prompt) body.prompt = prompt;
     }
-    const instanceId = document.getElementById('client-instance').value.trim();
-    const token = document.getElementById('client-token').value.trim();
-    const webhook = document.getElementById('client-webhook').value.trim();
+    const instanceEl = document.getElementById('client-instance');
+    const tokenEl = document.getElementById('client-token');
+    const webhookEl = document.getElementById('client-webhook');
+    const instanceId = instanceEl ? instanceEl.value.trim() : '';
+    const token = tokenEl ? tokenEl.value.trim() : '';
+    const webhook = webhookEl ? webhookEl.value.trim() : '';
     if (instanceId) body.ULTRAMSG_INSTANCE_ID = instanceId;
     if (token) body.ULTRAMSG_TOKEN = token;
     if (webhook) body.ULTRAMSG_WEBHOOK_TOKEN = webhook;
@@ -679,14 +796,14 @@
   function renderClientForm() {
     content.innerHTML = `
       <div class="page-head">
-        <h1>Nuevo consultorio</h1>
+        <h1>Nuevo bot</h1>
         <a class="btn-secondary btn" href="#/clients">Volver</a>
       </div>
       <div id="form-flash" hidden></div>
       <form id="client-form" class="card stack">
         ${clientFormFields({}, false)}
         <div class="actions">
-          <button type="submit">Crear consultorio</button>
+          <button type="submit">Crear bot</button>
         </div>
       </form>
     `;
@@ -697,6 +814,9 @@
       const body = readClientForm(false);
       try {
         const result = await api('/clients', { method: 'POST', body });
+        if (result.inviteUrl) {
+          sessionStorage.setItem(`inviteUrl:${result.client.id}`, result.inviteUrl);
+        }
         location.hash = `#/clients/${encodeURIComponent(result.client.id)}`;
       } catch (err) {
         showFlash(flash, err.message, 'err');
@@ -718,7 +838,7 @@
         <a class="btn-secondary btn" href="#/clients">Volver</a>
       </div>
       <nav class="tabs">
-        <a href="#/clients/${encodeURIComponent(clientId)}" class="${currentTab === 'consultorio' ? 'active' : ''}">Consultorio</a>
+        <a href="#/clients/${encodeURIComponent(clientId)}" class="${currentTab === 'consultorio' ? 'active' : ''}">Bot</a>
         <a href="#/clients/${encodeURIComponent(clientId)}/assistant" class="${currentTab === 'assistant' ? 'active' : ''}">Assistant</a>
         <a href="#/clients/${encodeURIComponent(clientId)}/documentos" class="${currentTab === 'documentos' ? 'active' : ''}">Documentos</a>
         <a href="#/clients/${encodeURIComponent(clientId)}/sesiones" class="${currentTab === 'sesiones' ? 'active' : ''}">Sesiones</a>
@@ -738,13 +858,45 @@
     }
   }
 
+  function metaStatusCopy(client) {
+    const meta = client.meta || {};
+    if (meta.connected) {
+      return {
+        title: 'WhatsApp conectado',
+        body: `${meta.displayPhone || 'Número vinculado'}${meta.coexistenceEnabled ? ' · coexistencia activa' : ''}`
+      };
+    }
+    if (meta.inviteStatus === 'expired') {
+      return { title: 'Link vencido', body: 'Genera un link nuevo para que el dueño del WhatsApp lo vincule.' };
+    }
+    return { title: 'Pendiente de vincular', body: 'Comparte el link con el dueño del WhatsApp para conectar Meta.' };
+  }
+
   function renderConsultorioTab(container, client) {
+    const storedInvite = sessionStorage.getItem(`inviteUrl:${client.id}`) || '';
+    const status = metaStatusCopy(client);
     container.innerHTML = `
       <div id="form-flash" hidden></div>
+      <div class="card stack">
+        <h2>${escapeHtml(status.title)}</h2>
+        <p class="muted">${escapeHtml(status.body)}</p>
+        ${storedInvite && !client.meta?.connected ? `
+          <div class="invite-box">
+            <code id="invite-url">${escapeHtml(storedInvite)}</code>
+            <div class="actions">
+              <button type="button" class="btn-secondary" id="copy-invite">Copiar link</button>
+            </div>
+          </div>` : ''}
+        <div class="actions">
+          ${client.meta?.connected
+            ? '<button type="button" class="btn-secondary" id="disconnect-meta">Desconectar WhatsApp</button>'
+            : '<button type="button" id="regen-invite">Generar link de vinculación</button>'}
+        </div>
+      </div>
       <form id="client-form" class="card stack">
         ${clientFormFields(client, true)}
         <div class="actions">
-          <button type="submit">Guardar consultorio</button>
+          <button type="submit">Guardar bot</button>
           <button type="button" id="delete-client" class="btn-danger">Eliminar</button>
         </div>
       </form>
@@ -756,14 +908,14 @@
       const body = readClientForm(true);
       try {
         await api(`/clients/${encodeURIComponent(client.id)}`, { method: 'PUT', body });
-        showFlash(flash, 'Consultorio actualizado', 'ok');
+        showFlash(flash, 'Bot actualizado', 'ok');
       } catch (err) {
         showFlash(flash, err.message, 'err');
       }
     });
 
     document.getElementById('delete-client').addEventListener('click', async () => {
-      if (!confirm(`¿Eliminar el consultorio "${client.name}"?`)) return;
+      if (!confirm(`¿Eliminar el bot "${client.name}"?`)) return;
       try {
         await api(`/clients/${encodeURIComponent(client.id)}`, { method: 'DELETE' });
         location.hash = '#/clients';
@@ -771,6 +923,51 @@
         showFlash(document.getElementById('form-flash'), err.message, 'err');
       }
     });
+
+    const copyBtn = document.getElementById('copy-invite');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        const url = document.getElementById('invite-url')?.textContent || '';
+        try {
+          await navigator.clipboard.writeText(url);
+          showFlash(document.getElementById('form-flash'), 'Link copiado', 'ok');
+        } catch {
+          showFlash(document.getElementById('form-flash'), 'No se pudo copiar el link', 'err');
+        }
+      });
+    }
+
+    const regenBtn = document.getElementById('regen-invite');
+    if (regenBtn) {
+      regenBtn.addEventListener('click', async () => {
+        try {
+          const result = await api(`/clients/${encodeURIComponent(client.id)}/meta/invite`, { method: 'POST' });
+          if (result.inviteUrl) {
+            sessionStorage.setItem(`inviteUrl:${client.id}`, result.inviteUrl);
+          }
+          showFlash(document.getElementById('form-flash'), 'Link generado. Copia y envíalo al dueño del WhatsApp.', 'ok');
+          render();
+        } catch (err) {
+          showFlash(document.getElementById('form-flash'), err.message, 'err');
+        }
+      });
+    }
+
+    const disconnectBtn = document.getElementById('disconnect-meta');
+    if (disconnectBtn) {
+      disconnectBtn.addEventListener('click', async () => {
+        if (!confirm('¿Desconectar WhatsApp de este bot? El dueño tendrá que volver a vincular.')) return;
+        try {
+          const result = await api(`/clients/${encodeURIComponent(client.id)}/meta/disconnect`, { method: 'POST' });
+          if (result.inviteUrl) {
+            sessionStorage.setItem(`inviteUrl:${client.id}`, result.inviteUrl);
+          }
+          render();
+        } catch (err) {
+          showFlash(document.getElementById('form-flash'), err.message, 'err');
+        }
+      });
+    }
   }
 
   async function renderAssistantTab(container, clientId) {
@@ -815,7 +1012,7 @@
           </div>
           <label class="check">
             <input type="checkbox" id="asst-reset-sessions">
-            <span>Resetear conversaciones de este consultorio al guardar</span>
+            <span>Resetear conversaciones de este bot al guardar</span>
           </label>
           <div class="actions">
             <button type="submit">Guardar Assistant</button>
@@ -961,7 +1158,7 @@
     });
 
     document.getElementById('asst-reset-only').addEventListener('click', async () => {
-      if (!confirm(`¿Borrar todas las sesiones del consultorio "${clientId}"? El historial de todas las conversaciones se perderá.`)) return;
+      if (!confirm(`¿Borrar todas las sesiones del bot "${clientId}"? El historial de todas las conversaciones se perderá.`)) return;
       const flash = document.getElementById('form-flash');
       try {
         const result = await api(`/sessions/client/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
@@ -1043,18 +1240,18 @@
     container.innerHTML = `
       <div id="form-flash" hidden></div>
       <div class="page-head" style="margin-top:0">
-        <p class="muted" style="margin:0">Historial Responses de este consultorio. Borrar una sesión hace que el siguiente mensaje empiece de cero.</p>
+        <p class="muted" style="margin:0">Conversaciones de este bot. Ábrela para ver qué se dijo y dónde falló.</p>
         <div class="actions">
-          <button type="button" id="reset-client-sessions" class="btn-danger">Resetear este consultorio</button>
+          <button type="button" id="reset-client-sessions" class="btn-danger">Resetear este bot</button>
         </div>
       </div>
       <div class="card">
-        ${sessionsTableHtml(sessions, { showClient: false })}
+        ${sessionsTableHtml(sessions, { showClient: false, fromClientId: clientId })}
       </div>
     `;
 
     document.getElementById('reset-client-sessions').addEventListener('click', async () => {
-      if (!confirm(`¿Borrar todas las sesiones del consultorio "${clientId}"? El historial de todas las conversaciones se perderá.`)) return;
+      if (!confirm(`¿Borrar todas las sesiones del bot "${clientId}"? El historial de todas las conversaciones se perderá.`)) return;
       try {
         const result = await api(`/sessions/client/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
         await renderClientDetail(clientId, 'sesiones');

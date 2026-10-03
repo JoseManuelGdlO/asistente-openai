@@ -7,7 +7,7 @@
   <link rel="icon" href="/logo.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="legal-page">
@@ -38,6 +38,7 @@
         <li>documentos, por ejemplo archivos PDF;</li>
         <li>horarios, estados del bot y datos del canal de mensajería conectado.</li>
       </ul>
+      <p>Al vincular WhatsApp con Embedded Signup se guardan el WABA, el <code>phone_number_id</code>, el número visible, un token de acceso cifrado y si hay coexistencia con WhatsApp Business. Facebook Login se usa solo para completar esa vinculación, no como inicio de sesión del panel.</p>
       <p>Esos materiales se usan solo para que el chatbot responda y para mostrarlos en el panel de gestión.</p>
 
       <h2>4. Datos de las conversaciones</h2>
@@ -48,7 +49,7 @@
         <li>el historial de la sesión, necesario para dar continuidad a la conversación;</li>
         <li>documentos que el chatbot envíe durante esa conversación.</li>
       </ul>
-      <p>La finalidad es operar el chatbot: entender el mensaje, responder, confirmar acciones programadas y permitir que el administrador revise la sesión en el panel.</p>
+      <p>Esos datos viajan por la Graph API de Meta. Si el número está en coexistencia, también pueden entrar mensajes escritos desde la aplicación WhatsApp Business. La finalidad es operar el chatbot: entender el mensaje, responder, confirmar acciones programadas y permitir que el administrador revise la sesión en el panel.</p>
 
       <h2>5. Para qué se usan</h2>
       <ul>
@@ -63,11 +64,11 @@
       <h2>6. Con quién se comparten</h2>
       <p>Para funcionar, la aplicación envía datos a proveedores que prestan una parte del servicio:</p>
       <ul>
-        <li>el proveedor del canal de mensajería, para entregar y recibir los mensajes;</li>
+        <li>Meta Platforms, para Facebook Login, WhatsApp Cloud API y la entrega de mensajes;</li>
         <li>el proveedor del modelo de inteligencia artificial, para generar la respuesta a partir del mensaje y de las instrucciones del chatbot;</li>
         <li>el servicio de almacenamiento en la nube, donde se guardan cuentas, configuración, documentos y sesiones.</li>
       </ul>
-      <p>Esos proveedores tratan los datos según sus propias condiciones y solo en la medida necesaria para prestar su parte. No se ceden datos a terceros para fines distintos de operar la aplicación, salvo que la ley lo exija.</p>
+      <p>Meta trata esos datos según su <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener">política de privacidad</a>. No se ceden datos a terceros para fines distintos de operar la aplicación, salvo que la ley lo exija.</p>
 
       <h2>7. Cuánto tiempo se conservan</h2>
       <p>El acceso al panel se conserva mientras el servicio esté en uso. Las sesiones de conversación, los documentos y la configuración del chatbot se conservan mientras el administrador los mantenga en el panel o hasta que se borren. También pueden eliminarse al retirar un chatbot. Algunos registros técnicos pueden permanecer el tiempo necesario para seguridad y diagnóstico.</p>
@@ -77,6 +78,7 @@
 
       <h2>9. Derechos de acceso, rectificación, cancelación y oposición</h2>
       <p>Puedes pedir acceso, corrección, eliminación u oponerte al uso de tus datos personales. Si eres quien escribe al chatbot, la solicitud se atiende a través de quien opera ese chatbot, porque es quien decidió usar la aplicación para esa conversación. Si tienes cuenta en el panel, puedes pedir la eliminación de tu acceso contactando a quien administra el servicio.</p>
+      <p>Las instrucciones para pedir el borrado de la conexión de WhatsApp, las conversaciones y los datos asociados están en <a href="/eliminar-datos">Eliminación de datos</a>.</p>
       <p>Para tramitar la solicitud hace falta identificar la cuenta o la conversación de la que se trata. La respuesta se dará en un plazo razonable y, cuando aplique, en los plazos que marque la ley.</p>
 
       <h2>10. Cambios a este aviso</h2>

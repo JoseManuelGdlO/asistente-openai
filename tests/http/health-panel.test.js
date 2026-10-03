@@ -111,6 +111,27 @@ describe('Panel y endpoints públicos', () => {
     expect(res.status).toBe(200);
     expect(res.text).toMatch(/Términos y Condiciones/);
     expect(res.text).toMatch(/Volver al panel/);
+    expect(res.text).toMatch(/Embedded Signup/);
+  });
+
+  it('GET /privacidad menciona Meta', async () => {
+    const res = await request(app).get('/privacidad');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/Meta Platforms/);
+    expect(res.text).toMatch(/eliminar-datos/);
+  });
+
+  it('GET /eliminar-datos es público', async () => {
+    const res = await request(app).get('/eliminar-datos');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/Eliminación de datos/);
+  });
+
+  it('GET /vincular/:token sirve la página', async () => {
+    const res = await request(app).get('/vincular/abc123');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/Vincular WhatsApp/);
+    expect(res.text).toMatch(/js\/vincular\.js/);
   });
 
   it('sirve estáticos del panel', async () => {

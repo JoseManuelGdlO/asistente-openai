@@ -18,6 +18,7 @@ class MessageDebounceManager {
     openAIManager,
     ultraMsgManager,
     ownSystemManager,
+    metaWhatsappManager,
     getClientConfig,
     documentStore,
     sweepIntervalMs = 2000
@@ -26,6 +27,7 @@ class MessageDebounceManager {
     this.openAIManager = openAIManager;
     this.ultraMsgManager = ultraMsgManager;
     this.ownSystemManager = ownSystemManager;
+    this.metaWhatsappManager = metaWhatsappManager || null;
     this.getClientConfig = typeof getClientConfig === 'function' ? getClientConfig : () => ({});
     this.documentStore = documentStore || null;
     this.sweepIntervalMs = sweepIntervalMs;
@@ -166,7 +168,11 @@ class MessageDebounceManager {
         await this.openAIManager.processMessage(userId, text, clientCode, {
           alreadyLocked: true,
           instanceId: flushContext.instanceId || null,
+          origin: flushContext.origin || null,
           ultraMsgManager: this.buildFlushTransport(flushContext),
+          metaWhatsappManager: this.metaWhatsappManager,
+          client: this.getClientConfig()?.[clientCode] || null,
+          getClientConfig: this.getClientConfig,
           documentStore: this.documentStore,
           returnTrace: flushContext.origin === 'playground',
           sendReply: this.buildSendReply(flushContext)
@@ -188,6 +194,17 @@ class MessageDebounceManager {
     if (flushContext.origin === 'playground') {
       return {
         sendDocument: async () => ({ mocked: true })
+      };
+    }
+    if (flushContext.origin === 'meta') {
+      return {
+        sendDocument: async (to, payload, _instanceId) => {
+          const client = this.getClientConfig()?.[flushContext.clientId] || {};
+          if (!this.metaWhatsappManager) {
+            throw new Error('MetaWhatsappManager no disponible');
+          }
+          return this.metaWhatsappManager.sendDocument(to, payload, client);
+        }
       };
     }
     return this.ultraMsgManager;
@@ -212,6 +229,16 @@ class MessageDebounceManager {
           to: flushContext.fromJid,
           text
         });
+      };
+    }
+
+    if (flushContext.origin === 'meta') {
+      return async (text) => {
+        const client = this.getClientConfig()?.[flushContext.clientId] || {};
+        if (!this.metaWhatsappManager) {
+          throw new Error('MetaWhatsappManager no disponible');
+        }
+        await this.metaWhatsappManager.sendMessage(flushContext.from, text, client);
       };
     }
 
