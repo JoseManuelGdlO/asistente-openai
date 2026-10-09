@@ -21,7 +21,8 @@ class MessageDebounceManager {
     metaWhatsappManager,
     getClientConfig,
     documentStore,
-    sweepIntervalMs = 2000
+    sweepIntervalMs = 2000,
+    chatSignals = null
   } = {}) {
     this.firebaseService = firebaseService;
     this.openAIManager = openAIManager;
@@ -30,6 +31,7 @@ class MessageDebounceManager {
     this.metaWhatsappManager = metaWhatsappManager || null;
     this.getClientConfig = typeof getClientConfig === 'function' ? getClientConfig : () => ({});
     this.documentStore = documentStore || null;
+    this.chatSignals = chatSignals;
     this.sweepIntervalMs = sweepIntervalMs;
     this.timers = new Map();
     this.sweepTimer = null;
@@ -58,13 +60,21 @@ class MessageDebounceManager {
       if (locked) {
         return { accepted: false, reason: 'locked' };
       }
-      const reply = await this.openAIManager.processMessage(
-        userId,
-        text,
-        clientCode,
-        processContext
-      );
-      return { accepted: true, reason: 'processed', reply };
+      await this.signalReplyStart(flushContext);
+      try {
+        const reply = await this.openAIManager.processMessage(
+          userId,
+          text,
+          clientCode,
+          {
+            ...processContext,
+            sendReply: this.wrapSend(flushContext, processContext.sendReply)
+          }
+        );
+        return { accepted: true, reason: 'processed', reply };
+      } finally {
+        await this.signalReplyEnd(flushContext);
+      }
     }
 
     const result = await this.firebaseService.enqueuePendingChatMessage(
@@ -79,6 +89,7 @@ class MessageDebounceManager {
       return { accepted: false, reason: result.reason || 'locked' };
     }
 
+    await this.signalReplyStart(flushContext);
     this.scheduleFlush(userId, clientCode, result.flushAt);
     return { accepted: true, reason: 'queued', flushAt: result.flushAt };
   }
@@ -165,6 +176,7 @@ class MessageDebounceManager {
       const text = (claim.messages || []).join('\n');
       const flushContext = claim.flushContext || {};
       try {
+        await this.signalReplyStart(flushContext);
         await this.openAIManager.processMessage(userId, text, clientCode, {
           alreadyLocked: true,
           instanceId: flushContext.instanceId || null,
@@ -175,7 +187,7 @@ class MessageDebounceManager {
           getClientConfig: this.getClientConfig,
           documentStore: this.documentStore,
           returnTrace: flushContext.origin === 'playground',
-          sendReply: this.buildSendReply(flushContext)
+          sendReply: this.wrapSend(flushContext, this.buildSendReply(flushContext))
         });
       } catch (error) {
         console.error('Error procesando lote debounce:', error.message);
@@ -184,6 +196,8 @@ class MessageDebounceManager {
         } catch (unlockError) {
           console.error('Error liberando lock tras fallo de flush:', unlockError.message);
         }
+      } finally {
+        await this.signalReplyEnd(flushContext);
       }
     } finally {
       this.flushing.delete(id);
@@ -249,6 +263,32 @@ class MessageDebounceManager {
         flushContext.instanceId,
         { requestOrigin: 'UltraMsg' }
       );
+    };
+  }
+
+  shouldSignal(ctx) {
+    return Boolean(this.chatSignals && ctx && ctx.origin && ctx.origin !== 'playground');
+  }
+
+  async signalReplyStart(ctx) {
+    if (!this.shouldSignal(ctx)) return;
+    await this.chatSignals.markRead(ctx);
+    this.chatSignals.trackTyping(ctx);
+  }
+
+  async signalReplyEnd(ctx) {
+    if (!this.shouldSignal(ctx)) return;
+    const wasTyping = this.chatSignals.stopTyping(ctx);
+    if (wasTyping) {
+      await this.chatSignals.clearTyping(ctx);
+    }
+  }
+
+  wrapSend(ctx, send) {
+    if (!this.chatSignals || typeof send !== 'function') return send;
+    return async (text) => {
+      await this.signalReplyEnd(ctx);
+      await send(text);
     };
   }
 }

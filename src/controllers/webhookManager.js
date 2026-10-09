@@ -3,12 +3,13 @@ const DocumentStore = require('../services/documentStore');
 const OwnSystemManager = require('../managers/ownSystemManager');
 const MetaWhatsappManager = require('../managers/metaWhatsappManager');
 const MessageDebounceManager = require('../services/messageDebounceManager');
+const ChatSignals = require('../services/chatSignals');
 const { extractMetaInboundMessages } = require('../services/metaWebhook');
 
 class WebhookManager {
-  constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager, documentStore = null, metaWhatsappManager = null) {
+  constructor(ultraMsgManager, openAIManager, confirmationManager, userContextManager, documentStore = null, metaWhatsappManager = null, ownSystemManager = null) {
     this.ultraMsgManager = ultraMsgManager;
-    this.ownSystemManager = new OwnSystemManager();
+    this.ownSystemManager = ownSystemManager || new OwnSystemManager();
     this.metaWhatsappManager = metaWhatsappManager || new MetaWhatsappManager();
     this.openAIManager = openAIManager;
     this.confirmationManager = confirmationManager;
@@ -18,12 +19,19 @@ class WebhookManager {
       this.documentStore,
       openAIManager?.firebaseService || null
     );
+    this.chatSignals = new ChatSignals({
+      ultraMsgManager,
+      metaWhatsappManager: this.metaWhatsappManager,
+      ownSystemManager: this.ownSystemManager,
+      getClientConfig: () => this.commandManager.clientConfig || {}
+    });
     this.debounceManager = new MessageDebounceManager({
       firebaseService: openAIManager?.firebaseService || null,
       openAIManager,
       ultraMsgManager,
       ownSystemManager: this.ownSystemManager,
       metaWhatsappManager: this.metaWhatsappManager,
+      chatSignals: this.chatSignals,
       getClientConfig: () => this.commandManager.clientConfig || {},
       documentStore: this.documentStore
     });
@@ -338,6 +346,17 @@ class WebhookManager {
 
     const sendReplyUltra = async (text, preferredClientId = null) => {
       const targetClientId = preferredClientId || clientId;
+      await this.chatSignals.markRead({
+        origin,
+        messageId: messageData.id || null,
+        chatId: messageData.from,
+        from,
+        instanceId: origin === 'meta'
+          ? null
+          : this.resolveInstanceId(targetClientId, messageData, webhookToken),
+        clientId: targetClientId,
+        client: this.resolveClientRecord(targetClientId) || options.client || null
+      });
       if (origin === 'meta') {
         const client = this.resolveClientRecord(targetClientId) || options.client;
         console.log('📱 Usando Meta Cloud API');
@@ -470,6 +489,8 @@ class WebhookManager {
       flushContext: {
         origin: origin === 'meta' ? 'meta' : 'ultramsg',
         from,
+        chatId: messageData.from,
+        messageId: messageData.id || null,
         clientId,
         instanceId
       },
@@ -573,6 +594,14 @@ class WebhookManager {
       }
 
       const sendReplyOwn = async (replyText) => {
+        await this.chatSignals.markRead({
+          origin: 'own',
+          messageId,
+          clientId,
+          deviceId,
+          tenantId,
+          fromJid
+        });
         console.log('Enviando mensaje via OwnSystem a:', fromJid);
         console.log('Mensaje:', replyText);
         const resp = await this.ownSystemManager.sendMessage({
@@ -647,6 +676,7 @@ class WebhookManager {
           origin: 'own',
           fromPhone,
           fromJid,
+          messageId,
           clientId,
           tenantId,
           deviceId

@@ -19,6 +19,27 @@ class MetaWhatsappManager {
     return { phoneNumberId, token };
   }
 
+  async markRead(messageId, client) {
+    const { phoneNumberId, token } = this.credentialsFromClient(client);
+    const payload = {
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: String(messageId || '')
+    };
+    return this.graphClient.sendCloudMessage({ phoneNumberId, token, payload });
+  }
+
+  async showTyping(messageId, client) {
+    const { phoneNumberId, token } = this.credentialsFromClient(client);
+    const payload = {
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: String(messageId || ''),
+      typing_indicator: { type: 'text' }
+    };
+    return this.graphClient.sendCloudMessage({ phoneNumberId, token, payload });
+  }
+
   async sendMessage(to, message, client) {
     const { phoneNumberId, token } = this.credentialsFromClient(client);
     const payload = {

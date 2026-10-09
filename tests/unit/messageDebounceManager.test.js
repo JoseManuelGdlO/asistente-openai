@@ -43,6 +43,7 @@ function createManager(overrides = {}) {
     openAIManager,
     ultraMsgManager,
     ownSystemManager,
+    chatSignals: overrides.chatSignals,
     getClientConfig: () => ({ C1: { OWN_API_KEY: 'key-1' } }),
     documentStore: {},
     sweepIntervalMs: 60_000
@@ -142,6 +143,75 @@ describe('MessageDebounceManager', () => {
       'inst-1',
       expect.objectContaining({ requestOrigin: 'UltraMsg' })
     );
+  });
+
+  it('al preparar la IA enciende typing y lo apaga antes de enviar', async () => {
+    process.env.MESSAGE_DEBOUNCE_MS = '2500';
+    jest.useFakeTimers();
+    const order = [];
+    let typing = false;
+    const chatSignals = {
+      markRead: jest.fn(async () => order.push('read')),
+      trackTyping: jest.fn(() => {
+        typing = true;
+        order.push('typing');
+        return () => {};
+      }),
+      stopTyping: jest.fn(() => {
+        if (!typing) return false;
+        typing = false;
+        order.push('stop');
+        return true;
+      }),
+      clearTyping: jest.fn(async () => order.push('clear'))
+    };
+    const { mgr, openAIManager, ultraMsgManager } = createManager({
+      chatSignals,
+      ultraMsgManager: {
+        sendMessage: jest.fn(async () => {
+          order.push('send');
+          return { sent: true };
+        })
+      },
+      firebaseService: {
+        claimPendingChatFlush: jest.fn().mockResolvedValue({
+          claimed: true,
+          messages: ['hola'],
+          flushContext: {
+            origin: 'ultramsg',
+            from: '521',
+            chatId: '521@c.us',
+            clientId: 'C1',
+            instanceId: 'inst-1'
+          }
+        })
+      },
+      openAIManager: {
+        processMessage: jest.fn(async (_userId, _text, _client, ctx) => {
+          order.push('ai');
+          await ctx.sendReply('ok');
+          return 'ok';
+        })
+      }
+    });
+
+    await mgr.queueChatMessage({
+      userId: '521',
+      clientCode: 'C1',
+      text: 'hola',
+      flushContext: {
+        origin: 'ultramsg',
+        from: '521',
+        chatId: '521@c.us',
+        clientId: 'C1',
+        instanceId: 'inst-1'
+      }
+    });
+    await jest.advanceTimersByTimeAsync(2500);
+
+    expect(openAIManager.processMessage).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['read', 'typing', 'read', 'typing', 'ai', 'stop', 'clear', 'send']);
+    expect(ultraMsgManager.sendMessage).toHaveBeenCalled();
   });
 
   it('no llama a la IA si enqueue viene locked', async () => {

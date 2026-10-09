@@ -21,9 +21,25 @@ function createManager(overrides = {}) {
   const ultraMsgManager = {
     instances: new Map(),
     sendMessage: jest.fn().mockResolvedValue({ sent: true }),
+    markChatRead: jest.fn().mockResolvedValue({ ok: true }),
+    showTyping: jest.fn().mockResolvedValue({ ok: true }),
     getDefaultInstance: jest.fn(() => ({ instanceId: 'default' })),
     getInstanceIdByClientId: jest.fn(() => 'default'),
     ...overrides.ultraMsgManager
+  };
+
+  const metaWhatsappManager = {
+    sendMessage: jest.fn().mockResolvedValue({ sent: true }),
+    markRead: jest.fn().mockResolvedValue({ success: true }),
+    showTyping: jest.fn().mockResolvedValue({ success: true }),
+    ...overrides.metaWhatsappManager
+  };
+
+  const ownSystemManager = {
+    sendMessage: jest.fn().mockResolvedValue({ sent: true }),
+    markRead: jest.fn().mockResolvedValue({ ok: true }),
+    setPresence: jest.fn().mockResolvedValue({ ok: true }),
+    ...overrides.ownSystemManager
   };
 
   const openAIManager = {
@@ -37,7 +53,9 @@ function createManager(overrides = {}) {
     openAIManager,
     new ConfirmationManager(),
     overrides.userContextManager || new UserContextManager(),
-    { list: jest.fn().mockResolvedValue([]) }
+    { list: jest.fn().mockResolvedValue([]) },
+    metaWhatsappManager,
+    ownSystemManager
   );
 
   wm.commandManager = {
@@ -51,7 +69,7 @@ function createManager(overrides = {}) {
     ...overrides.commandManager
   };
 
-  return { wm, firebaseService, ultraMsgManager, openAIManager };
+  return { wm, firebaseService, ultraMsgManager, openAIManager, metaWhatsappManager, ownSystemManager };
 }
 
 describe('WebhookManager', () => {
@@ -245,8 +263,119 @@ describe('WebhookManager', () => {
       expect(openAIManager.processMessage).not.toHaveBeenCalled();
       expect(firebaseService.enqueuePendingChatMessage).toHaveBeenCalled();
     } finally {
+      wm.debounceManager.stopSweep();
+      wm.chatSignals.stopAll();
       process.env.MESSAGE_DEBOUNCE_MS = prev;
     }
+  });
+
+  it('en la respuesta de IA marca leído y typing por UltraMsg', async () => {
+    const { wm, ultraMsgManager } = createManager();
+    const result = await wm.processMessage({
+      id: 'm1',
+      from: '521555@c.us',
+      to: '521000@c.us',
+      body: 'hola'
+    });
+    expect(result.reason).toBe('ai_reply');
+    expect(ultraMsgManager.markChatRead).toHaveBeenCalledWith('521555@c.us', 'default');
+    expect(ultraMsgManager.showTyping).toHaveBeenCalledWith('521555@c.us', 'default');
+  });
+
+  it('marca leído al confirmar y no muestra typing', async () => {
+    const userContextManager = new UserContextManager();
+    userContextManager.markAgendaSent('521555');
+    const { wm, ultraMsgManager } = createManager({ userContextManager });
+    await wm.processMessage({
+      id: 'm-ok',
+      from: '521555@c.us',
+      to: '521000@c.us',
+      body: 'ok'
+    });
+    expect(ultraMsgManager.markChatRead).toHaveBeenCalledWith('521555@c.us', 'default');
+    expect(ultraMsgManager.showTyping).not.toHaveBeenCalled();
+  });
+
+  it('no marca leído en un grupo ni en un contacto bloqueado', async () => {
+    const { wm, ultraMsgManager } = createManager({
+      commandManager: {
+        getClientByAssistantPhone: jest.fn().mockResolvedValue('CLIENTE001'),
+        isPhoneBlacklisted: jest.fn().mockResolvedValue(true),
+        processMessage: jest.fn().mockResolvedValue({ isCommand: false }),
+        isCommand: jest.fn(() => false),
+        isBotActive: jest.fn(() => true),
+        getAssistantConfig: jest.fn().mockResolvedValue({ prompt: 'ok' })
+      }
+    });
+    await wm.processMessage({
+      from: '120363@g.us',
+      to: '521000@c.us',
+      body: 'hola'
+    });
+    await wm.processMessage({
+      from: '521555@c.us',
+      to: '521000@c.us',
+      body: 'hola'
+    });
+    expect(ultraMsgManager.markChatRead).not.toHaveBeenCalled();
+    expect(ultraMsgManager.showTyping).not.toHaveBeenCalled();
+  });
+
+  it('en la respuesta de IA marca leído y typing por Meta', async () => {
+    const { wm, metaWhatsappManager, openAIManager } = createManager();
+    wm.commandManager.clientConfig = {
+      CLIENTE001: { META_PHONE_NUMBER_ID: 'pn-1', META_ACCESS_TOKEN: 'tok-1' }
+    };
+    const result = await wm.processMessage({
+      id: 'wamid.1',
+      from: '521555',
+      to: '521000',
+      body: 'hola',
+      phoneNumberId: 'pn-1'
+    }, null, {
+      origin: 'meta',
+      clientId: 'CLIENTE001',
+      client: wm.commandManager.clientConfig.CLIENTE001
+    });
+    expect(result.reason).toBe('ai_reply');
+    expect(metaWhatsappManager.markRead).toHaveBeenCalledWith(
+      'wamid.1',
+      expect.objectContaining({ META_PHONE_NUMBER_ID: 'pn-1' })
+    );
+    expect(metaWhatsappManager.showTyping).toHaveBeenCalledWith(
+      'wamid.1',
+      expect.objectContaining({ META_PHONE_NUMBER_ID: 'pn-1' })
+    );
+    expect(openAIManager.processMessage).toHaveBeenCalled();
+  });
+
+  it('en la respuesta de IA marca leído y typing por el sistema propio', async () => {
+    const { wm, ownSystemManager } = createManager();
+    wm.commandManager.clientConfig = {
+      CLIENTE001: { OWN_SYSTEM: true, OWN_API_KEY: 'key-1' }
+    };
+    const result = await wm.handleOwnWebhook({
+      type: 'message.inbound',
+      tenantId: 'ten-1',
+      deviceId: 'dev-1',
+      normalized: {
+        messageId: 'm1',
+        from: '521555@s.whatsapp.net',
+        to: '521000:21@s.whatsapp.net',
+        content: { type: 'text', text: 'hola' }
+      }
+    });
+    expect(result.reason).toBe('ai_reply');
+    expect(ownSystemManager.markRead).toHaveBeenCalledWith({
+      deviceId: 'dev-1',
+      tenantId: 'ten-1',
+      apiKey: 'key-1',
+      to: '521555@s.whatsapp.net'
+    });
+    expect(ownSystemManager.setPresence).toHaveBeenCalledWith(expect.objectContaining({
+      presence: 'composing',
+      to: '521555@s.whatsapp.net'
+    }));
   });
 
   it('ignora chat si la sesión está locked', async () => {
