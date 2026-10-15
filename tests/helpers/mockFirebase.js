@@ -75,6 +75,10 @@ function createInMemoryFirestore() {
     async delete() {
       getCol(this.collectionName).delete(this.id);
     }
+
+    collection(name) {
+      return new CollectionRef(this.db, `${this.collectionName}/${this.id}/${name}`);
+    }
   }
 
   class Query {
@@ -85,7 +89,17 @@ function createInMemoryFirestore() {
     }
 
     where(field, op, value) {
-      return new Query(this.db, this.collectionName, [...this.filters, { field, op, value }]);
+      const next = new Query(this.db, this.collectionName, [...this.filters, { field, op, value }]);
+      next._orders = this._orders || [];
+      next._limit = this._limit;
+      return next;
+    }
+
+    orderBy(field, direction = 'asc') {
+      const next = new Query(this.db, this.collectionName, this.filters);
+      next._orders = [...(this._orders || []), { field, direction }];
+      next._limit = this._limit;
+      return next;
     }
 
     limit(n) {
@@ -116,6 +130,24 @@ function createInMemoryFirestore() {
           docs.push(snap);
         }
       }
+      if (this._orders?.length) {
+        docs.sort((left, right) => {
+          for (const { field, direction } of this._orders) {
+            const av = left.data()[field];
+            const bv = right.data()[field];
+            const am = toMillis(av);
+            const bm = toMillis(bv);
+            let cmp = 0;
+            if (am != null && bm != null) cmp = am - bm;
+            else if (av == null && bv == null) cmp = 0;
+            else if (av == null) cmp = -1;
+            else if (bv == null) cmp = 1;
+            else cmp = String(av).localeCompare(String(bv));
+            if (cmp !== 0) return direction === 'desc' ? -cmp : cmp;
+          }
+          return 0;
+        });
+      }
       if (this._limit) {
         docs = docs.slice(0, this._limit);
       }
@@ -133,7 +165,8 @@ function createInMemoryFirestore() {
     }
 
     doc(id) {
-      return new DocRef(this.db, this.collectionName, id);
+      const docId = id || `auto_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      return new DocRef(this.db, this.collectionName, docId);
     }
   }
 
@@ -153,12 +186,19 @@ function createInMemoryFirestore() {
       return this;
     }
 
+    update(ref, data) {
+      this.ops.push({ type: 'update', ref, data });
+      return this;
+    }
+
     async commit() {
       for (const op of this.ops) {
         if (op.type === 'delete') {
           await op.ref.delete();
         } else if (op.type === 'set') {
           await op.ref.set(op.data, op.options || {});
+        } else if (op.type === 'update') {
+          await op.ref.update(op.data);
         }
       }
     }

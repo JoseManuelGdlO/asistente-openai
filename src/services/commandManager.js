@@ -560,6 +560,22 @@ class CommandManager {
   async updateAssistant(clientId, data) {
     return this.firebaseService.updateAssistant(clientId, data);
   }
+
+  async saveAssistantVersion(clientId, data) {
+    return this.firebaseService.publishAssistantVersion(clientId, data);
+  }
+
+  async listAssistantVersions(clientId) {
+    return this.firebaseService.listAssistantVersions(clientId);
+  }
+
+  async getAssistantVersion(clientId, versionId) {
+    return this.firebaseService.getAssistantVersion(clientId, versionId);
+  }
+
+  async restoreAssistantVersion(clientId, versionId) {
+    return this.firebaseService.restoreAssistantVersion(clientId, versionId);
+  }
 }
 
 module.exports = CommandManager; 

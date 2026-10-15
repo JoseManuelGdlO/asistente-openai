@@ -20,6 +20,7 @@ const {
   verifyMetaSignature,
   parseMetaRawBody
 } = require('./services/metaWebhook');
+const { parseAssistantVersionBody } = require('./services/assistantVersionInput');
 const { sendHttpError } = require('./utils/httpError');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
@@ -41,6 +42,43 @@ function stripEmptyUltraMsgFields(data) {
 
 function playgroundUserId(clientId) {
   return `playground_${clientId}`;
+}
+
+function assistantVersionHttpStatus(error) {
+  if (error.code === 'CLIENT_NOT_FOUND' || error.code === 'ASSISTANT_NOT_FOUND' || error.code === 'VERSION_NOT_FOUND') {
+    return 404;
+  }
+  if (
+    error.code === 'INVALID_LABEL'
+    || error.code === 'LABEL_TOO_LONG'
+    || error.code === 'INVALID_PROMPT'
+    || error.code === 'INVALID_TOOLS'
+    || error.code === 'INVALID_CONFIG'
+    || error.code === 'INVALID_SCHEMA'
+  ) {
+    return 400;
+  }
+  return 500;
+}
+
+async function resetPlaygroundSession(openAIManager, clientId) {
+  try {
+    await openAIManager.deleteSession(playgroundUserId(clientId), clientId);
+    return true;
+  } catch (resetError) {
+    console.error('Error reseteando sesión playground:', resetError.message);
+    return false;
+  }
+}
+
+function sendAssistantVersionError(res, error, fallback) {
+  const status = assistantVersionHttpStatus(error);
+  console.error(fallback, error);
+  res.status(status).json({
+    ok: false,
+    error: status === 500 ? fallback : error.message,
+    details: error.message
+  });
 }
 
 function matchPanelLogin(body) {
@@ -853,6 +891,64 @@ function createApp(deps = {}) {
         error: status === 404 ? error.message : 'Error actualizando Assistant',
         details: error.message
       });
+    }
+  });
+
+  app.post('/assistants/:clientId/versions', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const parsed = parseAssistantVersionBody(req.body);
+      const result = await webhookManager.commandManager.saveAssistantVersion(clientId, parsed);
+      const playgroundReset = await resetPlaygroundSession(openAIManager, clientId);
+      res.json({
+        ok: true,
+        assistant: result.assistant,
+        version: result.version,
+        playgroundReset,
+        message: 'Versión guardada'
+      });
+    } catch (error) {
+      sendAssistantVersionError(res, error, 'Error guardando versión del Assistant');
+    }
+  });
+
+  app.get('/assistants/:clientId/versions', requireAdminAuth, async (req, res) => {
+    try {
+      const versions = await webhookManager.commandManager.listAssistantVersions(req.params.clientId);
+      res.json({ ok: true, versions });
+    } catch (error) {
+      sendAssistantVersionError(res, error, 'Error listando versiones');
+    }
+  });
+
+  app.get('/assistants/:clientId/versions/:versionId', requireAdminAuth, async (req, res) => {
+    try {
+      const version = await webhookManager.commandManager.getAssistantVersion(
+        req.params.clientId,
+        req.params.versionId
+      );
+      if (!version) {
+        return res.status(404).json({ ok: false, error: 'Versión no encontrada' });
+      }
+      res.json({ ok: true, version });
+    } catch (error) {
+      sendAssistantVersionError(res, error, 'Error obteniendo versión');
+    }
+  });
+
+  app.post('/assistants/:clientId/versions/:versionId/restore', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId, versionId } = req.params;
+      const assistant = await webhookManager.commandManager.restoreAssistantVersion(clientId, versionId);
+      const playgroundReset = await resetPlaygroundSession(openAIManager, clientId);
+      res.json({
+        ok: true,
+        assistant,
+        playgroundReset,
+        message: 'Versión restaurada'
+      });
+    } catch (error) {
+      sendAssistantVersionError(res, error, 'Error restaurando versión');
     }
   });
 

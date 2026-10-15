@@ -29,6 +29,10 @@ function createStubDeps(overrides = {}) {
     listAssistants: fnAsync([]),
     getAssistantConfig: fnAsync(null),
     updateAssistant: fnAsync({ clientId: 'C1' }),
+    saveAssistantVersion: fnAsync({ assistant: { clientId: 'C1' }, version: { id: 'v1', label: '', promptExcerpt: '' } }),
+    listAssistantVersions: fnAsync([]),
+    getAssistantVersion: fnAsync(null),
+    restoreAssistantVersion: fnAsync({ clientId: 'C1' }),
     reloadClients: fnAsync(),
     firebaseService,
     ...overrides.commandManager

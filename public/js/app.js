@@ -1017,10 +1017,19 @@
 
     container.innerHTML = `
       <div id="form-flash" hidden></div>
-      <div class="assistant-layout">
+      <div class="assistant-layout" id="assistant-layout">
+        <aside id="version-panel" class="card version-panel stack" hidden>
+          <h2 class="playground-title">Versiones</h2>
+          <div id="version-list"></div>
+        </aside>
         <form id="assistant-form" class="card stack">
+          <div id="version-viewing" class="version-viewing" hidden>
+            <p id="version-viewing-text"></p>
+            <button type="button" id="version-back" class="btn-sm btn-secondary">Regresar sin hacer cambios</button>
+          </div>
           <p class="muted">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
           <div>
+            <button type="button" id="versions-toggle" class="btn-sm btn-secondary" aria-expanded="false" aria-controls="version-panel">Versiones</button>
             <label for="asst-prompt">Prompt</label>
             <textarea id="asst-prompt" class="prompt">${escapeHtml(assistant.prompt || '')}</textarea>
           </div>
@@ -1052,6 +1061,8 @@
           <div class="actions">
             <button type="submit">Guardar Assistant</button>
             <button type="button" id="asst-reset-only" class="btn-secondary">Solo resetear sesiones</button>
+            <input id="asst-version-label" class="version-note" type="text" maxlength="120" placeholder="Nota opcional" aria-label="Nota de la versión">
+            <button type="button" id="asst-save-version" class="btn-secondary">Guardar versión</button>
           </div>
         </form>
         <aside class="card playground-card stack">
@@ -1148,33 +1159,225 @@
       }
     }
 
-    document.getElementById('assistant-form').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const flash = document.getElementById('form-flash');
+    let versionsLoaded = false;
+    let versionRows = [];
+    let expandedVersionId = null;
+    let liveAssistant = snapshotAssistant(assistant);
+
+    function snapshotAssistant(source) {
+      return {
+        prompt: source?.prompt || '',
+        tools: JSON.parse(JSON.stringify(source?.tools || [])),
+        config: JSON.parse(JSON.stringify(source?.config || {})),
+        responseSchema: JSON.parse(JSON.stringify(source?.responseSchema || {}))
+      };
+    }
+
+    function fillAssistantForm(source) {
+      document.getElementById('asst-prompt').value = source.prompt || '';
+      document.getElementById('asst-tools').value = prettyJson(source.tools || [], []);
+      document.getElementById('asst-config').value = prettyJson(source.config || {}, {});
+      document.getElementById('asst-schema').value = prettyJson(source.responseSchema || {}, {});
+    }
+
+    function clearViewing() {
+      const banner = document.getElementById('version-viewing');
+      banner.hidden = true;
+      document.getElementById('version-viewing-text').textContent = '';
+    }
+
+    function showViewing(version) {
+      const banner = document.getElementById('version-viewing');
+      banner.hidden = false;
+      document.getElementById('version-viewing-text').textContent = `Viendo la versión del ${formatSessionDate(version.createdAt)}. Aún no está en vivo.`;
+    }
+
+    document.getElementById('version-back').addEventListener('click', () => {
+      fillAssistantForm(liveAssistant);
+      clearViewing();
+    });
+
+    function readAssistantBody() {
       const tools = parseJsonField(document.getElementById('asst-tools').value, 'Tools', []);
       const config = parseJsonField(document.getElementById('asst-config').value, 'Config', {});
       const schema = parseJsonField(document.getElementById('asst-schema').value, 'responseSchema', {});
       if (!tools.ok || !config.ok || !schema.ok) {
-        showFlash(flash, [tools, config, schema].filter((x) => !x.ok).map((x) => x.error).join(' · '), 'err');
-        return;
+        return { ok: false, error: [tools, config, schema].filter((item) => !item.ok).map((item) => item.error).join(' · ') };
       }
       if (!Array.isArray(tools.value)) {
-        showFlash(flash, 'Tools debe ser un array JSON', 'err');
+        return { ok: false, error: 'Tools debe ser un array JSON' };
+      }
+      return {
+        ok: true,
+        body: {
+          prompt: document.getElementById('asst-prompt').value,
+          tools: tools.value,
+          config: config.value,
+          responseSchema: schema.value
+        }
+      };
+    }
+
+    function versionSavedFlash(prefix, playgroundReset) {
+      return playgroundReset
+        ? `${prefix}. Playground reiniciado.`
+        : `${prefix}. No se pudo reiniciar el playground.`;
+    }
+
+    function renderVersionList() {
+      const list = document.getElementById('version-list');
+      if (!versionRows.length) {
+        list.innerHTML = '<p class="empty">Aún no hay versiones guardadas.</p>';
+        return;
+      }
+      list.innerHTML = versionRows.map((version) => {
+        const open = version.id === expandedVersionId;
+        const note = version.label ? version.label : 'Sin nota';
+        return `
+          <div class="version-item">
+            <button type="button" class="btn-secondary version-head" data-version-toggle="${escapeHtml(version.id)}" aria-expanded="${open ? 'true' : 'false'}">
+              <span>${escapeHtml(formatSessionDate(version.createdAt))}</span>
+              <span>${escapeHtml(note)}</span>
+            </button>
+            <div class="version-body" ${open ? '' : 'hidden'}>
+              <p class="muted version-excerpt">${escapeHtml(version.promptExcerpt || '')}</p>
+              <div class="actions">
+                <button type="button" class="btn-sm btn-secondary" data-version-view="${escapeHtml(version.id)}">Ver</button>
+                <button type="button" class="btn-sm btn-secondary" data-version-restore="${escapeHtml(version.id)}">Restaurar</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function loadVersions(force) {
+      if (versionsLoaded && !force) return;
+      const res = await api(`/assistants/${encodeURIComponent(clientId)}/versions`);
+      versionRows = Array.isArray(res.versions) ? res.versions : [];
+      versionsLoaded = true;
+      if (expandedVersionId && !versionRows.some((version) => version.id === expandedVersionId)) {
+        expandedVersionId = null;
+      }
+      renderVersionList();
+    }
+
+    document.getElementById('versions-toggle').addEventListener('click', async () => {
+      const panel = document.getElementById('version-panel');
+      const layout = document.getElementById('assistant-layout');
+      const toggle = document.getElementById('versions-toggle');
+      const willOpen = panel.hidden;
+      panel.hidden = !willOpen;
+      layout.classList.toggle('versions-open', willOpen);
+      toggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      if (!willOpen) return;
+      try {
+        await loadVersions(false);
+      } catch (err) {
+        showFlash(document.getElementById('form-flash'), err.message, 'err');
+      }
+    });
+
+    document.getElementById('version-list').addEventListener('click', async (event) => {
+      const flash = document.getElementById('form-flash');
+      const toggle = event.target.closest('[data-version-toggle]');
+      if (toggle) {
+        const id = toggle.getAttribute('data-version-toggle');
+        expandedVersionId = expandedVersionId === id ? null : id;
+        renderVersionList();
+        return;
+      }
+
+      const viewBtn = event.target.closest('[data-version-view]');
+      if (viewBtn) {
+        try {
+          const res = await api(`/assistants/${encodeURIComponent(clientId)}/versions/${encodeURIComponent(viewBtn.getAttribute('data-version-view'))}`);
+          fillAssistantForm(res.version);
+          showViewing(res.version);
+        } catch (err) {
+          showFlash(flash, err.message, 'err');
+        }
+        return;
+      }
+
+      const restoreBtn = event.target.closest('[data-version-restore]');
+      if (!restoreBtn) return;
+      const versionId = restoreBtn.getAttribute('data-version-restore');
+      const version = versionRows.find((item) => item.id === versionId);
+      const when = formatSessionDate(version?.createdAt);
+      if (!confirm(`Esto reemplaza el Assistant en vivo con la versión del ${when}. Si no guardaste una versión del estado actual, ese estado se pierde.`)) {
+        return;
+      }
+      try {
+        const saved = await api(`/assistants/${encodeURIComponent(clientId)}/versions/${encodeURIComponent(versionId)}/restore`, {
+          method: 'POST'
+        });
+        liveAssistant = snapshotAssistant(saved.assistant || {});
+        fillAssistantForm(liveAssistant);
+        clearViewing();
+        if (saved.playgroundReset) clearPlaygroundLog();
+        showFlash(
+          flash,
+          versionSavedFlash('Versión restaurada', saved.playgroundReset),
+          saved.playgroundReset ? 'ok' : 'err'
+        );
+      } catch (err) {
+        showFlash(flash, err.message, 'err');
+      }
+    });
+
+    document.getElementById('asst-save-version').addEventListener('click', async () => {
+      const flash = document.getElementById('form-flash');
+      const parsed = readAssistantBody();
+      if (!parsed.ok) {
+        showFlash(flash, parsed.error, 'err');
+        return;
+      }
+      try {
+        const saved = await api(`/assistants/${encodeURIComponent(clientId)}/versions`, {
+          method: 'POST',
+          body: {
+            ...parsed.body,
+            label: document.getElementById('asst-version-label').value
+          }
+        });
+        document.getElementById('asst-version-label').value = '';
+        liveAssistant = snapshotAssistant(parsed.body);
+        clearViewing();
+        if (saved.playgroundReset) clearPlaygroundLog();
+        showFlash(
+          flash,
+          versionSavedFlash('Versión guardada', saved.playgroundReset),
+          saved.playgroundReset ? 'ok' : 'err'
+        );
+        try {
+          await loadVersions(true);
+        } catch (refreshErr) {
+          showFlash(flash, `Versión guardada, pero no se pudo actualizar la lista: ${refreshErr.message}`, 'err');
+        }
+      } catch (err) {
+        showFlash(flash, err.message, 'err');
+      }
+    });
+
+    document.getElementById('assistant-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const flash = document.getElementById('form-flash');
+      const parsed = readAssistantBody();
+      if (!parsed.ok) {
+        showFlash(flash, parsed.error, 'err');
         return;
       }
       try {
         const saved = await api(`/assistants/${encodeURIComponent(clientId)}`, {
           method: 'PUT',
-          body: {
-            prompt: document.getElementById('asst-prompt').value,
-            tools: tools.value,
-            config: config.value,
-            responseSchema: schema.value
-          }
+          body: parsed.body
         });
         if (saved.playgroundReset) {
           clearPlaygroundLog();
         }
+        liveAssistant = snapshotAssistant(parsed.body);
+        clearViewing();
         if (document.getElementById('asst-reset-sessions').checked) {
           try {
             const result = await api(`/sessions/client/${encodeURIComponent(clientId)}`, { method: 'DELETE' });

@@ -1,5 +1,6 @@
 const admin = require('firebase-admin');
 const { hashInviteToken } = require('./metaInviteService');
+const { parseAssistantVersionBody, promptExcerpt } = require('./assistantVersionInput');
 const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
 
 const DEFAULT_RESPONSE_SCHEMA = {
@@ -621,6 +622,129 @@ class FirebaseService {
       console.error('❌ Error actualizando Assistant:', error);
       throw error;
     }
+  }
+
+  _versionsCollection(clientId) {
+    return this.assistantsCollection.doc(clientId).collection('versions');
+  }
+
+  _versionFromSnap(snap) {
+    const data = snap.data() || {};
+    return {
+      id: snap.id,
+      label: typeof data.label === 'string' ? data.label : '',
+      createdAt: data.createdAt?.toDate?.() || data.createdAt || null,
+      prompt: typeof data.prompt === 'string' ? data.prompt : '',
+      tools: Array.isArray(data.tools) ? data.tools : [],
+      config: data.config && typeof data.config === 'object' && !Array.isArray(data.config) ? data.config : {},
+      responseSchema: data.responseSchema && typeof data.responseSchema === 'object' && !Array.isArray(data.responseSchema)
+        ? data.responseSchema
+        : {}
+    };
+  }
+
+  _versionSummary(version) {
+    return {
+      id: version.id,
+      label: version.label,
+      createdAt: version.createdAt,
+      promptExcerpt: promptExcerpt(version.prompt)
+    };
+  }
+
+  async _requireAssistantRef(clientId) {
+    const client = await this.getClientById(clientId);
+    if (!client) {
+      const err = new Error(`Cliente no encontrado: ${clientId}`);
+      err.code = 'CLIENT_NOT_FOUND';
+      throw err;
+    }
+
+    const assistantRef = this.assistantsCollection.doc(clientId);
+    const existing = await assistantRef.get();
+    if (!existing.exists) {
+      const err = new Error(`Assistant no encontrado para cliente: ${clientId}`);
+      err.code = 'ASSISTANT_NOT_FOUND';
+      throw err;
+    }
+
+    return { assistantRef, current: existing.data() || {} };
+  }
+
+  /**
+   * Publica el Assistant y archiva un hito en el mismo batch.
+   * @param {string} clientId
+   * @param {Object} data
+   * @returns {Promise<{assistant: Object, version: Object}>}
+   */
+  async publishAssistantVersion(clientId, data) {
+    const parsed = parseAssistantVersionBody(data);
+    const { assistantRef, current } = await this._requireAssistantRef(clientId);
+    const snapshot = {
+      prompt: parsed.prompt !== undefined ? parsed.prompt : (typeof current.prompt === 'string' ? current.prompt : ''),
+      tools: parsed.tools !== undefined ? parsed.tools : (Array.isArray(current.tools) ? current.tools : []),
+      config: parsed.config !== undefined ? parsed.config : (
+        current.config && typeof current.config === 'object' && !Array.isArray(current.config) ? current.config : {}
+      ),
+      responseSchema: parsed.responseSchema !== undefined ? parsed.responseSchema : (
+        current.responseSchema && typeof current.responseSchema === 'object' && !Array.isArray(current.responseSchema)
+          ? current.responseSchema
+          : {}
+      )
+    };
+
+    const versionRef = this._versionsCollection(clientId).doc();
+    const batch = this.db.batch();
+    batch.update(assistantRef, {
+      prompt: snapshot.prompt,
+      tools: snapshot.tools,
+      config: snapshot.config,
+      responseSchema: snapshot.responseSchema,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    batch.set(versionRef, {
+      label: parsed.label,
+      prompt: snapshot.prompt,
+      tools: snapshot.tools,
+      config: snapshot.config,
+      responseSchema: snapshot.responseSchema,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    await batch.commit();
+
+    const assistant = await this.getAssistantByClientId(clientId);
+    const versionSnap = await versionRef.get();
+    return {
+      assistant,
+      version: this._versionSummary(this._versionFromSnap(versionSnap))
+    };
+  }
+
+  async listAssistantVersions(clientId) {
+    await this._requireAssistantRef(clientId);
+    const snapshot = await this._versionsCollection(clientId).orderBy('createdAt', 'desc').get();
+    return snapshot.docs.map((doc) => this._versionSummary(this._versionFromSnap(doc)));
+  }
+
+  async getAssistantVersion(clientId, versionId) {
+    await this._requireAssistantRef(clientId);
+    const snap = await this._versionsCollection(clientId).doc(versionId).get();
+    if (!snap.exists) {
+      const err = new Error(`Versión no encontrada: ${versionId}`);
+      err.code = 'VERSION_NOT_FOUND';
+      throw err;
+    }
+    return this._versionFromSnap(snap);
+  }
+
+  async restoreAssistantVersion(clientId, versionId) {
+    const version = await this.getAssistantVersion(clientId, versionId);
+    return this.updateAssistant(clientId, {
+      prompt: version.prompt,
+      tools: version.tools,
+      config: version.config,
+      responseSchema: version.responseSchema
+    });
   }
 
   /**
