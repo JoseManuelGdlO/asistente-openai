@@ -1,9 +1,27 @@
 const express = require('express');
+const crypto = require('crypto');
 const path = require('path');
 const cors = require('cors');
 const multer = require('multer');
 const requireAdminAuth = require('./middleware/requireAdminAuth');
 const { readDebounceConfig } = require('./services/messageDebounceManager');
+const { publicMetaSignupConfig } = require('./services/metaConfig');
+const {
+  createInviteToken,
+  inviteUrlFor,
+  inviteFields,
+  sanitizeClient,
+  sanitizeClientsMap,
+  assertInviteUsable
+} = require('./services/metaInviteService');
+const defaultMetaSignup = require('./services/metaSignupService');
+const {
+  verifyMetaWebhookChallenge,
+  verifyMetaSignature,
+  parseMetaRawBody
+} = require('./services/metaWebhook');
+const { parseAssistantVersionBody } = require('./services/assistantVersionInput');
+const { sendHttpError } = require('./utils/httpError');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
 
@@ -24,6 +42,43 @@ function stripEmptyUltraMsgFields(data) {
 
 function playgroundUserId(clientId) {
   return `playground_${clientId}`;
+}
+
+function assistantVersionHttpStatus(error) {
+  if (error.code === 'CLIENT_NOT_FOUND' || error.code === 'ASSISTANT_NOT_FOUND' || error.code === 'VERSION_NOT_FOUND') {
+    return 404;
+  }
+  if (
+    error.code === 'INVALID_LABEL'
+    || error.code === 'LABEL_TOO_LONG'
+    || error.code === 'INVALID_PROMPT'
+    || error.code === 'INVALID_TOOLS'
+    || error.code === 'INVALID_CONFIG'
+    || error.code === 'INVALID_SCHEMA'
+  ) {
+    return 400;
+  }
+  return 500;
+}
+
+async function resetPlaygroundSession(openAIManager, clientId) {
+  try {
+    await openAIManager.deleteSession(playgroundUserId(clientId), clientId);
+    return true;
+  } catch (resetError) {
+    console.error('Error reseteando sesión playground:', resetError.message);
+    return false;
+  }
+}
+
+function sendAssistantVersionError(res, error, fallback) {
+  const status = assistantVersionHttpStatus(error);
+  console.error(fallback, error);
+  res.status(status).json({
+    ok: false,
+    error: status === 500 ? fallback : error.message,
+    details: error.message
+  });
 }
 
 function readEditorId(req) {
@@ -66,6 +121,38 @@ async function requireEditLockHolder(firebaseService, req, res, clientId) {
     sendEditLockError(res, error, 'Error verificando bloqueo de edición');
     return false;
   }
+}
+
+function matchPanelLogin(body) {
+  const expectedEmail = String(process.env.LOGIN_EMAIL || '').trim().toLowerCase();
+  const expectedPassword = String(process.env.LOGIN_PASSWORD || '');
+  const adminToken = process.env.ADMIN_API_TOKEN;
+  if (!expectedEmail || !expectedPassword || !adminToken) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'El inicio de sesión no está configurado'
+    };
+  }
+
+  const email = String((body && body.email) || '').trim().toLowerCase();
+  const password = String((body && body.password) || '');
+  const emailHash = crypto.createHash('sha256').update(email).digest();
+  const expectedEmailHash = crypto.createHash('sha256').update(expectedEmail).digest();
+  const passwordHash = crypto.createHash('sha256').update(password).digest();
+  const expectedPasswordHash = crypto.createHash('sha256').update(expectedPassword).digest();
+  const matches = crypto.timingSafeEqual(emailHash, expectedEmailHash)
+    && crypto.timingSafeEqual(passwordHash, expectedPasswordHash);
+
+  if (!matches) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Correo o contraseña incorrectos'
+    };
+  }
+
+  return { ok: true, email, token: adminToken };
 }
 
 function timestampToIso(value) {
@@ -127,16 +214,52 @@ function createApp(deps = {}) {
     userContextManager,
     schedulerController,
     documentStore,
-    reinitUltraMsgInstances = async () => {}
+    reinitUltraMsgInstances = async () => {},
+    metaSignup = defaultMetaSignup
   } = deps;
 
   const firebaseService = deps.firebaseService
-    || webhookManager?.commandManager?.firebaseService;
+    || webhookManager?.commandManager?.firebaseService
+    || null;
+  const commandManager = webhookManager?.commandManager || null;
 
   const app = express();
   const uploadPdf = createUploadPdf();
+  const metaRaw = express.raw({ type: 'application/json', limit: '1mb' });
 
   app.use(cors());
+
+  const handleMetaChallenge = (req, res) => {
+    const result = verifyMetaWebhookChallenge(req.query);
+    if (result.ok) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.status(200).send(result.challenge);
+    }
+    return res.status(403).json({ ok: false, error: 'Challenge de webhook inválido.' });
+  };
+
+  const handleMetaEvents = async (req, res) => {
+    try {
+      const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
+      const signature = req.headers['x-hub-signature-256'] || req.headers['x-hub-signature'];
+      const verified = verifyMetaSignature(raw, signature);
+      if (!verified.ok) {
+        return res.status(401).json({ ok: false, error: 'Firma de webhook de Meta inválida.' });
+      }
+      const payload = parseMetaRawBody(raw);
+      const result = await webhookManager.handleMetaWebhook(payload);
+      return res.status(200).json({ ok: true, ...result });
+    } catch (error) {
+      console.error('Error processing Meta webhook:', error.message);
+      return res.sendStatus(500);
+    }
+  };
+
+  app.get('/api/webhooks/meta', handleMetaChallenge);
+  app.get('/api/webhooks/meta/whatsapp', handleMetaChallenge);
+  app.post('/api/webhooks/meta', metaRaw, handleMetaEvents);
+  app.post('/api/webhooks/meta/whatsapp', metaRaw, handleMetaEvents);
+
   app.use(express.json());
 
   // ==================== ENDPOINTS DE WEBHOOK ====================
@@ -273,10 +396,27 @@ function createApp(deps = {}) {
       if (req.query.userId) filters.userId = String(req.query.userId);
       if (req.query.clientCode) filters.clientCode = String(req.query.clientCode);
 
-      const sessions = await openAIManager.listSessions(filters);
+      const parsedPage = Number.parseInt(req.query.page, 10);
+      const parsedLimit = Number.parseInt(req.query.limit, 10);
+      const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+      const limit = Number.isFinite(parsedLimit) && parsedLimit > 0
+        ? Math.min(parsedLimit, 100)
+        : 20;
+
+      const all = await openAIManager.listSessions(filters);
+      const total = all.length;
+      const totalPages = Math.max(1, Math.ceil(total / limit) || 1);
+      const safePage = Math.min(page, totalPages);
+      const start = (safePage - 1) * limit;
+      const sessions = all.slice(start, start + limit);
+
       res.json({
         ok: true,
         count: sessions.length,
+        total,
+        page: safePage,
+        limit,
+        totalPages,
         sessions
       });
     } catch (error) {
@@ -314,7 +454,7 @@ function createApp(deps = {}) {
       const deleted = await openAIManager.deleteSessionsByClientCode(clientCode);
       res.json({
         ok: true,
-        message: `Sesiones eliminadas para consultorio: ${clientCode}`,
+        message: `Sesiones eliminadas para el bot: ${clientCode}`,
         deleted
       });
     } catch (error) {
@@ -322,6 +462,41 @@ function createApp(deps = {}) {
       res.status(500).json({
         ok: false,
         error: 'Error eliminando sesiones del consultorio',
+        details: error.message
+      });
+    }
+  });
+
+  app.get('/sessions/:userId/:clientCode', requireAdminAuth, async (req, res) => {
+    try {
+      const { userId, clientCode } = req.params;
+      const session = await openAIManager.getSession(userId, clientCode);
+      if (!session) {
+        return res.status(404).json({
+          ok: false,
+          error: 'Sesión no encontrada'
+        });
+      }
+      res.json({
+        ok: true,
+        session: {
+          id: session.id || `${userId}_${clientCode}`,
+          userId: session.userId || userId,
+          clientCode: session.clientCode || clientCode,
+          items: Array.isArray(session.items) ? session.items : [],
+          pendingMessages: Array.isArray(session.pendingMessages) ? session.pendingMessages : [],
+          createdAt: timestampToIso(session.createdAt),
+          updatedAt: timestampToIso(session.updatedAt),
+          lockedUntil: timestampToIso(session.lockedUntil),
+          flushAt: timestampToIso(session.flushAt),
+          locked: isSessionLockedNow(session)
+        }
+      });
+    } catch (error) {
+      console.error('Error obteniendo sesión:', error);
+      res.status(500).json({
+        ok: false,
+        error: 'Error obteniendo sesión',
         details: error.message
       });
     }
@@ -511,7 +686,7 @@ function createApp(deps = {}) {
       const clients = webhookManager.commandManager.getClientConfig();
       res.json({
         ok: true,
-        clients: clients,
+        clients: sanitizeClientsMap(clients),
         count: Object.keys(clients).length
       });
     } catch (error) {
@@ -631,20 +806,20 @@ function createApp(deps = {}) {
         ULTRAMSG_WEBHOOK_TOKEN
       } = req.body;
 
-      if (!name || !adminPhone || !assistantPhone) {
+      if (!name || !adminPhone) {
         return res.status(400).json({
           ok: false,
-          error: 'name, adminPhone y assistantPhone son requeridos'
+          error: 'name y adminPhone son requeridos'
         });
       }
 
       const normalizedPrompt = typeof prompt === 'string' ? prompt : '';
+      const invite = createInviteToken();
 
       const clientPayload = stripEmptyUltraMsgFields({
         id,
         name,
         adminPhone,
-        assistantPhone,
         botStatus: botStatus || 'active',
         prompt: normalizedPrompt,
         tools,
@@ -652,8 +827,12 @@ function createApp(deps = {}) {
         responseSchema,
         ULTRAMSG_TOKEN,
         ULTRAMSG_INSTANCE_ID,
-        ULTRAMSG_WEBHOOK_TOKEN
+        ULTRAMSG_WEBHOOK_TOKEN,
+        ...inviteFields(invite)
       });
+      if (assistantPhone) {
+        clientPayload.assistantPhone = assistantPhone;
+      }
 
       const result = await webhookManager.commandManager.createClient(
         clientPayload,
@@ -666,8 +845,10 @@ function createApp(deps = {}) {
 
       res.status(201).json({
         ok: true,
-        client: result.client,
+        client: sanitizeClient(result.client),
         assistant: result.assistant,
+        inviteUrl: inviteUrlFor(req, invite.token),
+        inviteExpiresAt: invite.expiresAt,
         message: 'Cliente y Assistant creados exitosamente'
       });
     } catch (error) {
@@ -694,7 +875,7 @@ function createApp(deps = {}) {
 
       res.json({
         ok: true,
-        client: updatedClient,
+        client: sanitizeClient(updatedClient),
         message: 'Cliente actualizado exitosamente'
       });
     } catch (error) {
@@ -809,6 +990,66 @@ function createApp(deps = {}) {
         error: status === 404 ? error.message : 'Error actualizando Assistant',
         details: error.message
       });
+    }
+  });
+
+  app.post('/assistants/:clientId/versions', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      if (!(await requireEditLockHolder(firebaseService, req, res, clientId))) return;
+      const parsed = parseAssistantVersionBody(req.body);
+      const result = await webhookManager.commandManager.saveAssistantVersion(clientId, parsed);
+      const playgroundReset = await resetPlaygroundSession(openAIManager, clientId);
+      res.json({
+        ok: true,
+        assistant: result.assistant,
+        version: result.version,
+        playgroundReset,
+        message: 'Versión guardada'
+      });
+    } catch (error) {
+      sendAssistantVersionError(res, error, 'Error guardando versión del Assistant');
+    }
+  });
+
+  app.get('/assistants/:clientId/versions', requireAdminAuth, async (req, res) => {
+    try {
+      const versions = await webhookManager.commandManager.listAssistantVersions(req.params.clientId);
+      res.json({ ok: true, versions });
+    } catch (error) {
+      sendAssistantVersionError(res, error, 'Error listando versiones');
+    }
+  });
+
+  app.get('/assistants/:clientId/versions/:versionId', requireAdminAuth, async (req, res) => {
+    try {
+      const version = await webhookManager.commandManager.getAssistantVersion(
+        req.params.clientId,
+        req.params.versionId
+      );
+      if (!version) {
+        return res.status(404).json({ ok: false, error: 'Versión no encontrada' });
+      }
+      res.json({ ok: true, version });
+    } catch (error) {
+      sendAssistantVersionError(res, error, 'Error obteniendo versión');
+    }
+  });
+
+  app.post('/assistants/:clientId/versions/:versionId/restore', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId, versionId } = req.params;
+      if (!(await requireEditLockHolder(firebaseService, req, res, clientId))) return;
+      const assistant = await webhookManager.commandManager.restoreAssistantVersion(clientId, versionId);
+      const playgroundReset = await resetPlaygroundSession(openAIManager, clientId);
+      res.json({
+        ok: true,
+        assistant,
+        playgroundReset,
+        message: 'Versión restaurada'
+      });
+    } catch (error) {
+      sendAssistantVersionError(res, error, 'Error restaurando versión');
     }
   });
 
@@ -1086,7 +1327,7 @@ function createApp(deps = {}) {
 
       res.json({
         ok: true,
-        client: client
+        client: sanitizeClient(client)
       });
     } catch (error) {
       console.error('Error obteniendo cliente:', error);
@@ -1095,6 +1336,46 @@ function createApp(deps = {}) {
         error: 'Error obteniendo cliente',
         details: error.message
       });
+    }
+  });
+
+  app.post('/clients/:clientId/meta/invite', requireAdminAuth, async (req, res) => {
+    try {
+      if (!(await requireEditLockHolder(firebaseService, req, res, req.params.clientId))) return;
+      const result = await metaSignup.regenerateInvite({
+        firebaseService,
+        clientId: req.params.clientId
+      });
+      if (commandManager?.reloadClients) {
+        await commandManager.reloadClients();
+      }
+      res.json({
+        ok: true,
+        client: sanitizeClient(result.client),
+        inviteUrl: inviteUrlFor(req, result.invite.token),
+        inviteExpiresAt: result.invite.expiresAt
+      });
+    } catch (error) {
+      return sendHttpError(res, error);
+    }
+  });
+
+  app.post('/clients/:clientId/meta/disconnect', requireAdminAuth, async (req, res) => {
+    try {
+      if (!(await requireEditLockHolder(firebaseService, req, res, req.params.clientId))) return;
+      const result = await metaSignup.disconnectMetaWhatsapp({
+        firebaseService,
+        commandManager,
+        clientId: req.params.clientId
+      });
+      res.json({
+        ok: true,
+        client: sanitizeClient(result.client),
+        inviteUrl: inviteUrlFor(req, result.invite.token),
+        inviteExpiresAt: result.invite.expiresAt
+      });
+    } catch (error) {
+      return sendHttpError(res, error);
     }
   });
 
@@ -1358,12 +1639,146 @@ function createApp(deps = {}) {
     });
   });
 
+  app.post('/auth/login', (req, res) => {
+    const result = matchPanelLogin(req.body);
+    if (!result.ok) {
+      return res.status(result.status).json({ ok: false, error: result.error });
+    }
+    return res.json({ ok: true, token: result.token });
+  });
+
+  app.post('/auth/login/confirm', async (req, res) => {
+    if (!process.env.ADMIN_API_TOKEN) {
+      return res.status(503).json({
+        ok: false,
+        error: 'El inicio de sesión no está configurado'
+      });
+    }
+
+    const firebaseService = webhookManager?.commandManager?.firebaseService;
+    const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+    const password = String((req.body && req.body.password) || '');
+    let authenticatedEmail = null;
+
+    if (firebaseService && typeof firebaseService.verifyPanelUser === 'function') {
+      try {
+        const user = await firebaseService.verifyPanelUser({ email, password });
+        if (user && user.email) authenticatedEmail = user.email;
+      } catch (err) {
+        console.error('Error verificando usuario en Firebase:', err.message);
+        return res.status(err.status || 502).json({
+          ok: false,
+          error: err.status ? err.message : 'No se pudo verificar el usuario en Firebase'
+        });
+      }
+    }
+
+    if (!authenticatedEmail) {
+      const result = matchPanelLogin(req.body);
+      if (!result.ok) {
+        return res.status(result.status).json({ ok: false, error: result.error });
+      }
+      authenticatedEmail = result.email;
+    }
+
+    if (!firebaseService || typeof firebaseService.confirmPanelLogin !== 'function') {
+      return res.status(503).json({
+        ok: false,
+        error: 'Firebase no está disponible para confirmar el inicio de sesión'
+      });
+    }
+
+    try {
+      const confirmation = await firebaseService.confirmPanelLogin({ email: authenticatedEmail });
+      return res.json({
+        ok: true,
+        token: process.env.ADMIN_API_TOKEN,
+        confirmation
+      });
+    } catch (err) {
+      console.error('Error confirmando login en Firebase:', err.message);
+      return res.status(502).json({
+        ok: false,
+        error: 'No se pudo confirmar el inicio de sesión en Firebase'
+      });
+    }
+  });
+
+  app.get('/public/meta/config', (_req, res) => {
+    const config = publicMetaSignupConfig();
+    res.json({
+      ok: true,
+      configured: config.configured,
+      appId: config.appId,
+      configId: config.configId,
+      graphVersion: config.graphVersion,
+      featureType: config.featureType,
+      sessionInfoVersion: config.sessionInfoVersion
+    });
+  });
+
+  app.get('/public/meta/invite/:token', async (req, res) => {
+    try {
+      if (!firebaseService?.getClientByInviteToken) {
+        return res.status(503).json({ ok: false, error: 'Servicio no disponible' });
+      }
+      const client = await firebaseService.getClientByInviteToken(req.params.token);
+      assertInviteUsable(client);
+      const config = publicMetaSignupConfig();
+      res.json({
+        ok: true,
+        botName: client.name || client.id,
+        status: 'pending',
+        configured: config.configured,
+        config
+      });
+    } catch (error) {
+      return sendHttpError(res, error);
+    }
+  });
+
+  app.post('/public/meta/signup', async (req, res) => {
+    try {
+      const result = await metaSignup.completeEmbeddedSignup({
+        firebaseService,
+        commandManager,
+        token: req.body?.token,
+        code: req.body?.code,
+        wabaId: req.body?.wabaId || req.body?.waba_id,
+        phoneNumberId: req.body?.phoneNumberId || req.body?.phone_number_id,
+        businessId: req.body?.businessId || req.body?.business_id,
+        event: req.body?.event
+      });
+      res.status(201).json({
+        ok: true,
+        displayPhoneNumber: result.displayPhoneNumber,
+        coexistenceEnabled: result.coexistenceEnabled,
+        phoneNumberId: result.phoneNumberId,
+        wabaId: result.wabaId
+      });
+    } catch (error) {
+      return sendHttpError(res, error);
+    }
+  });
+
   // ==================== PANEL ADMIN (SPA) ====================
 
   const publicDir = path.join(__dirname, '../public');
   app.use(express.static(publicDir));
   app.get('/', (_req, res) => {
     res.sendFile(path.join(publicDir, 'index.html'));
+  });
+  app.get('/terminos', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'terminos.html'));
+  });
+  app.get('/privacidad', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'privacidad.html'));
+  });
+  app.get('/eliminar-datos', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'eliminar-datos.html'));
+  });
+  app.get('/vincular/:token', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'vincular.html'));
   });
 
   return app;

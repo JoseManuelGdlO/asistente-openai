@@ -159,6 +159,57 @@ class UltraMsgManager {
     return parts.join(' | ');
   }
 
+  toUltraChatId(chatId) {
+    const raw = String(chatId || '').trim();
+    if (!raw) {
+      throw new Error('chatId es requerido');
+    }
+    if (raw.includes('@')) {
+      return raw;
+    }
+    return `${raw.replace(/\D/g, '')}@c.us`;
+  }
+
+  async postChatAction(action, chatId, instanceId = null) {
+    const instance = instanceId ? this.getInstance(instanceId) : this.getDefaultInstance();
+    if (!instance) {
+      throw new Error(`No se encontró la instancia UltraMsg: ${instanceId || 'default'}`);
+    }
+    const url = `https://api.ultramsg.com/${instance.instanceId}/${action}?token=${instance.token}`;
+    const response = await axios.post(url, {
+      token: instance.token,
+      chatId: this.toUltraChatId(chatId)
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000
+    });
+    return response.data;
+  }
+
+  async markChatRead(chatId, instanceId = null) {
+    return this.postChatAction('chats/read', chatId, instanceId);
+  }
+
+  /**
+   * Pide el indicador de escritura.
+   * UltraMsg documenta /chats/read y no /chats/typing; si la instancia responde 404 o 405,
+   * se deja de intentar en este proceso para no frenar las respuestas.
+   */
+  async showTyping(chatId, instanceId = null) {
+    if (this.typingUnsupported) {
+      return { supported: false };
+    }
+    try {
+      return await this.postChatAction('chats/typing', chatId, instanceId);
+    } catch (error) {
+      const status = error.response?.status;
+      if (status === 404 || status === 405) {
+        this.typingUnsupported = true;
+      }
+      throw error;
+    }
+  }
+
   // Enviar mensaje usando una instancia específica
   // options: { requestOrigin?: 'UltraMsg' | 'Mi sistema' }
   async sendMessage(to, message, instanceId = null, options = {}) {

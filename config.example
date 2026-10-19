@@ -5,13 +5,17 @@
 OPENAI_API_KEY=sk-your-openai-api-key-here
 OPENAI_MODEL=gpt-4o-mini
 
-# WhatsApp Configuration
-WHATSAPP_TOKEN=your-whatsapp-access-token-here
-WHATSAPP_VERIFY_TOKEN=your-custom-verify-token-here
-
-# Facebook App Configuration (para refresh automático de token)
-FB_APP_ID=your-facebook-app-id-here
-FB_APP_SECRET=your-facebook-app-secret-here
+# Meta WhatsApp Cloud API / Embedded Signup
+META_APP_ID=your-meta-app-id
+META_APP_SECRET=your-meta-app-secret
+META_EMBEDDED_SIGNUP_CONFIG_ID=your-embedded-signup-config-id
+META_WEBHOOK_VERIFY_TOKEN=your-meta-webhook-verify-token
+META_GRAPH_VERSION=v22.0
+META_BUSINESS_ID=
+META_SYSTEM_USER_ID=
+META_SYSTEM_USER_TOKEN=
+CREDENTIALS_ENCRYPTION_KEY=replace-with-a-long-random-string
+PUBLIC_BASE_URL=https://tu-dominio.example
 
 # Server Configuration
-PORT=3000 
+PORT=3000

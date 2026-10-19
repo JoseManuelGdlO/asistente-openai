@@ -1,12 +1,14 @@
 const cron = require('node-cron');
 const UltraMsgManager = require('../managers/ultramsgManager');
+const MetaWhatsappManager = require('../managers/metaWhatsappManager');
 const FirebaseService = require('./firebaseService');
 const axios = require('axios');
 require('dotenv').config();
 
 class Scheduler {
-  constructor(firebaseService = null) {
+  constructor(firebaseService = null, metaWhatsappManager = null) {
     this.ultraMsgManager = new UltraMsgManager();
+    this.metaWhatsappManager = metaWhatsappManager || new MetaWhatsappManager();
     this.firebaseService = firebaseService || new FirebaseService();
     this.tasks = new Map();
   }
@@ -191,9 +193,16 @@ Por favor confirma que asistirás respondiendo con "ok", "confirmado" o similar.
 ¡Te esperamos! 😊`;
 
       console.log(`📱 Enviando agenda a ${appointment.name} (${appointment.phone})`);
-      
-      // Enviar mensaje via UltraMsg
-      const response = await this.ultraMsgManager.sendMessage(appointment.phone, message);
+
+      let response;
+      const client = appointment.clientId
+        ? await this.firebaseService.getClientById(appointment.clientId)
+        : null;
+      if (client?.META_PHONE_NUMBER_ID && client?.META_ACCESS_TOKEN) {
+        response = await this.metaWhatsappManager.sendMessage(appointment.phone, message, client);
+      } else {
+        response = await this.ultraMsgManager.sendMessage(appointment.phone, message);
+      }
       
       // Marcar que se envió la agenda (para el sistema de confirmaciones)
       await this.markAgendaSent(appointment.phone);

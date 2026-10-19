@@ -1,4 +1,6 @@
 const admin = require('firebase-admin');
+const { hashInviteToken } = require('./metaInviteService');
+const { parseAssistantVersionBody, promptExcerpt } = require('./assistantVersionInput');
 const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
 
 const DEFAULT_RESPONSE_SCHEMA = {
@@ -51,6 +53,7 @@ class FirebaseService {
     this.botSessionsCollection = this.db.collection('bot_sessions');
     this.blacklistCollection = this.db.collection('blacklist-phone');
     this.webhookDedupCollection = this.db.collection('webhook_dedup');
+    this.loginConfirmationsCollection = this.db.collection('login_confirmations');
     this.assistantEditLocksCollection = this.db.collection('assistant_edit_locks');
   }
 
@@ -418,6 +421,66 @@ class FirebaseService {
   }
 
   /**
+   * Obtiene un cliente activo por token público de vinculación Meta
+   * @param {string} token
+   * @returns {Promise<Object|null>}
+   */
+  async getClientByInviteToken(token) {
+    try {
+      const hash = hashInviteToken(token);
+      if (!hash) return null;
+      const snapshot = await this.clientsCollection
+        .where('META_INVITE_TOKEN_HASH', '==', hash)
+        .where('status', '==', 'active')
+        .limit(1)
+        .get();
+
+      if (snapshot.empty) return null;
+      const doc = snapshot.docs[0];
+      const clientData = doc.data();
+      return {
+        id: doc.id,
+        ...clientData,
+        createdAt: clientData.createdAt?.toDate(),
+        updatedAt: clientData.updatedAt?.toDate()
+      };
+    } catch (error) {
+      console.error('❌ Error obteniendo cliente por invite token:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene un cliente activo por phone_number_id de Meta
+   * @param {string} phoneNumberId
+   * @returns {Promise<Object|null>}
+   */
+  async getClientByMetaPhoneNumberId(phoneNumberId) {
+    try {
+      const id = String(phoneNumberId || '').trim();
+      if (!id) return null;
+      const snapshot = await this.clientsCollection
+        .where('META_PHONE_NUMBER_ID', '==', id)
+        .where('status', '==', 'active')
+        .limit(1)
+        .get();
+
+      if (snapshot.empty) return null;
+      const doc = snapshot.docs[0];
+      const clientData = doc.data();
+      return {
+        id: doc.id,
+        ...clientData,
+        createdAt: clientData.createdAt?.toDate(),
+        updatedAt: clientData.updatedAt?.toDate()
+      };
+    } catch (error) {
+      console.error('❌ Error obteniendo cliente por phone_number_id:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Crea un nuevo cliente
    * @param {Object} clientData - Datos del cliente
    * @returns {Promise<Object>} - Cliente creado
@@ -735,6 +798,129 @@ class FirebaseService {
       console.error('❌ Error actualizando Assistant:', error);
       throw error;
     }
+  }
+
+  _versionsCollection(clientId) {
+    return this.assistantsCollection.doc(clientId).collection('versions');
+  }
+
+  _versionFromSnap(snap) {
+    const data = snap.data() || {};
+    return {
+      id: snap.id,
+      label: typeof data.label === 'string' ? data.label : '',
+      createdAt: data.createdAt?.toDate?.() || data.createdAt || null,
+      prompt: typeof data.prompt === 'string' ? data.prompt : '',
+      tools: Array.isArray(data.tools) ? data.tools : [],
+      config: data.config && typeof data.config === 'object' && !Array.isArray(data.config) ? data.config : {},
+      responseSchema: data.responseSchema && typeof data.responseSchema === 'object' && !Array.isArray(data.responseSchema)
+        ? data.responseSchema
+        : {}
+    };
+  }
+
+  _versionSummary(version) {
+    return {
+      id: version.id,
+      label: version.label,
+      createdAt: version.createdAt,
+      promptExcerpt: promptExcerpt(version.prompt)
+    };
+  }
+
+  async _requireAssistantRef(clientId) {
+    const client = await this.getClientById(clientId);
+    if (!client) {
+      const err = new Error(`Cliente no encontrado: ${clientId}`);
+      err.code = 'CLIENT_NOT_FOUND';
+      throw err;
+    }
+
+    const assistantRef = this.assistantsCollection.doc(clientId);
+    const existing = await assistantRef.get();
+    if (!existing.exists) {
+      const err = new Error(`Assistant no encontrado para cliente: ${clientId}`);
+      err.code = 'ASSISTANT_NOT_FOUND';
+      throw err;
+    }
+
+    return { assistantRef, current: existing.data() || {} };
+  }
+
+  /**
+   * Publica el Assistant y archiva un hito en el mismo batch.
+   * @param {string} clientId
+   * @param {Object} data
+   * @returns {Promise<{assistant: Object, version: Object}>}
+   */
+  async publishAssistantVersion(clientId, data) {
+    const parsed = parseAssistantVersionBody(data);
+    const { assistantRef, current } = await this._requireAssistantRef(clientId);
+    const snapshot = {
+      prompt: parsed.prompt !== undefined ? parsed.prompt : (typeof current.prompt === 'string' ? current.prompt : ''),
+      tools: parsed.tools !== undefined ? parsed.tools : (Array.isArray(current.tools) ? current.tools : []),
+      config: parsed.config !== undefined ? parsed.config : (
+        current.config && typeof current.config === 'object' && !Array.isArray(current.config) ? current.config : {}
+      ),
+      responseSchema: parsed.responseSchema !== undefined ? parsed.responseSchema : (
+        current.responseSchema && typeof current.responseSchema === 'object' && !Array.isArray(current.responseSchema)
+          ? current.responseSchema
+          : {}
+      )
+    };
+
+    const versionRef = this._versionsCollection(clientId).doc();
+    const batch = this.db.batch();
+    batch.update(assistantRef, {
+      prompt: snapshot.prompt,
+      tools: snapshot.tools,
+      config: snapshot.config,
+      responseSchema: snapshot.responseSchema,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    batch.set(versionRef, {
+      label: parsed.label,
+      prompt: snapshot.prompt,
+      tools: snapshot.tools,
+      config: snapshot.config,
+      responseSchema: snapshot.responseSchema,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    await batch.commit();
+
+    const assistant = await this.getAssistantByClientId(clientId);
+    const versionSnap = await versionRef.get();
+    return {
+      assistant,
+      version: this._versionSummary(this._versionFromSnap(versionSnap))
+    };
+  }
+
+  async listAssistantVersions(clientId) {
+    await this._requireAssistantRef(clientId);
+    const snapshot = await this._versionsCollection(clientId).orderBy('createdAt', 'desc').get();
+    return snapshot.docs.map((doc) => this._versionSummary(this._versionFromSnap(doc)));
+  }
+
+  async getAssistantVersion(clientId, versionId) {
+    await this._requireAssistantRef(clientId);
+    const snap = await this._versionsCollection(clientId).doc(versionId).get();
+    if (!snap.exists) {
+      const err = new Error(`Versión no encontrada: ${versionId}`);
+      err.code = 'VERSION_NOT_FOUND';
+      throw err;
+    }
+    return this._versionFromSnap(snap);
+  }
+
+  async restoreAssistantVersion(clientId, versionId) {
+    const version = await this.getAssistantVersion(clientId, versionId);
+    return this.updateAssistant(clientId, {
+      prompt: version.prompt,
+      tools: version.tools,
+      config: version.config,
+      responseSchema: version.responseSchema
+    });
   }
 
   /**
@@ -1167,15 +1353,48 @@ class FirebaseService {
    * @param {FirebaseFirestore.QueryDocumentSnapshot|FirebaseFirestore.DocumentSnapshot} doc
    * @returns {Object}
    */
+  _lastMessagePreview(items) {
+    let lastUser = '';
+    let lastAssistant = '';
+    for (const item of Array.isArray(items) ? items : []) {
+      if (item?.type !== 'message') continue;
+      let raw = '';
+      if (typeof item.content === 'string') raw = item.content;
+      else if (Array.isArray(item.content)) {
+        raw = item.content.map((part) => (
+          typeof part === 'string' ? part : (part?.text || '')
+        )).join('');
+      }
+      if (item.role === 'user') {
+        lastUser = raw.trim();
+      } else {
+        try {
+          const parsed = JSON.parse(raw);
+          lastAssistant = typeof parsed?.reply === 'string' ? parsed.reply : raw.trim();
+        } catch {
+          lastAssistant = raw.trim();
+        }
+      }
+    }
+    const clip = (text) => (text.length > 160 ? `${text.slice(0, 157)}…` : text);
+    return {
+      lastUser: clip(lastUser),
+      lastAssistant: clip(lastAssistant)
+    };
+  }
+
   summarizeBotSession(doc) {
     const data = doc.data() || {};
     const lockedUntil = data.lockedUntil?.toDate?.() || data.lockedUntil || null;
     const lockedUntilMs = lockedUntil ? new Date(lockedUntil).getTime() : 0;
+    const preview = this._lastMessagePreview(data.items);
     return {
       id: doc.id,
       userId: data.userId || null,
       clientCode: data.clientCode || null,
       itemsCount: Array.isArray(data.items) ? data.items.length : 0,
+      lastUser: preview.lastUser || null,
+      lastAssistant: preview.lastAssistant || null,
       lockedUntil,
       isLocked: Boolean(lockedUntilMs && lockedUntilMs > Date.now()),
       createdAt: data.createdAt?.toDate?.() || data.createdAt || null,
@@ -1198,7 +1417,9 @@ class FirebaseService {
         query = query.where('clientCode', '==', filters.clientCode);
       }
       const snapshot = await query.get();
-      return snapshot.docs.map((doc) => this.summarizeBotSession(doc));
+      return snapshot.docs
+        .map((doc) => this.summarizeBotSession(doc))
+        .sort((a, b) => this._toMillis(b.updatedAt) - this._toMillis(a.updatedAt));
     } catch (error) {
       console.error('❌ Error listando bot_sessions:', error);
       throw error;
@@ -1402,6 +1623,103 @@ class FirebaseService {
       console.error('❌ Error de conexión con Firebase:', error);
       return false;
     }
+  }
+
+  /**
+   * Guarda la confirmación de un inicio de sesión del panel.
+   * @param {{ email: string }} params
+   * @returns {Promise<{ id: string, email: string, confirmedAt: string }>}
+   */
+  async confirmPanelLogin({ email }) {
+    const confirmedAt = new Date().toISOString();
+    const doc = await this.loginConfirmationsCollection.add({
+      email,
+      confirmedAt,
+      source: 'panel'
+    });
+    return { id: doc.id, email, confirmedAt };
+  }
+
+  async getWebApiKey() {
+    if (this.webApiKey) return this.webApiKey;
+    if (process.env.FIREBASE_WEB_API_KEY) {
+      this.webApiKey = process.env.FIREBASE_WEB_API_KEY;
+      return this.webApiKey;
+    }
+
+    const access = await admin.app().options.credential.getAccessToken();
+    const projectId = serviceAccount.project_id;
+    const headers = { Authorization: `Bearer ${access.access_token}` };
+    const listRes = await fetch(
+      `https://firebase.googleapis.com/v1beta1/projects/${projectId}/webApps`,
+      { headers }
+    );
+    if (!listRes.ok) {
+      const err = new Error('No se pudo obtener la configuración de Firebase Auth');
+      err.status = 503;
+      throw err;
+    }
+    const list = await listRes.json();
+    const appId = list.apps && list.apps[0] && list.apps[0].appId;
+    if (!appId) {
+      const err = new Error('Firebase Auth no tiene una app web configurada');
+      err.status = 503;
+      throw err;
+    }
+    const cfgRes = await fetch(
+      `https://firebase.googleapis.com/v1beta1/projects/${projectId}/webApps/${appId}/config`,
+      { headers }
+    );
+    if (!cfgRes.ok) {
+      const err = new Error('No se pudo obtener la configuración de Firebase Auth');
+      err.status = 503;
+      throw err;
+    }
+    const cfg = await cfgRes.json();
+    if (!cfg.apiKey) {
+      const err = new Error('Firebase Auth no tiene API key');
+      err.status = 503;
+      throw err;
+    }
+    this.webApiKey = cfg.apiKey;
+    return this.webApiKey;
+  }
+
+  /**
+   * Comprueba correo y contraseña contra Firebase Auth.
+   * Devuelve el usuario si las credenciales son válidas, o null si no coinciden.
+   * @param {{ email: string, password: string }} params
+   * @returns {Promise<{ email: string, uid: string }|null>}
+   */
+  async verifyPanelUser({ email, password }) {
+    const apiKey = await this.getWebApiKey();
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          returnSecureToken: true
+        })
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const code = String(data?.error?.message || '');
+      if (/INVALID_PASSWORD|EMAIL_NOT_FOUND|INVALID_LOGIN_CREDENTIALS|USER_DISABLED/.test(code)) {
+        return null;
+      }
+      const err = new Error('No se pudo verificar el usuario en Firebase');
+      err.status = 502;
+      throw err;
+    }
+    const decoded = await admin.auth().verifyIdToken(data.idToken);
+    return {
+      email: String(decoded.email || email).toLowerCase(),
+      uid: decoded.uid
+    };
   }
 }
 

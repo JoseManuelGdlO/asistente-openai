@@ -382,6 +382,16 @@ class CommandManager {
     }
   }
 
+  async getClientByMetaPhoneNumberId(phoneNumberId) {
+    try {
+      const client = await this.firebaseService.getClientByMetaPhoneNumberId(phoneNumberId);
+      return client ? client.id : null;
+    } catch (error) {
+      console.error('❌ Error obteniendo cliente por phone_number_id:', error);
+      return null;
+    }
+  }
+
   /**
    * Lista Assistants de Firestore (excluye deleted). Incluye clientName del cache si existe.
    * @returns {Promise<Array>}
@@ -549,6 +559,22 @@ class CommandManager {
    */
   async updateAssistant(clientId, data) {
     return this.firebaseService.updateAssistant(clientId, data);
+  }
+
+  async saveAssistantVersion(clientId, data) {
+    return this.firebaseService.publishAssistantVersion(clientId, data);
+  }
+
+  async listAssistantVersions(clientId) {
+    return this.firebaseService.listAssistantVersions(clientId);
+  }
+
+  async getAssistantVersion(clientId, versionId) {
+    return this.firebaseService.getAssistantVersion(clientId, versionId);
+  }
+
+  async restoreAssistantVersion(clientId, versionId) {
+    return this.firebaseService.restoreAssistantVersion(clientId, versionId);
   }
 }
 

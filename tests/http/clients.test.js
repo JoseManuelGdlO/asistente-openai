@@ -12,7 +12,7 @@ describe('Clientes y assistants', () => {
     expect(res.body.error).toMatch(/adminPhone/);
   });
 
-  it('POST /clients 201 con mock', async () => {
+  it('POST /clients 201 sin assistantPhone e incluye inviteUrl', async () => {
     const { app, deps } = createTestApp({
       commandManager: {
         createClient: jest.fn().mockResolvedValue({
@@ -26,12 +26,15 @@ describe('Clientes y assistants', () => {
       .set(authHeader())
       .send({
         name: 'Test',
-        adminPhone: '521111',
-        assistantPhone: '521222'
+        adminPhone: '521111'
       });
     expect(res.status).toBe(201);
     expect(res.body.client.id).toBe('C1');
+    expect(res.body.inviteUrl).toMatch(/\/vincular\//);
     expect(deps.commandManager.createClient).toHaveBeenCalled();
+    const payload = deps.commandManager.createClient.mock.calls[0][0];
+    expect(payload.META_INVITE_TOKEN_HASH).toMatch(/^[a-f0-9]{64}$/);
+    expect(payload.assistantPhone).toBeUndefined();
   });
 
   it('GET /clients/:id 404', async () => {

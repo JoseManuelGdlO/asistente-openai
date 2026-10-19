@@ -77,4 +77,24 @@ describe('Edit lock del panel', () => {
     expect(res.status).toBe(409);
     expect(updateClient).not.toHaveBeenCalled();
   });
+
+  it('POST versions 409 sin lease', async () => {
+    const err = new Error('Otro usuario está editando este bot');
+    err.code = 'EDIT_LOCK_NOT_HOLDER';
+    const saveAssistantVersion = jest.fn();
+    const { app } = createTestApp({
+      firebaseService: {
+        assertEditLockHolder: jest.fn().mockRejectedValue(err)
+      },
+      commandManager: { saveAssistantVersion }
+    });
+
+    const res = await request(app)
+      .post('/assistants/C1/versions')
+      .set(editorHeader('editor-b'))
+      .send({ prompt: 'x', tools: [], config: {}, responseSchema: {} });
+
+    expect(res.status).toBe(409);
+    expect(saveAssistantVersion).not.toHaveBeenCalled();
+  });
 });

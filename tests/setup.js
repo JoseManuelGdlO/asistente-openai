@@ -15,3 +15,9 @@ process.env.FIREBASE_CREDENTIALS = process.env.FIREBASE_CREDENTIALS || JSON.stri
 });
 process.env.MESSAGE_DEBOUNCE_MS = process.env.MESSAGE_DEBOUNCE_MS || '0';
 process.env.MESSAGE_DEBOUNCE_MAX_MS = process.env.MESSAGE_DEBOUNCE_MAX_MS || '8000';
+process.env.META_APP_ID = process.env.META_APP_ID || 'test-meta-app-id';
+process.env.META_APP_SECRET = process.env.META_APP_SECRET || 'test-meta-app-secret';
+process.env.META_EMBEDDED_SIGNUP_CONFIG_ID = process.env.META_EMBEDDED_SIGNUP_CONFIG_ID || 'test-config-id';
+process.env.META_WEBHOOK_VERIFY_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN || 'test-meta-verify';
+process.env.META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v22.0';
+process.env.CREDENTIALS_ENCRYPTION_KEY = process.env.CREDENTIALS_ENCRYPTION_KEY || 'test-credentials-key';
