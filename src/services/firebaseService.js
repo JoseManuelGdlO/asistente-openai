@@ -51,6 +51,182 @@ class FirebaseService {
     this.botSessionsCollection = this.db.collection('bot_sessions');
     this.blacklistCollection = this.db.collection('blacklist-phone');
     this.webhookDedupCollection = this.db.collection('webhook_dedup');
+    this.assistantEditLocksCollection = this.db.collection('assistant_edit_locks');
+  }
+
+  static get EDIT_LOCK_TTL_MS() {
+    return 120000;
+  }
+
+  _editLockExpiresAtMs(data) {
+    if (!data) return 0;
+    const raw = data.expiresAt?.toDate?.() || data.expiresAt;
+    if (!raw) return 0;
+    const ms = new Date(raw).getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  _serializeEditLock(clientId, data, editorId) {
+    const expiresAtMs = this._editLockExpiresAtMs(data);
+    const now = Date.now();
+    const held = Boolean(data?.holderId) && expiresAtMs > now;
+    const isHolder = held && data.holderId === editorId;
+    return {
+      clientId,
+      held,
+      isHolder,
+      expiresAt: held ? new Date(expiresAtMs).toISOString() : null
+    };
+  }
+
+  /**
+   * Estado del lease de edición del panel (Assistant/Consultorio).
+   * @param {string} clientId
+   * @param {string} editorId
+   */
+  async getEditLock(clientId, editorId) {
+    const snap = await this.assistantEditLocksCollection.doc(clientId).get();
+    if (!snap.exists) {
+      return this._serializeEditLock(clientId, null, editorId);
+    }
+    return this._serializeEditLock(clientId, snap.data(), editorId);
+  }
+
+  /**
+   * Intenta tomar o renovar el lease de edición.
+   * @param {string} clientId
+   * @param {string} editorId
+   * @param {{ email?: string, ttlMs?: number }} [options]
+   */
+  async acquireEditLock(clientId, editorId, options = {}) {
+    if (!clientId || !editorId) {
+      const err = new Error('clientId y editorId son requeridos');
+      err.code = 'INVALID_EDITOR';
+      throw err;
+    }
+    const ttlMs = Number(options.ttlMs) > 0 ? Number(options.ttlMs) : FirebaseService.EDIT_LOCK_TTL_MS;
+    const ref = this.assistantEditLocksCollection.doc(clientId);
+    const email = typeof options.email === 'string' ? options.email.trim().toLowerCase() : '';
+
+    try {
+      await this.db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const now = Date.now();
+        const expiresAt = new Date(now + ttlMs);
+        const payload = {
+          holderId: editorId,
+          expiresAt,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+        if (email) {
+          payload.holderEmail = email;
+        }
+
+        if (!snap.exists) {
+          tx.set(ref, payload);
+          return;
+        }
+
+        const data = snap.data();
+        const expiresAtMs = this._editLockExpiresAtMs(data);
+        const heldByOther = data.holderId
+          && data.holderId !== editorId
+          && expiresAtMs > now;
+        if (heldByOther) {
+          const err = new Error('EDIT_LOCK_HELD');
+          err.code = 'EDIT_LOCK_HELD';
+          throw err;
+        }
+        tx.set(ref, payload, { merge: true });
+      });
+    } catch (error) {
+      if (error.code !== 'EDIT_LOCK_HELD' && error.message !== 'EDIT_LOCK_HELD') {
+        throw error;
+      }
+    }
+
+    return this.getEditLock(clientId, editorId);
+  }
+
+  /**
+   * Extiende el lease si el caller es el holder vigente.
+   * @param {string} clientId
+   * @param {string} editorId
+   * @param {{ ttlMs?: number }} [options]
+   */
+  async heartbeatEditLock(clientId, editorId, options = {}) {
+    if (!clientId || !editorId) {
+      const err = new Error('clientId y editorId son requeridos');
+      err.code = 'INVALID_EDITOR';
+      throw err;
+    }
+    const ttlMs = Number(options.ttlMs) > 0 ? Number(options.ttlMs) : FirebaseService.EDIT_LOCK_TTL_MS;
+    const ref = this.assistantEditLocksCollection.doc(clientId);
+
+    await this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const now = Date.now();
+      if (!snap.exists) {
+        const err = new Error('No tienes el bloqueo de edición');
+        err.code = 'EDIT_LOCK_NOT_HOLDER';
+        throw err;
+      }
+      const data = snap.data();
+      const expiresAtMs = this._editLockExpiresAtMs(data);
+      if (data.holderId !== editorId || expiresAtMs <= now) {
+        const err = new Error('No tienes el bloqueo de edición');
+        err.code = 'EDIT_LOCK_NOT_HOLDER';
+        throw err;
+      }
+      tx.update(ref, {
+        expiresAt: new Date(now + ttlMs),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    });
+
+    return this.getEditLock(clientId, editorId);
+  }
+
+  /**
+   * Libera el lease si el caller es el holder.
+   * @param {string} clientId
+   * @param {string} editorId
+   */
+  async releaseEditLock(clientId, editorId) {
+    if (!clientId || !editorId) {
+      const err = new Error('clientId y editorId son requeridos');
+      err.code = 'INVALID_EDITOR';
+      throw err;
+    }
+    const ref = this.assistantEditLocksCollection.doc(clientId);
+    await this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return;
+      const data = snap.data();
+      if (data.holderId !== editorId) return;
+      tx.delete(ref);
+    });
+    return this.getEditLock(clientId, editorId);
+  }
+
+  /**
+   * Exige que editorId sea el holder vigente; si no, lanza EDIT_LOCK_NOT_HOLDER.
+   * @param {string} clientId
+   * @param {string} editorId
+   */
+  async assertEditLockHolder(clientId, editorId) {
+    if (!editorId) {
+      const err = new Error('Se requiere X-Editor-Id');
+      err.code = 'INVALID_EDITOR';
+      throw err;
+    }
+    const state = await this.getEditLock(clientId, editorId);
+    if (!state.isHolder) {
+      const err = new Error('Otro usuario está editando este bot');
+      err.code = 'EDIT_LOCK_NOT_HOLDER';
+      throw err;
+    }
+    return state;
   }
 
   /**

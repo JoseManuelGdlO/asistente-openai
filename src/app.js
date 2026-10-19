@@ -26,6 +26,48 @@ function playgroundUserId(clientId) {
   return `playground_${clientId}`;
 }
 
+function readEditorId(req) {
+  const header = req.get('x-editor-id') || req.get('X-Editor-Id') || '';
+  const fromBody = req.body && typeof req.body.editorId === 'string' ? req.body.editorId : '';
+  return String(header || fromBody || '').trim();
+}
+
+function readEditorEmail(req) {
+  const header = req.get('x-editor-email') || '';
+  const fromBody = req.body && typeof req.body.editorEmail === 'string' ? req.body.editorEmail : '';
+  return String(header || fromBody || '').trim().toLowerCase();
+}
+
+function sendEditLockError(res, error, fallback) {
+  if (error.code === 'INVALID_EDITOR') {
+    return res.status(400).json({ ok: false, error: error.message, code: error.code });
+  }
+  if (error.code === 'EDIT_LOCK_NOT_HOLDER' || error.code === 'EDIT_LOCK_HELD') {
+    return res.status(409).json({
+      ok: false,
+      error: error.message || 'Otro usuario está editando este bot',
+      code: error.code
+    });
+  }
+  console.error(fallback, error);
+  return res.status(500).json({
+    ok: false,
+    error: fallback,
+    details: error.message
+  });
+}
+
+async function requireEditLockHolder(firebaseService, req, res, clientId) {
+  const editorId = readEditorId(req);
+  try {
+    await firebaseService.assertEditLockHolder(clientId, editorId);
+    return true;
+  } catch (error) {
+    sendEditLockError(res, error, 'Error verificando bloqueo de edición');
+    return false;
+  }
+}
+
 function timestampToIso(value) {
   if (!value) return null;
   if (typeof value.toDate === 'function') {
@@ -87,6 +129,9 @@ function createApp(deps = {}) {
     documentStore,
     reinitUltraMsgInstances = async () => {}
   } = deps;
+
+  const firebaseService = deps.firebaseService
+    || webhookManager?.commandManager?.firebaseService;
 
   const app = express();
   const uploadPdf = createUploadPdf();
@@ -512,6 +557,61 @@ function createApp(deps = {}) {
     }
   });
 
+  app.get('/bots/:clientId/edit-lock', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const editorId = readEditorId(req);
+      const lock = await firebaseService.getEditLock(clientId, editorId);
+      res.json({ ok: true, lock });
+    } catch (error) {
+      return sendEditLockError(res, error, 'Error obteniendo bloqueo de edición');
+    }
+  });
+
+  app.post('/bots/:clientId/edit-lock/acquire', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const editorId = readEditorId(req);
+      if (!editorId) {
+        return res.status(400).json({ ok: false, error: 'Se requiere X-Editor-Id', code: 'INVALID_EDITOR' });
+      }
+      const lock = await firebaseService.acquireEditLock(clientId, editorId, {
+        email: readEditorEmail(req)
+      });
+      res.json({ ok: true, lock });
+    } catch (error) {
+      return sendEditLockError(res, error, 'Error adquiriendo bloqueo de edición');
+    }
+  });
+
+  app.post('/bots/:clientId/edit-lock/heartbeat', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const editorId = readEditorId(req);
+      if (!editorId) {
+        return res.status(400).json({ ok: false, error: 'Se requiere X-Editor-Id', code: 'INVALID_EDITOR' });
+      }
+      const lock = await firebaseService.heartbeatEditLock(clientId, editorId);
+      res.json({ ok: true, lock });
+    } catch (error) {
+      return sendEditLockError(res, error, 'Error renovando bloqueo de edición');
+    }
+  });
+
+  app.post('/bots/:clientId/edit-lock/release', requireAdminAuth, async (req, res) => {
+    try {
+      const { clientId } = req.params;
+      const editorId = readEditorId(req);
+      if (!editorId) {
+        return res.status(400).json({ ok: false, error: 'Se requiere X-Editor-Id', code: 'INVALID_EDITOR' });
+      }
+      const lock = await firebaseService.releaseEditLock(clientId, editorId);
+      res.json({ ok: true, lock });
+    } catch (error) {
+      return sendEditLockError(res, error, 'Error liberando bloqueo de edición');
+    }
+  });
+
   // ==================== ENDPOINTS DE GESTIÓN DE CLIENTES ====================
 
   app.post('/clients', requireAdminAuth, async (req, res) => {
@@ -583,6 +683,7 @@ function createApp(deps = {}) {
   app.put('/clients/:clientId', requireAdminAuth, async (req, res) => {
     try {
       const { clientId } = req.params;
+      if (!(await requireEditLockHolder(firebaseService, req, res, clientId))) return;
       const updateData = stripEmptyUltraMsgFields(req.body);
 
       const updatedClient = await webhookManager.commandManager.updateClient(clientId, updateData);
@@ -674,6 +775,7 @@ function createApp(deps = {}) {
   app.put('/assistants/:clientId', requireAdminAuth, async (req, res) => {
     try {
       const { clientId } = req.params;
+      if (!(await requireEditLockHolder(firebaseService, req, res, clientId))) return;
       const { prompt, tools, config, responseSchema } = req.body;
 
       const updated = await webhookManager.commandManager.updateAssistant(clientId, {
