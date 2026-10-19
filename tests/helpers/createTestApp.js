@@ -16,6 +16,11 @@ function createStubDeps(overrides = {}) {
     updateClient: fnAsync({ id: 'C1' }),
     confirmPanelLogin: fnAsync({ id: 'confirm-1', email: 'admin@asistente.local', confirmedAt: '2026-10-02T00:00:00.000Z' }),
     verifyPanelUser: fnAsync(null),
+    getEditLock: fnAsync({ clientId: 'C1', held: false, isHolder: false, expiresAt: null }),
+    acquireEditLock: fnAsync({ clientId: 'C1', held: true, isHolder: true, expiresAt: '2099-01-01T00:00:00.000Z' }),
+    heartbeatEditLock: fnAsync({ clientId: 'C1', held: true, isHolder: true, expiresAt: '2099-01-01T00:00:00.000Z' }),
+    releaseEditLock: fnAsync({ clientId: 'C1', held: false, isHolder: false, expiresAt: null }),
+    assertEditLockHolder: fnAsync({ clientId: 'C1', held: true, isHolder: true, expiresAt: '2099-01-01T00:00:00.000Z' }),
     ...overrides.firebaseService
   };
 

@@ -1,5 +1,16 @@
 (function () {
-  const { getToken, setToken, clearToken, api } = window.AdminApi;
+  const {
+    getToken,
+    setToken,
+    clearToken,
+    api,
+    ApiError,
+    setEditorEmail,
+    clearEditorIdentity,
+    acquireEditLock,
+    heartbeatEditLock,
+    releaseEditLock
+  } = window.AdminApi;
 
   const loginView = document.getElementById('login-view');
   const appView = document.getElementById('app-view');
@@ -9,6 +20,88 @@
   const loginPassword = document.getElementById('login-password');
   const loginError = document.getElementById('login-error');
   const logoutBtn = document.getElementById('logout-btn');
+
+  const EDIT_LOCK_HEARTBEAT_MS = 30000;
+  let activeEditLock = { clientId: null, isHolder: false, heartbeatTimer: null };
+
+  function stopEditLockHeartbeat() {
+    if (activeEditLock.heartbeatTimer != null) {
+      clearInterval(activeEditLock.heartbeatTimer);
+      activeEditLock.heartbeatTimer = null;
+    }
+  }
+
+  async function stopEditLock() {
+    const clientId = activeEditLock.clientId;
+    const wasHolder = activeEditLock.isHolder;
+    stopEditLockHeartbeat();
+    activeEditLock = { clientId: null, isHolder: false, heartbeatTimer: null };
+    if (!clientId || !wasHolder) return;
+    try {
+      await releaseEditLock(clientId);
+    } catch {
+      // best-effort: el TTL libera si falla la red
+    }
+  }
+
+  function startEditLockHeartbeat(clientId) {
+    stopEditLockHeartbeat();
+    activeEditLock.heartbeatTimer = setInterval(async () => {
+      if (!activeEditLock.isHolder || activeEditLock.clientId !== clientId) return;
+      try {
+        await heartbeatEditLock(clientId);
+      } catch (err) {
+        if (err && err.status === 409) {
+          activeEditLock.isHolder = false;
+          stopEditLockHeartbeat();
+        }
+      }
+    }, EDIT_LOCK_HEARTBEAT_MS);
+  }
+
+  async function ensureEditLock(clientId) {
+    if (activeEditLock.clientId && activeEditLock.clientId !== clientId) {
+      await stopEditLock();
+    }
+    if (activeEditLock.clientId === clientId && activeEditLock.isHolder) {
+      return { isHolder: true };
+    }
+    const res = await acquireEditLock(clientId);
+    const lock = res.lock || {};
+    activeEditLock.clientId = clientId;
+    activeEditLock.isHolder = Boolean(lock.isHolder);
+    if (activeEditLock.isHolder) {
+      startEditLockHeartbeat(clientId);
+    } else {
+      stopEditLockHeartbeat();
+    }
+    return { isHolder: activeEditLock.isHolder, lock };
+  }
+
+  function editLockBannerHtml(isHolder) {
+    if (isHolder) return '';
+    return `
+      <div class="edit-lock-banner" id="edit-lock-banner" role="status">
+        <p>Otro usuario está editando</p>
+      </div>
+    `;
+  }
+
+  function handleLostEditLock(flash, err) {
+    if (!(err instanceof ApiError) || err.status !== 409) return false;
+    activeEditLock.isHolder = false;
+    stopEditLockHeartbeat();
+    if (flash) {
+      showFlash(flash, 'Ya no tienes el bloqueo de edición', 'err');
+    }
+    render();
+    return true;
+  }
+
+  function isLockedClientSurface(route) {
+    if (route.name !== 'client-detail') return false;
+    return route.tab === 'consultorio' || route.tab === 'assistant';
+  }
 
   function escapeHtml(value) {
     return String(value ?? '')
@@ -385,6 +478,7 @@
         return;
       }
       setToken(data.token);
+      setEditorEmail(email);
       await probeAuth();
       loginPassword.value = '';
       loginError.hidden = true;
@@ -392,22 +486,52 @@
       goToHash('#/');
     } catch (err) {
       clearToken();
+      clearEditorIdentity();
       showLogin(err.status === 503
         ? 'El inicio de sesión no está configurado en el servidor'
         : (err.message || 'No se pudo iniciar sesión'));
     }
   });
 
-  logoutBtn.addEventListener('click', () => {
+  logoutBtn.addEventListener('click', async () => {
+    await stopEditLock();
     clearToken();
+    clearEditorIdentity();
     clearHash();
     showLogin();
   });
 
-  window.addEventListener('auth:required', () => {
+  window.addEventListener('auth:required', async () => {
+    await stopEditLock();
     clearToken();
+    clearEditorIdentity();
     clearHash();
     showLogin('Sesión expirada. Vuelve a iniciar sesión.');
+  });
+
+  window.addEventListener('pagehide', () => {
+    const clientId = activeEditLock.clientId;
+    const wasHolder = activeEditLock.isHolder;
+    stopEditLockHeartbeat();
+    activeEditLock = { clientId: null, isHolder: false, heartbeatTimer: null };
+    if (!clientId || !wasHolder || !getToken()) return;
+    const headers = {
+      Authorization: `Bearer ${getToken()}`,
+      'X-Editor-Id': window.AdminApi.getEditorId(),
+      'Content-Type': 'application/json'
+    };
+    const email = window.AdminApi.getEditorEmail();
+    if (email) headers['X-Editor-Email'] = email;
+    try {
+      fetch(`/bots/${encodeURIComponent(clientId)}/edit-lock/release`, {
+        method: 'POST',
+        headers,
+        body: '{}',
+        keepalive: true
+      });
+    } catch {
+      // ignore
+    }
   });
 
   window.addEventListener('hashchange', render);
@@ -416,6 +540,11 @@
     if (!requireAuth()) return;
     const route = parseRoute();
     setActiveNav(route.name);
+    if (!isLockedClientSurface(route)) {
+      await stopEditLock();
+    } else if (activeEditLock.clientId && activeEditLock.clientId !== route.clientId) {
+      await stopEditLock();
+    }
     content.innerHTML = '<p class="muted">Cargando…</p>';
     try {
       if (route.name === 'dashboard') await renderDashboard();
@@ -864,6 +993,17 @@
     const clientRes = await api(`/clients/${encodeURIComponent(clientId)}`);
     const client = clientRes.client;
 
+    let canEdit = true;
+    if (currentTab === 'assistant' || currentTab === 'consultorio') {
+      try {
+        const lockState = await ensureEditLock(clientId);
+        canEdit = Boolean(lockState.isHolder);
+      } catch (err) {
+        canEdit = false;
+        console.error('Error adquiriendo bloqueo de edición:', err);
+      }
+    }
+
     content.innerHTML = `
       <div class="page-head">
         <div>
@@ -883,13 +1023,13 @@
 
     const body = document.getElementById('detail-body');
     if (currentTab === 'assistant') {
-      await renderAssistantTab(body, clientId);
+      await renderAssistantTab(body, clientId, canEdit);
     } else if (currentTab === 'documentos') {
       await renderDocumentsTab(body, clientId);
     } else if (currentTab === 'sesiones') {
       await renderSessionsTab(body, clientId, page);
     } else {
-      renderConsultorioTab(body, client);
+      renderConsultorioTab(body, client, canEdit);
     }
   }
 
@@ -907,10 +1047,11 @@
     return { title: 'Pendiente de vincular', body: 'Comparte el link con el dueño del WhatsApp para conectar Meta.' };
   }
 
-  function renderConsultorioTab(container, client) {
+  function renderConsultorioTab(container, client, canEdit = true) {
     const storedInvite = sessionStorage.getItem(`inviteUrl:${client.id}`) || '';
     const status = metaStatusCopy(client);
     container.innerHTML = `
+      ${editLockBannerHtml(canEdit)}
       <div id="form-flash" hidden></div>
       <div class="card stack">
         <h2>${escapeHtml(status.title)}</h2>
@@ -937,19 +1078,32 @@
       </form>
     `;
 
+    if (!canEdit) {
+      container.querySelectorAll('#client-form input, #client-form textarea, #client-form select, #client-form button').forEach((el) => {
+        el.disabled = true;
+      });
+      const disconnectMeta = document.getElementById('disconnect-meta');
+      if (disconnectMeta) disconnectMeta.disabled = true;
+      const regenInvite = document.getElementById('regen-invite');
+      if (regenInvite) regenInvite.disabled = true;
+    }
+
     document.getElementById('client-form').addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (!canEdit) return;
       const flash = document.getElementById('form-flash');
       const body = readClientForm(true);
       try {
         await api(`/clients/${encodeURIComponent(client.id)}`, { method: 'PUT', body });
         showFlash(flash, 'Bot actualizado', 'ok');
       } catch (err) {
+        if (handleLostEditLock(flash, err)) return;
         showFlash(flash, err.message, 'err');
       }
     });
 
     document.getElementById('delete-client').addEventListener('click', async () => {
+      if (!canEdit) return;
       if (!confirm(`¿Eliminar el bot "${client.name}"?`)) return;
       try {
         await api(`/clients/${encodeURIComponent(client.id)}`, { method: 'DELETE' });
@@ -975,6 +1129,7 @@
     const regenBtn = document.getElementById('regen-invite');
     if (regenBtn) {
       regenBtn.addEventListener('click', async () => {
+        if (!canEdit) return;
         try {
           const result = await api(`/clients/${encodeURIComponent(client.id)}/meta/invite`, { method: 'POST' });
           if (result.inviteUrl) {
@@ -983,6 +1138,7 @@
           showFlash(document.getElementById('form-flash'), 'Link generado. Copia y envíalo al dueño del WhatsApp.', 'ok');
           render();
         } catch (err) {
+          if (handleLostEditLock(document.getElementById('form-flash'), err)) return;
           showFlash(document.getElementById('form-flash'), err.message, 'err');
         }
       });
@@ -991,6 +1147,7 @@
     const disconnectBtn = document.getElementById('disconnect-meta');
     if (disconnectBtn) {
       disconnectBtn.addEventListener('click', async () => {
+        if (!canEdit) return;
         if (!confirm('¿Desconectar WhatsApp de este bot? El dueño tendrá que volver a vincular.')) return;
         try {
           const result = await api(`/clients/${encodeURIComponent(client.id)}/meta/disconnect`, { method: 'POST' });
@@ -999,13 +1156,14 @@
           }
           render();
         } catch (err) {
+          if (handleLostEditLock(document.getElementById('form-flash'), err)) return;
           showFlash(document.getElementById('form-flash'), err.message, 'err');
         }
       });
     }
   }
 
-  async function renderAssistantTab(container, clientId) {
+  async function renderAssistantTab(container, clientId, canEdit = true) {
     let assistant;
     try {
       const res = await api(`/assistants/${encodeURIComponent(clientId)}`);
@@ -1016,6 +1174,7 @@
     }
 
     container.innerHTML = `
+      ${editLockBannerHtml(canEdit)}
       <div id="form-flash" hidden></div>
       <div class="assistant-layout" id="assistant-layout">
         <aside id="version-panel" class="card version-panel stack" hidden>
@@ -1031,38 +1190,38 @@
           <div>
             <button type="button" id="versions-toggle" class="btn-sm btn-secondary" aria-expanded="false" aria-controls="version-panel">Versiones</button>
             <label for="asst-prompt">Prompt</label>
-            <textarea id="asst-prompt" class="prompt">${escapeHtml(assistant.prompt || '')}</textarea>
+            <textarea id="asst-prompt" class="prompt"${canEdit ? '' : ' readonly'}>${escapeHtml(assistant.prompt || '')}</textarea>
           </div>
           <div>
             <div class="page-head" style="margin:0">
               <label for="asst-tools">Tools (JSON)</label>
               <button type="button" class="btn-sm btn-secondary" data-pretty="asst-tools">Formatear JSON</button>
             </div>
-            <textarea id="asst-tools" class="json">${escapeHtml(prettyJson(assistant.tools || [], []))}</textarea>
+            <textarea id="asst-tools" class="json"${canEdit ? '' : ' readonly'}>${escapeHtml(prettyJson(assistant.tools || [], []))}</textarea>
           </div>
           <div>
             <div class="page-head" style="margin:0">
               <label for="asst-config">Config (JSON)</label>
               <button type="button" class="btn-sm btn-secondary" data-pretty="asst-config">Formatear JSON</button>
             </div>
-            <textarea id="asst-config" class="json">${escapeHtml(prettyJson(assistant.config || {}, {}))}</textarea>
+            <textarea id="asst-config" class="json"${canEdit ? '' : ' readonly'}>${escapeHtml(prettyJson(assistant.config || {}, {}))}</textarea>
           </div>
           <div>
             <div class="page-head" style="margin:0">
               <label for="asst-schema">responseSchema (JSON)</label>
               <button type="button" class="btn-sm btn-secondary" data-pretty="asst-schema">Formatear JSON</button>
             </div>
-            <textarea id="asst-schema" class="json">${escapeHtml(prettyJson(assistant.responseSchema || {}, {}))}</textarea>
+            <textarea id="asst-schema" class="json"${canEdit ? '' : ' readonly'}>${escapeHtml(prettyJson(assistant.responseSchema || {}, {}))}</textarea>
           </div>
           <label class="check">
-            <input type="checkbox" id="asst-reset-sessions">
+            <input type="checkbox" id="asst-reset-sessions"${canEdit ? '' : ' disabled'}>
             <span>Resetear conversaciones de este bot al guardar</span>
           </label>
           <div class="actions">
-            <button type="submit">Guardar Assistant</button>
+            <button type="submit"${canEdit ? '' : ' disabled'}>Guardar Assistant</button>
             <button type="button" id="asst-reset-only" class="btn-secondary">Solo resetear sesiones</button>
-            <input id="asst-version-label" class="version-note" type="text" maxlength="120" placeholder="Nota opcional" aria-label="Nota de la versión">
-            <button type="button" id="asst-save-version" class="btn-secondary">Guardar versión</button>
+            <input id="asst-version-label" class="version-note" type="text" maxlength="120" placeholder="Nota opcional" aria-label="Nota de la versión"${canEdit ? '' : ' disabled'}>
+            <button type="button" id="asst-save-version" class="btn-secondary"${canEdit ? '' : ' disabled'}>Guardar versión</button>
           </div>
         </form>
         <aside class="card playground-card stack">
@@ -1081,6 +1240,10 @@
     `;
 
     container.querySelectorAll('[data-pretty]').forEach((btn) => {
+      if (!canEdit) {
+        btn.disabled = true;
+        return;
+      }
       btn.addEventListener('click', () => {
         const textarea = document.getElementById(btn.dataset.pretty);
         const parsed = parseJsonField(textarea.value, 'JSON', textarea.id === 'asst-tools' ? [] : {});
@@ -1243,7 +1406,7 @@
               <p class="muted version-excerpt">${escapeHtml(version.promptExcerpt || '')}</p>
               <div class="actions">
                 <button type="button" class="btn-sm btn-secondary" data-version-view="${escapeHtml(version.id)}">Ver</button>
-                <button type="button" class="btn-sm btn-secondary" data-version-restore="${escapeHtml(version.id)}">Restaurar</button>
+                <button type="button" class="btn-sm btn-secondary" data-version-restore="${escapeHtml(version.id)}"${canEdit ? '' : ' disabled'}>Restaurar</button>
               </div>
             </div>
           </div>
@@ -1302,6 +1465,7 @@
 
       const restoreBtn = event.target.closest('[data-version-restore]');
       if (!restoreBtn) return;
+      if (!canEdit || restoreBtn.disabled) return;
       const versionId = restoreBtn.getAttribute('data-version-restore');
       const version = versionRows.find((item) => item.id === versionId);
       const when = formatSessionDate(version?.createdAt);
@@ -1322,11 +1486,13 @@
           saved.playgroundReset ? 'ok' : 'err'
         );
       } catch (err) {
+        if (handleLostEditLock(flash, err)) return;
         showFlash(flash, err.message, 'err');
       }
     });
 
     document.getElementById('asst-save-version').addEventListener('click', async () => {
+      if (!canEdit) return;
       const flash = document.getElementById('form-flash');
       const parsed = readAssistantBody();
       if (!parsed.ok) {
@@ -1356,12 +1522,14 @@
           showFlash(flash, `Versión guardada, pero no se pudo actualizar la lista: ${refreshErr.message}`, 'err');
         }
       } catch (err) {
+        if (handleLostEditLock(flash, err)) return;
         showFlash(flash, err.message, 'err');
       }
     });
 
     document.getElementById('assistant-form').addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (!canEdit) return;
       const flash = document.getElementById('form-flash');
       const parsed = readAssistantBody();
       if (!parsed.ok) {
@@ -1391,6 +1559,7 @@
             : 'Assistant actualizado', 'ok');
         }
       } catch (err) {
+        if (handleLostEditLock(flash, err)) return;
         showFlash(flash, err.message, 'err');
       }
     });

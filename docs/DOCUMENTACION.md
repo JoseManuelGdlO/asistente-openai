@@ -608,7 +608,13 @@ Base típica: `http://localhost:3000` (o tu dominio en producción).
 |--------|------|-------------|
 | GET | `/bots/status` | Estado de bots (requiere token) |
 | POST | `/bots/command` | Ejecuta comando (`clientId`, `command`) (requiere token) |
+| GET | `/bots/:clientId/edit-lock` | Estado del lease de edición del panel (Assistant/Consultorio) |
+| POST | `/bots/:clientId/edit-lock/acquire` | Toma o renueva el lease (`X-Editor-Id`) |
+| POST | `/bots/:clientId/edit-lock/heartbeat` | Renueva TTL si eres holder |
+| POST | `/bots/:clientId/edit-lock/release` | Libera si eres holder |
 | GET | `/group-settings` | Política: no responder en grupos |
+
+Solo un editor del panel puede guardar Assistant/Consultorio a la vez (lease en `assistant_edit_locks`). Documentos y Sesiones no usan este lock. Detalle: `docs/superpowers/specs/2026-10-16-bot-edit-lock-design.md`.
 
 ### UltraMsg (requieren `ADMIN_API_TOKEN`)
 

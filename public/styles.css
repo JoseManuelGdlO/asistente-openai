@@ -734,6 +734,24 @@ textarea.json { min-height: 140px; }
 .flash-ok { background: #ecfdf3; color: #067647; }
 .flash-err { background: #fef3f2; color: var(--danger); }
 
+.edit-lock-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.85rem;
+  border-radius: 12px;
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fdba74;
+}
+
+.edit-lock-banner p {
+  margin: 0;
+  font-weight: 600;
+}
+
 .assistant-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
