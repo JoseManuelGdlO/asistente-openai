@@ -202,8 +202,10 @@ class WebhookManager {
     
     // Buscar en todas las instancias configuradas
     for (const [instanceId, instance] of this.ultraMsgManager.instances) {
-      // Aquí podrías implementar lógica más específica para identificar la instancia
-      // Por ahora, usaremos la instancia por defecto
+      // Instancias de entorno o clientes sin teléfono no se pueden comparar
+      if (!assistantPhone || !instance.assistantPhone) {
+        continue;
+      }
       if (assistantPhone.split('@')[0] === instance.assistantPhone.split('@')[0]) {
         return instanceId;
       }

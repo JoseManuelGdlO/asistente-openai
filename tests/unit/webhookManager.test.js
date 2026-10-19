@@ -92,6 +92,26 @@ describe('WebhookManager', () => {
     expect(wm.isGroupMessage({ from: '521555@c.us' })).toBe(false);
   });
 
+  it('identifyInstanceFromMessage ignora instancias sin assistantPhone', () => {
+    const instances = new Map([
+      ['env-1', { instanceId: 'env-1', token: 't' }],
+      ['instance162733', { instanceId: 'instance162733', assistantPhone: '5214492735871' }]
+    ]);
+    const { wm } = createManager({
+      ultraMsgManager: {
+        instances,
+        getDefaultInstance: jest.fn(() => ({ instanceId: 'env-1' }))
+      }
+    });
+
+    const instanceId = wm.identifyInstanceFromMessage({
+      to: '5214492735871@c.us',
+      from: '5216181020927@c.us'
+    });
+
+    expect(instanceId).toBe('instance162733');
+  });
+
   it('withWebhookDedup ignora si no hay claim', async () => {
     const { wm, firebaseService } = createManager({
       firebaseService: {
