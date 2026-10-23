@@ -454,6 +454,23 @@ class OpenAIManager {
       args = {};
     }
 
+    if (this.calendarBooking && this.calendarBooking.isCalendarTool(functionName)) {
+      try {
+        return await this.calendarBooking.execute(functionName, args, {
+          clientId: runContext?.clientId,
+          userId: runContext?.userId,
+          origin: runContext?.origin || null
+        });
+      } catch (error) {
+        console.error('Error en herramienta de calendario:', error.message);
+        return {
+          success: false,
+          error: 'No se pudo completar la operación de agenda.',
+          instruction: 'Informa el problema sin inventar una cita confirmada.'
+        };
+      }
+    }
+
     if (functionName === 'enviar_pdf') {
       try {
         console.log('📄 Ejecutando enviar_pdf:', args);
@@ -644,13 +661,34 @@ class OpenAIManager {
         clientCode,
         context.documentStore
       );
-      const instructions = [assistant.prompt || '', docsInstructions]
+      let calendarRuntime = null;
+      if (this.calendarBooking) {
+        try {
+          calendarRuntime = await this.calendarBooking.loadRuntime(clientCode);
+        } catch (calendarError) {
+          console.error('Error cargando Google Calendar:', calendarError.message);
+        }
+      }
+      runContext.calendarRuntime = calendarRuntime;
+      const calendarInstructions = calendarRuntime?.ready && this.calendarBooking
+        ? this.calendarBooking.buildInstructions(calendarRuntime)
+        : '';
+      const instructions = [assistant.prompt || '', docsInstructions, calendarInstructions]
         .filter(Boolean)
         .join('\n\n');
 
-      const allTools = this.normalizeToolsForResponses(
+      const storedTools = this.normalizeToolsForResponses(
         Array.isArray(assistant.tools) ? assistant.tools : []
       );
+      const calendarToolDefs = calendarRuntime?.ready && this.calendarBooking
+        ? this.calendarBooking.toolDefinitions()
+        : [];
+      const allTools = this.calendarBooking
+        ? this.calendarBooking.mergeTools(storedTools, calendarToolDefs)
+        : storedTools;
+      const visibleTools = this.calendarBooking && !calendarRuntime?.ready
+        ? allTools.filter((tool) => !this.calendarBooking.isCalendarTool(tool?.name || tool?.function?.name))
+        : allTools;
       const canOfferPdf = await this.canOfferEnviarPdf(
         message,
         runContext,
@@ -658,10 +696,10 @@ class OpenAIManager {
         clientCode
       );
       const tools = canOfferPdf
-        ? allTools
-        : allTools.filter((tool) => tool.name !== 'enviar_pdf');
+        ? visibleTools
+        : visibleTools.filter((tool) => tool.name !== 'enviar_pdf');
 
-      if (!canOfferPdf && allTools.length !== tools.length) {
+      if (!canOfferPdf && visibleTools.length !== tools.length) {
         console.log('🔒 enviar_pdf no ofrecido en este turno (sin intención de curso ni reenvío pendiente)');
       }
 

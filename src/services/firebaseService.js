@@ -72,6 +72,7 @@ class FirebaseService {
     this.webhookDedupCollection = col('webhook_dedup');
     this.loginConfirmationsCollection = col('login_confirmations');
     this.assistantEditLocksCollection = col('assistant_edit_locks');
+    this.calendarSettingsCollection = col('calendar_settings');
 
     if (process.env.NODE_ENV !== 'test' && !loggedFirestoreTarget) {
       loggedFirestoreTarget = true;

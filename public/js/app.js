@@ -403,7 +403,8 @@
         name: 'client-detail',
         clientId: decodeURIComponent(parts[1]),
         tab: parts[2] || 'consultorio',
-        page: query.get('page') || '1'
+        page: query.get('page') || '1',
+        notice: query.get('calendar') || ''
       };
     }
     if (parts[0] === 'clients') return { name: 'clients' };
@@ -552,7 +553,7 @@
       else if (route.name === 'session-detail') await renderSessionDetail(route);
       else if (route.name === 'clients') await renderClients();
       else if (route.name === 'client-new') renderClientForm();
-      else if (route.name === 'client-detail') await renderClientDetail(route.clientId, route.tab, route.page);
+      else if (route.name === 'client-detail') await renderClientDetail(route.clientId, route.tab, route.page, route.notice);
       else await renderDashboard();
     } catch (err) {
       if (err.status === 401 || err.status === 503) return;
@@ -988,7 +989,7 @@
     });
   }
 
-  async function renderClientDetail(clientId, tab, page) {
+  async function renderClientDetail(clientId, tab, page, notice) {
     const currentTab = ['consultorio', 'assistant', 'documentos', 'sesiones'].includes(tab) ? tab : 'consultorio';
     const clientRes = await api(`/clients/${encodeURIComponent(clientId)}`);
     const client = clientRes.client;
@@ -1023,7 +1024,7 @@
 
     const body = document.getElementById('detail-body');
     if (currentTab === 'assistant') {
-      await renderAssistantTab(body, clientId, canEdit);
+      await renderAssistantTab(body, clientId, canEdit, notice);
     } else if (currentTab === 'documentos') {
       await renderDocumentsTab(body, clientId);
     } else if (currentTab === 'sesiones') {
@@ -1163,7 +1164,7 @@
     }
   }
 
-  async function renderAssistantTab(container, clientId, canEdit = true) {
+  async function renderAssistantTab(container, clientId, canEdit = true, notice = '') {
     let assistant;
     try {
       const res = await api(`/assistants/${encodeURIComponent(clientId)}`);
@@ -1181,13 +1182,15 @@
           <h2 class="playground-title">Versiones</h2>
           <div id="version-list"></div>
         </aside>
-        <form id="assistant-form" class="card stack">
-          <div id="version-viewing" class="version-viewing" hidden>
-            <p id="version-viewing-text"></p>
-            <button type="button" id="version-back" class="btn-sm btn-secondary">Regresar sin hacer cambios</button>
-          </div>
-          <p class="muted">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
-          <div>
+        <div class="assistant-editor">
+          <p class="muted assistant-intro">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
+          <div id="calendar-mount"></div>
+          <form id="assistant-form" class="card stack">
+            <div id="version-viewing" class="version-viewing" hidden>
+              <p id="version-viewing-text"></p>
+              <button type="button" id="version-back" class="btn-sm btn-secondary">Regresar sin hacer cambios</button>
+            </div>
+            <div>
             <button type="button" id="versions-toggle" class="btn-sm btn-secondary" aria-expanded="false" aria-controls="version-panel">Versiones</button>
             <label for="asst-prompt">Prompt</label>
             <textarea id="asst-prompt" class="prompt"${canEdit ? '' : ' readonly'}>${escapeHtml(assistant.prompt || '')}</textarea>
@@ -1224,12 +1227,20 @@
             <button type="button" id="asst-save-version" class="btn-secondary"${canEdit ? '' : ' disabled'}>Guardar versión</button>
           </div>
         </form>
+        </div>
         <aside class="card playground-card stack">
           <div class="page-head" style="margin:0">
             <h2 class="playground-title">Probar Assistant</h2>
             <button type="button" id="playground-reset" class="btn-sm btn-secondary">Nueva conversación</button>
           </div>
           <p class="muted">Usa el Assistant guardado. Gasta tokens de OpenAI. No envía WhatsApp. Varios mensajes seguidos se juntan (debounce) como en WhatsApp.</p>
+          <div class="calendar-test stack">
+            <p id="playground-calendar-mode" class="muted">Modo de prueba: se puede consultar disponibilidad. No se crean citas reales.</p>
+            <label class="check" for="playground-calendar-write">
+              <input type="checkbox" id="playground-calendar-write" disabled>
+              <span>Permitir crear citas reales</span>
+            </label>
+          </div>
           <div id="playground-log" class="playground-log"></div>
           <form id="playground-form" class="playground-composer">
             <textarea id="playground-input" rows="3" placeholder="Escribe un mensaje de prueba…"></textarea>
@@ -1634,6 +1645,67 @@
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         document.getElementById('playground-form').requestSubmit();
+      }
+    });
+
+    function applyPlaygroundCalendar(calendar) {
+      const box = document.getElementById('playground-calendar-write');
+      const note = document.getElementById('playground-calendar-mode');
+      if (!box || !note || !calendar) return;
+      const write = Boolean(calendar.playgroundWriteEnabled);
+      const ready = Boolean(calendar.ready);
+      box.checked = write;
+      box.disabled = !canEdit || !ready;
+      if (write && ready) {
+        note.className = 'calendar-warning';
+        note.textContent = 'Escritura de prueba activa: se crearán eventos reales en el Google Calendar conectado.';
+      } else if (!ready) {
+        note.className = 'muted';
+        note.textContent = 'Modo de prueba: la agenda todavía no está lista. No se crean citas reales.';
+      } else {
+        note.className = 'muted';
+        note.textContent = 'Modo de prueba: se puede consultar disponibilidad. No se crean citas reales.';
+      }
+    }
+
+    const calendarNotices = {
+      connected: ['Google Calendar conectado.', 'ok'],
+      denied: ['Se canceló la conexión con Google.', 'err'],
+      error: ['No se pudo conectar Google Calendar.', 'err']
+    };
+    if (notice && calendarNotices[notice]) {
+      showFlash(document.getElementById('form-flash'), calendarNotices[notice][0], calendarNotices[notice][1]);
+      const clean = `#/clients/${encodeURIComponent(clientId)}/assistant`;
+      history.replaceState(null, '', `${location.pathname}${location.search}${clean}`);
+    }
+
+    if (window.CalendarPanel) {
+      window.CalendarPanel.mount(document.getElementById('calendar-mount'), {
+        clientId,
+        canEdit,
+        api,
+        escapeHtml,
+        onState: applyPlaygroundCalendar,
+        onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
+      });
+    }
+
+    document.getElementById('playground-calendar-write').addEventListener('change', async (event) => {
+      const next = event.target.checked;
+      if (next && !window.confirm('Se crearán eventos reales en el Google Calendar conectado. ¿Activar la escritura de prueba?')) {
+        event.target.checked = false;
+        return;
+      }
+      try {
+        const res = await api(`/clients/${encodeURIComponent(clientId)}/calendar/playground-write`, {
+          method: 'PUT',
+          body: { enabled: next }
+        });
+        applyPlaygroundCalendar(res.calendar);
+      } catch (err) {
+        event.target.checked = !next;
+        if (handleLostEditLock(document.getElementById('form-flash'), err)) return;
+        showFlash(document.getElementById('form-flash'), err.message, 'err');
       }
     });
 

@@ -20,7 +20,8 @@ describe('firestoreEnv', () => {
         'blacklist-phone': 'blacklist-phone',
         webhook_dedup: 'webhook_dedup',
         login_confirmations: 'login_confirmations',
-        assistant_edit_locks: 'assistant_edit_locks'
+        assistant_edit_locks: 'assistant_edit_locks',
+        calendar_settings: 'calendar_settings'
       }
     });
   });

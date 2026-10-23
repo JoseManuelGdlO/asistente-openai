@@ -23,6 +23,7 @@ const {
 const { parseAssistantVersionBody } = require('./services/assistantVersionInput');
 const { sendHttpError } = require('./utils/httpError');
 const { describeFirestoreTarget } = require('./services/firestoreEnv');
+const { mountCalendarRoutes } = require('./services/calendar/routes');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
 
@@ -1126,7 +1127,8 @@ function createApp(deps = {}) {
       const processContext = {
         ultraMsgManager: fakeTransport,
         documentStore,
-        returnTrace: true
+        returnTrace: true,
+        origin: 'playground'
       };
 
       const debounceManager = webhookManager?.debounceManager;
@@ -1783,6 +1785,13 @@ function createApp(deps = {}) {
   });
   app.get('/vincular/:token', (_req, res) => {
     res.sendFile(path.join(publicDir, 'vincular.html'));
+  });
+
+  mountCalendarRoutes(app, {
+    calendarService: deps.calendarService || null,
+    requireAdminAuth,
+    requireEditLock: (req, res, clientId) => requireEditLockHolder(firebaseService, req, res, clientId),
+    commandManager
   });
 
   return app;

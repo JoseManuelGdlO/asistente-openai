@@ -14,7 +14,8 @@ const ROOT_COLLECTIONS = Object.freeze([
   'blacklist-phone',
   'webhook_dedup',
   'login_confirmations',
-  'assistant_edit_locks'
+  'assistant_edit_locks',
+  'calendar_settings'
 ]);
 
 function resolveFirestoreTarget(env = process.env) {

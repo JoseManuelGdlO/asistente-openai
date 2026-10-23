@@ -114,7 +114,8 @@ function createStubDeps(overrides = {}) {
     reinitUltraMsgInstances: overrides.reinitUltraMsgInstances || fnAsync(),
     firebaseService,
     commandManager,
-    metaSignup: overrides.metaSignup
+    metaSignup: overrides.metaSignup,
+    calendarService: overrides.calendarService || null
   };
 }
 
