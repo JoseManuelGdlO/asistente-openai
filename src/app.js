@@ -24,6 +24,7 @@ const { parseAssistantVersionBody } = require('./services/assistantVersionInput'
 const { sendHttpError } = require('./utils/httpError');
 const { describeFirestoreTarget } = require('./services/firestoreEnv');
 const { mountCalendarRoutes } = require('./services/calendar/routes');
+const { mountBlacklistRoutes } = require('./services/blacklist/routes');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
 
@@ -1789,6 +1790,13 @@ function createApp(deps = {}) {
 
   mountCalendarRoutes(app, {
     calendarService: deps.calendarService || null,
+    requireAdminAuth,
+    requireEditLock: (req, res, clientId) => requireEditLockHolder(firebaseService, req, res, clientId),
+    commandManager
+  });
+
+  mountBlacklistRoutes(app, {
+    firebaseService,
     requireAdminAuth,
     requireEditLock: (req, res, clientId) => requireEditLockHolder(firebaseService, req, res, clientId),
     commandManager
