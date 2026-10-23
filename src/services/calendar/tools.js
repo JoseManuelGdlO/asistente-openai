@@ -126,6 +126,12 @@ function formatSubprompt(rules, timezone, today) {
   return lines.join('\n');
 }
 
+function replyOffersAppointmentTime(text) {
+  const value = String(text || '');
+  if (/\b\d{1,2}:\d{2}\b/.test(value)) return true;
+  return /\b\d{1,2}\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)\b/i.test(value);
+}
+
 function buildInstructions(runtime) {
   const services = (runtime.services || []).filter((service) => service.active);
   const catalog = services.map((service) => (
@@ -138,8 +144,8 @@ function buildInstructions(runtime) {
     'Instrucciones de agendamiento de este bot (sistema):',
     `Hoy es ${today} en ${timezone}. El año en curso es ${today.slice(0, 4)}. Si preguntan la fecha o el año, responde con este dato. No uses ningún otro año.`,
     'Tienes acceso solo a los servicios configurados abajo. Identifica cuál pidió la persona antes de ofrecer un horario.',
-    'Consulta disponibilidad real con getAvailableSlots. Respeta los horarios de atención y la zona horaria configurada.',
-    'No inventes horarios, duraciones ni disponibilidad. La duración es la del servicio, en minutos.',
+    'Antes de proponer, confirmar o dar por disponible cualquier hora o día de cita, llama getAvailableSlots en este turno. El horario operativo del prompt no es disponibilidad.',
+    'Ofrece solo horarios devueltos por getAvailableSlots. No inventes horarios, duraciones ni disponibilidad. La duración es la del servicio, en minutos.',
     'Pide confirmación explícita antes de reservar, reprogramar o cancelar.',
     'Solo confirma una cita cuando createAppointment, rescheduleAppointment o cancelAppointment devuelva success true y un identificador. Si la respuesta trae dryRun o testMode, explica que es una simulación y que la cita no quedó agendada.',
     'Si no hay disponibilidad, ofrece únicamente los horarios alternativos devueltos por la herramienta.',
@@ -160,5 +166,6 @@ module.exports = {
   toolDefinitions,
   mergeTools,
   formatSubprompt,
+  replyOffersAppointmentTime,
   buildInstructions
 };

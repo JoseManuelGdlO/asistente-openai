@@ -1,7 +1,7 @@
 const { generateSlots, zonedToUtc, weekdayKeyFromDate } = require('../../src/services/calendar/time');
 const { describePhase } = require('../../src/services/calendar/readiness');
 const { signState, verifyState } = require('../../src/services/calendar/oauthState');
-const { mergeTools, toolDefinitions, buildInstructions, isCalendarTool } = require('../../src/services/calendar/tools');
+const { mergeTools, toolDefinitions, buildInstructions, isCalendarTool, replyOffersAppointmentTime } = require('../../src/services/calendar/tools');
 const { CalendarService } = require('../../src/services/calendar/calendarService');
 const { MemoryCalendarStore } = require('../../src/services/calendar/memoryStore');
 const { defaultDocument, defaultRules } = require('../../src/services/calendar/constants');
@@ -173,6 +173,8 @@ describe('tools de agenda', () => {
       services: [{ id: 'svc_premium01', name: 'Servicio premium', description: '', durationMinutes: 180, active: true }],
       rules: defaultRules()
     });
+    expect(text).toMatch(/Antes de proponer/);
+    expect(text).toMatch(/getAvailableSlots en este turno/);
     expect(text).toMatch(/No inventes horarios/);
     expect(text).toMatch(/180 minutos/);
     expect(text).toMatch(/campo reply/);
@@ -380,6 +382,58 @@ describe('OpenAIManager y Google Calendar', () => {
     expect(request.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['listBookingServices', 'createAppointment']));
     expect(request.tools.find((tool) => tool.name === 'enviar_pdf')).toBeUndefined();
     expect(tools).toEqual([{ type: 'function', name: 'enviar_pdf' }]);
+  });
+
+  it('consulta el calendario antes de ofrecer un horario', async () => {
+    expect(replyOffersAppointmentTime('Hay lugar a las 9:00')).toBe(true);
+    expect(replyOffersAppointmentTime('El servicio dura 2 horas')).toBe(false);
+
+    const execute = jest.fn().mockResolvedValue({
+      success: true,
+      slots: [{ startLocal: '2026-10-26T12:00', label: 'lunes 26 de oct, 12:00–12:30' }],
+      instruction: 'Ofrece solo los horarios devueltos.'
+    });
+    const manager = managerWith({
+      loadRuntime: jest.fn().mockResolvedValue({
+        ready: true,
+        timezone: 'America/Mexico_City',
+        services: [{ id: 'svc_premium01', name: 'Servicio premium', description: '', durationMinutes: 30, active: true }],
+        rules: defaultRules()
+      }),
+      buildInstructions,
+      toolDefinitions,
+      mergeTools,
+      isCalendarTool,
+      execute
+    }, []);
+    manager.openai.responses.create
+      .mockResolvedValueOnce({
+        output_text: '{"reply":"Puedes venir a las 9:00"}',
+        output: [{ type: 'message', role: 'assistant', content: [] }]
+      })
+      .mockResolvedValueOnce({
+        output_text: '',
+        output: [{
+          type: 'function_call',
+          name: 'getAvailableSlots',
+          arguments: '{"serviceId":"svc_premium01","date":"2026-10-26","preferredStart":null}',
+          call_id: 'call_1'
+        }]
+      })
+      .mockResolvedValueOnce({
+        output_text: '{"reply":"El lunes 26 hay lugar a las 12:00"}',
+        output: [{ type: 'message', role: 'assistant', content: [] }]
+      });
+
+    const result = await manager.processMessage('521', 'quiero el lunes a las 9', 'bot-1', { origin: 'meta' });
+    expect(execute).toHaveBeenCalledWith(
+      'getAvailableSlots',
+      expect.any(Object),
+      expect.objectContaining({ clientId: 'bot-1' })
+    );
+    const forced = manager.openai.responses.create.mock.calls[1][0];
+    expect(forced.tool_choice).toEqual({ type: 'function', name: 'getAvailableSlots' });
+    expect(result).toContain('12:00');
   });
 
   it('con la agenda apagada no manda las tools de calendario', async () => {
