@@ -12,7 +12,7 @@ const {
   localDate,
   addDays,
   parseLocalDateTime,
-  hasExplicitZone,
+  interpretSlotStart,
   rollPastDate,
   fitsHours,
   rangesOverlap,
@@ -429,16 +429,14 @@ class CalendarService {
     const doc = await this.store.getRaw(runtime.clientId);
     const today = localDate(this.now(), runtime.timezone);
     const preferredText = typeof args.preferredStart === 'string' ? args.preferredStart.trim() : '';
-    if (preferredText && !parseLocalDateTime(preferredText, runtime.timezone)) {
+    let preferred = preferredText ? interpretSlotStart(preferredText, runtime.timezone) : null;
+    if (preferredText && !preferred) {
       return {
         success: false,
         error: 'Usa YYYY-MM-DDTHH:mm en la zona del calendario. Copia startLocal del horario ofrecido.',
-        instruction: hasExplicitZone(preferredText)
-          ? 'No envíes una hora con Z ni con desfase. Vuelve a consultar copiando startLocal.'
-          : 'El horario debe ir como YYYY-MM-DDTHH:mm. Copia startLocal del horario ofrecido.'
+        instruction: 'No se lo pidas a la persona. Vuelve a consultar copiando startLocal.'
       };
     }
-    let preferred = preferredText ? parseLocalDateTime(preferredText, runtime.timezone) : null;
     let requestedDate = typeof args.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date)
       ? args.date
       : (preferred ? localDate(preferred, runtime.timezone) : '');
@@ -521,7 +519,15 @@ class CalendarService {
       return { success: false, error: 'Falta el nombre de quien reserva.', instruction: 'Pide el nombre antes de crear la cita.' };
     }
     const slot = this.resolveSlot(runtime, service, args.start);
-    if (!slot.ok) return { success: false, error: slot.error, instruction: 'No confirmes ese horario. Ofrece alternativas reales.' };
+    if (!slot.ok) {
+      return {
+        success: false,
+        error: slot.error,
+        instruction: slot.error.includes('YYYY-MM-DD')
+          ? 'No pidas el formato a la persona. Vuelve a llamar createAppointment copiando startLocal del horario ofrecido.'
+          : 'No confirmes ese horario. Ofrece alternativas reales.'
+      };
+    }
     const mode = this.mutationMode(context.origin, runtime);
     if (mode === 'blocked') {
       return { success: false, error: 'Este canal no puede modificar la agenda.', instruction: 'No confirmes la cita.' };
@@ -718,17 +724,10 @@ class CalendarService {
   }
 
   resolveSlot(runtime, service, startValue) {
-    const text = typeof startValue === 'string' ? startValue.trim() : '';
-    if (!/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/.test(text)) {
-      return {
-        ok: false,
-        error: hasExplicitZone(text)
-          ? 'Usa YYYY-MM-DDTHH:mm en la zona del calendario. Copia startLocal del horario ofrecido.'
-          : 'El horario debe ir como YYYY-MM-DDTHH:mm.'
-      };
+    const start = interpretSlotStart(startValue, runtime.timezone);
+    if (!start) {
+      return { ok: false, error: 'El horario debe ir como YYYY-MM-DDTHH:mm.' };
     }
-    const start = parseLocalDateTime(text, runtime.timezone);
-    if (!start) return { ok: false, error: 'El horario debe ir como YYYY-MM-DDTHH:mm.' };
     const end = new Date(start.getTime() + service.durationMinutes * 60000);
     const now = this.now().getTime();
     if (start.getTime() < now + (runtime.rules.minNoticeMinutes * 60000)) {

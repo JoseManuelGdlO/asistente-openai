@@ -139,6 +139,23 @@ function parseLocalDateTime(value, timeZone) {
   return zonedToUtc(local[1], local[2], timeZone);
 }
 
+/**
+ * Acepta la hora local con o sin segundos, y también un ISO con Z o desfase.
+ * El ISO con zona es un instante real (el campo start del horario).
+ * Sin zona, la hora del reloj se lee en la zona del calendario.
+ */
+function interpretSlotStart(value, timeZone) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = value.trim();
+  if (hasExplicitZone(text)) {
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const wall = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/);
+  if (!wall) return null;
+  return zonedToUtc(wall[1], wall[2], timeZone);
+}
+
 function formatSlotLabel(start, end, timeZone) {
   const day = new Intl.DateTimeFormat('es-MX', {
     timeZone,
@@ -223,6 +240,7 @@ module.exports = {
   hasExplicitZone,
   rollPastDate,
   parseLocalDateTime,
+  interpretSlotStart,
   formatSlotLabel,
   generateSlots
 };

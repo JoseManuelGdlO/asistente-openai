@@ -258,6 +258,24 @@ describe('agendamiento', () => {
     expect(preview.dryRun).toBe(true);
     expect(preview.success).toBe(false);
     expect(google.createEvent).not.toHaveBeenCalled();
+
+    const withSeconds = await service.execute('createAppointment', {
+      serviceId: 'svc_premium01',
+      start: '2026-10-26T10:00:00',
+      customerName: 'Ana',
+      notes: null
+    }, { clientId: 'bot-1', origin: 'playground', userId: 'playground_bot-1' });
+    expect(withSeconds.dryRun).toBe(true);
+    expect(withSeconds.label).toMatch(/10:00/);
+
+    const fromUtcStart = await service.execute('createAppointment', {
+      serviceId: 'svc_premium01',
+      start: '2026-10-26T16:00:00.000Z',
+      customerName: 'Ana',
+      notes: null
+    }, { clientId: 'bot-1', origin: 'playground', userId: 'playground_bot-1' });
+    expect(fromUtcStart.dryRun).toBe(true);
+    expect(fromUtcStart.label).toMatch(/10:00/);
   });
 
   it('crea una sola cita real y rechaza el horario ocupado', async () => {
