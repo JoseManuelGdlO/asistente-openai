@@ -45,6 +45,15 @@ function defaultRules() {
   };
 }
 
+function defaultFormats() {
+  return {
+    date: 'YYYY-MM-DD',
+    dateTime: 'YYYY-MM-DDTHH:mm',
+    availability: 'times',
+    notes: ''
+  };
+}
+
 function defaultHours() {
   const hours = {};
   for (const [key] of WEEKDAYS) {
@@ -92,6 +101,7 @@ module.exports = {
   WEEKDAYS,
   TIMEZONES,
   defaultRules,
+  defaultFormats,
   defaultHours,
   defaultDocument,
   clone

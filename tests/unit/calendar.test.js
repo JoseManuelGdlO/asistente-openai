@@ -176,6 +176,22 @@ describe('tools de agenda', () => {
     expect(text).toMatch(/No inventes horarios/);
     expect(text).toMatch(/180 minutos/);
     expect(text).toMatch(/campo reply/);
+    expect(text).toMatch(/Hoy es \d{4}-\d{2}-\d{2} en America\/Mexico_City/);
+    expect(text).toMatch(/año siguiente si ese día ya pasó/);
+    expect(text).toMatch(/Copia startLocal/);
+    expect(text).toMatch(/No envíes Z/);
+  });
+
+  it('usa la fecha de hoy que trae el runtime', () => {
+    const text = buildInstructions({
+      timezone: 'America/Mexico_City',
+      today: '2026-10-23',
+      services: [],
+      rules: defaultRules()
+    });
+    expect(text).toContain('Hoy es 2026-10-23 en America/Mexico_City');
+    expect(text).toContain('El año en curso es 2026');
+    expect(text).toContain('usa 2026, o el año siguiente si ese día ya pasó');
   });
 });
 
@@ -220,6 +236,18 @@ describe('agendamiento', () => {
     }, { clientId: 'bot-1', origin: 'playground', userId: 'playground_bot-1' });
     expect(slots.exact).toBe(true);
     expect(slots.slots[0].startLocal).toBe('2026-10-26T10:00');
+    expect(slots.today).toBe('2026-10-26');
+
+    const rolled = await service.execute('getAvailableSlots', {
+      serviceId: 'svc_premium01',
+      date: '2023-10-26',
+      preferredStart: null
+    }, { clientId: 'bot-1', origin: 'playground', userId: 'playground_bot-1' });
+    expect(rolled.correctedFrom).toBe('2023-10-26');
+    expect(rolled.today).toBe('2026-10-26');
+    expect(rolled.slots.some((slot) => slot.startLocal.startsWith('2026-10-26'))).toBe(true);
+    expect(rolled.instruction).toMatch(/El año es 2026/);
+    expect(rolled.instruction).toMatch(/No digas 2023/);
 
     const preview = await service.execute('createAppointment', {
       serviceId: 'svc_premium01',

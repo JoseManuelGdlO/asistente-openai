@@ -97,14 +97,46 @@ function fitsHours(startUtc, endUtc, hours, timeZone) {
   });
 }
 
+const LOCAL_DATETIME_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
+const EXPLICIT_ZONE_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+function hasExplicitZone(value) {
+  return typeof value === 'string' && EXPLICIT_ZONE_RE.test(value.trim());
+}
+
+function sameMonthDayInYear(dateStr, year) {
+  const match = String(dateStr).match(/^\d{4}-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const candidate = `${year}-${match[1]}-${match[2]}`;
+  const [y, m, d] = candidate.split('-').map(Number);
+  const check = new Date(Date.UTC(y, m - 1, d));
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== d) return null;
+  return candidate;
+}
+
+/**
+ * Una fecha anterior a hoy con otro año se mueve al mismo mes y día
+ * de este año, o del siguiente si ese día ya pasó.
+ * El mismo año se deja como pasado para que el llamador lo rechace.
+ */
+function rollPastDate(dateStr, today) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return null;
+  if (dateStr >= today) return { date: dateStr, correctedFrom: null, past: false };
+  if (dateStr.slice(0, 4) === today.slice(0, 4)) {
+    return { date: dateStr, correctedFrom: null, past: true };
+  }
+  const year = Number(today.slice(0, 4));
+  let rolled = sameMonthDayInYear(dateStr, year);
+  if (!rolled || rolled < today) rolled = sameMonthDayInYear(dateStr, year + 1);
+  if (!rolled) return { date: dateStr, correctedFrom: null, past: true };
+  return { date: rolled, correctedFrom: dateStr, past: false };
+}
+
 function parseLocalDateTime(value, timeZone) {
   if (typeof value !== 'string' || !value.trim()) return null;
-  const text = value.trim();
-  const local = text.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
-  if (local) return zonedToUtc(local[1], local[2], timeZone);
-  const parsed = new Date(text);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
+  const local = value.trim().match(LOCAL_DATETIME_RE);
+  if (!local) return null;
+  return zonedToUtc(local[1], local[2], timeZone);
 }
 
 function formatSlotLabel(start, end, timeZone) {
@@ -188,6 +220,8 @@ module.exports = {
   weekdayKeyFromDate,
   rangesOverlap,
   fitsHours,
+  hasExplicitZone,
+  rollPastDate,
   parseLocalDateTime,
   formatSlotLabel,
   generateSlots
