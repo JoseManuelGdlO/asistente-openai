@@ -8,8 +8,10 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # 3001 en el servidor para poder convivir con producción, que ya usa 3000.
+    # Dentro del contenedor la app sigue en 3000.
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       NODE_ENV: production
       PORT: "3000"
