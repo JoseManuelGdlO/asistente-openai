@@ -112,6 +112,48 @@ a:hover { text-decoration: underline; }
 .login-brand .wordmark em { font-size: 1.15rem; }
 .login-brand:hover { text-decoration: none; }
 
+.env-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin: 0.85rem 0 0;
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.env-badge-qa {
+  background: #f79009;
+  color: #1a1203;
+}
+
+.login-panel .env-badge-prod {
+  background: #e8eef6;
+  color: #334155;
+}
+
+.sidebar .env-badge {
+  margin: -0.35rem 0 0 0.15rem;
+}
+
+.sidebar .env-badge-prod {
+  background: rgba(255, 255, 255, 0.12);
+  color: #d5e0ea;
+}
+
+.env-banner {
+  grid-column: 1 / -1;
+  background: #f79009;
+  color: #1a1203;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 0.45rem 1rem;
+}
+
 .login-wrap {
   height: 100%;
   min-height: 100dvh;

@@ -1762,6 +1762,41 @@
     });
   }
 
+  function applyEnvironmentBadge(firestore) {
+    const prefix = String(firestore?.collectionPrefix || '');
+    const databaseId = String(firestore?.databaseId || '');
+    const isQa = firestore?.environment === 'qa'
+      || prefix.toUpperCase().startsWith('QA')
+      || databaseId.toLowerCase().includes('qa');
+    const label = isQa ? 'QA' : 'Producción';
+    document.title = isQa ? 'QA · Intelekia Chatbot' : 'Intelekia Chatbot';
+
+    for (const id of ['login-env', 'app-env']) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.hidden = false;
+      el.textContent = label;
+      el.classList.toggle('env-badge-qa', isQa);
+      el.classList.toggle('env-badge-prod', !isQa);
+      el.title = databaseId ? `Base ${databaseId}` : '';
+    }
+
+    const banner = document.getElementById('env-banner');
+    if (banner) {
+      banner.hidden = !isQa;
+      banner.textContent = databaseId
+        ? `QA. Esta pantalla usa la base ${databaseId}, no producción.`
+        : 'QA. Esta pantalla no usa la base de producción.';
+    }
+  }
+
+  fetch('/health')
+    .then((res) => res.json())
+    .then((data) => {
+      if (data && data.firestore) applyEnvironmentBadge(data.firestore);
+    })
+    .catch(() => {});
+
   if (getToken()) {
     probeAuth().then(() => {
       showApp();
