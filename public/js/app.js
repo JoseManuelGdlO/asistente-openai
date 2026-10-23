@@ -1185,6 +1185,7 @@
         <div class="assistant-editor">
           <p class="muted assistant-intro">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
           <div id="calendar-mount"></div>
+          <div id="blacklist-mount"></div>
           <form id="assistant-form" class="card stack">
             <div id="version-viewing" class="version-viewing" hidden>
               <p id="version-viewing-text"></p>
@@ -1686,6 +1687,16 @@
         api,
         escapeHtml,
         onState: applyPlaygroundCalendar,
+        onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
+      });
+    }
+
+    if (window.BlacklistPanel) {
+      window.BlacklistPanel.mount(document.getElementById('blacklist-mount'), {
+        clientId,
+        canEdit,
+        api,
+        escapeHtml,
         onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
       });
     }
