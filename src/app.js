@@ -22,6 +22,7 @@ const {
 } = require('./services/metaWebhook');
 const { parseAssistantVersionBody } = require('./services/assistantVersionInput');
 const { sendHttpError } = require('./utils/httpError');
+const { describeFirestoreTarget } = require('./services/firestoreEnv');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
 
@@ -1624,7 +1625,10 @@ function createApp(deps = {}) {
   // ==================== ENDPOINTS DE UTILIDAD ====================
 
   app.get('/health', (req, res) => {
-    res.json({ status: 'OK' });
+    res.json({
+      status: 'OK',
+      firestore: describeFirestoreTarget()
+    });
   });
 
   app.post('/test', (req, res) => {

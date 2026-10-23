@@ -1,7 +1,22 @@
 const admin = require('firebase-admin');
 const { hashInviteToken } = require('./metaInviteService');
 const { parseAssistantVersionBody, promptExcerpt } = require('./assistantVersionInput');
+const {
+  ROOT_COLLECTIONS,
+  resolveFirestoreTarget,
+  collectionName
+} = require('./firestoreEnv');
 const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+
+let loggedFirestoreTarget = false;
+
+function openFirestore(databaseId) {
+  if (!databaseId || databaseId === '(default)') {
+    return admin.firestore();
+  }
+  const { getFirestore } = require('firebase-admin/firestore');
+  return getFirestore(admin.app(), databaseId);
+}
 
 const DEFAULT_RESPONSE_SCHEMA = {
   type: 'object',
@@ -47,14 +62,28 @@ class FirebaseService {
       });
     }
     
-    this.db = admin.firestore();
-    this.clientsCollection = this.db.collection('clients');
-    this.assistantsCollection = this.db.collection('Assistants');
-    this.botSessionsCollection = this.db.collection('bot_sessions');
-    this.blacklistCollection = this.db.collection('blacklist-phone');
-    this.webhookDedupCollection = this.db.collection('webhook_dedup');
-    this.loginConfirmationsCollection = this.db.collection('login_confirmations');
-    this.assistantEditLocksCollection = this.db.collection('assistant_edit_locks');
+    this.firestoreTarget = resolveFirestoreTarget();
+    this.db = openFirestore(this.firestoreTarget.databaseId);
+    const col = (name) => this.db.collection(collectionName(name, this.firestoreTarget.prefix));
+    this.clientsCollection = col('clients');
+    this.assistantsCollection = col('Assistants');
+    this.botSessionsCollection = col('bot_sessions');
+    this.blacklistCollection = col('blacklist-phone');
+    this.webhookDedupCollection = col('webhook_dedup');
+    this.loginConfirmationsCollection = col('login_confirmations');
+    this.assistantEditLocksCollection = col('assistant_edit_locks');
+
+    if (process.env.NODE_ENV !== 'test' && !loggedFirestoreTarget) {
+      loggedFirestoreTarget = true;
+      const prefixLabel = this.firestoreTarget.prefix || '(ninguno)';
+      console.log(
+        `🔥 Firestore ${this.firestoreTarget.environment}: ` +
+        `base "${this.firestoreTarget.databaseId}", prefijo ${prefixLabel}`
+      );
+      console.log(
+        `   Colecciones: ${ROOT_COLLECTIONS.map((name) => collectionName(name, this.firestoreTarget.prefix)).join(', ')}`
+      );
+    }
   }
 
   static get EDIT_LOCK_TTL_MS() {
@@ -1616,7 +1645,8 @@ class FirebaseService {
    */
   async testConnection() {
     try {
-      await this.db.collection('test').doc('connection').get();
+      const probe = collectionName('test', this.firestoreTarget.prefix);
+      await this.db.collection(probe).doc('connection').get();
       console.log('✅ Conexión con Firebase exitosa');
       return true;
     } catch (error) {

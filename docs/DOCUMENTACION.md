@@ -655,6 +655,8 @@ Copia `config-ultramsg.example` a `.env` y completa. Lo esencial:
 | `OPENAI_MODEL` | Modelo Responses (default `gpt-4o-mini`) |
 | `ULTRAMSG_TOKEN` / `INSTANCE_ID` / `WEBHOOK_TOKEN` | WhatsApp (fallback) |
 | `FIREBASE_CREDENTIALS` | JSON de service account |
+| `FIRESTORE_DATABASE_ID` | Vacío o `(default)` en producción. En local QA: `qa-db` |
+| `FIRESTORE_COLLECTION_PREFIX` | Vacío en producción. En local QA: `QA_` (colecciones `QA_clients`, `QA_Assistants`, …) |
 | `ADMIN_API_TOKEN` | Panel admin y API de gestión (clientes, assistants, playground, documentos, sesiones, bots, scheduler, UltraMsg) |
 | `MESSAGE_DEBOUNCE_MS` | Silencio antes de flush a la IA (default `2500`; `0` desactiva el buffer) |
 | `MESSAGE_DEBOUNCE_MAX_MS` | Tope del lote desde el primer mensaje (default `8000`) |
@@ -694,6 +696,7 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 | `npm run create-assistant` | Seed par client + Assistant en Firestore |
 | `node scripts/backfill-assistants.js` | Crea `Assistants/{id}` faltantes para clients activos (idempotente; `--dry-run` solo reporta). Ya aplicado en producción si corresponde. |
 | `npm run migrate-firebase` | Seed/migración de clientes de ejemplo a Firestore |
+| `npm run replicate-qa` | Copia de solo lectura desde `(default)` hacia la base `qa-db`, con colecciones `QA_*`. No escribe en producción. |
 | `npm run test-ultramsg` | Prueba UltraMsg |
 | `npm run test-webhook` | Prueba webhook |
 | `npm run test-commands` | Prueba comandos |

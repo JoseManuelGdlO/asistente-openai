@@ -17,6 +17,7 @@
     "test-commands": "node test/test-commands.js",
     "test-firebase": "node test/test-firebase.js",
     "migrate-firebase": "node scripts/migrate-to-firebase.js",
+    "replicate-qa": "node scripts/replicate-firestore-qa.js",
     "test-reload": "node test/test-reload.js",
     "test-firebase-ultramsg": "node test/test-firebase-ultramsg.js"
   },

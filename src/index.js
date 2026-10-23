@@ -12,6 +12,7 @@ const OpenAIManager = require('./managers/openAIManager');
 const WebhookManager = require('./controllers/webhookManager');
 const SchedulerController = require('./controllers/schedulerController');
 const DocumentStore = require('./services/documentStore');
+const { describeFirestoreTarget } = require('./services/firestoreEnv');
 
 const port = process.env.PORT || 3000;
 
@@ -69,6 +70,11 @@ app.listen(port, async () => {
     console.log(`Health URL: http://localhost:${port}/health`);
     console.log(`Panel admin: http://localhost:${port}/`);
     console.log('Variables de entorno:');
+    const firestoreTarget = describeFirestoreTarget();
+    console.log(
+      `- Firestore: ${firestoreTarget.environment} | base ${firestoreTarget.databaseId} | ` +
+      `prefijo ${firestoreTarget.collectionPrefix || '(ninguno, producción)'}`
+    );
     console.log('- OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- OPENAI_MODEL:', process.env.OPENAI_MODEL || 'gpt-4o-mini (default)');
     console.log('- ULTRAMSG_TOKEN:', process.env.ULTRAMSG_TOKEN ? 'Configurado' : 'NO CONFIGURADO');

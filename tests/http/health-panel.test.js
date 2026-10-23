@@ -1,5 +1,6 @@
 const request = require('supertest');
 const { createTestApp } = require('../helpers/createTestApp');
+const { describeFirestoreTarget } = require('../../src/services/firestoreEnv');
 
 describe('Panel y endpoints públicos', () => {
   let app;
@@ -11,7 +12,10 @@ describe('Panel y endpoints públicos', () => {
   it('GET /health', async () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'OK' });
+    expect(res.body).toEqual({
+      status: 'OK',
+      firestore: describeFirestoreTarget()
+    });
   });
 
   it('POST /test', async () => {
