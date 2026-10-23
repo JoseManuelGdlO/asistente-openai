@@ -1,8 +1,10 @@
 const OpenAI = require('openai');
 const FirebaseService = require('../services/firebaseService');
 
+const { replyOffersAppointmentTime } = require('../services/calendar/tools');
+
 const MAX_HISTORY_ITEMS = 40;
-const MAX_TOOL_LOOPS = 2;
+const MAX_TOOL_LOOPS = 3;
 
 // El PDF solo se reenvía si el usuario lo pide: menciona el documento + una intención de repetir
 const DOC_MENTION_REGEX = /(pdf|dossier|documento|archivo|folleto|temario|catalogo|catálogo)/;
@@ -709,12 +711,18 @@ class OpenAIManager {
 
       let loops = 0;
       let finalResponse = null;
-      // Tras cualquier intento de tool el modelo pierde el acceso: solo puede cerrar con JSON
+      // Tras consultar la agenda, o tras cualquier otra tool, el modelo cierra con JSON
       let toolsLocked = false;
+      let forceCalendarLookup = false;
 
       while (loops < MAX_TOOL_LOOPS) {
         loops += 1;
         await this.firebaseService.refreshBotSessionLock(userId, clientCode);
+
+        const toolChoice = toolsLocked
+          ? 'none'
+          : (forceCalendarLookup ? { type: 'function', name: 'getAvailableSlots' } : null);
+        forceCalendarLookup = false;
 
         const request = this.buildResponsesRequest({
           instructions,
@@ -722,7 +730,7 @@ class OpenAIManager {
           tools,
           responseSchema,
           config,
-          toolChoice: toolsLocked ? 'none' : null
+          toolChoice
         });
 
         console.log(
@@ -733,6 +741,7 @@ class OpenAIManager {
 
         const output = Array.isArray(response.output) ? response.output : [];
         const functionCalls = output.filter((item) => item.type === 'function_call');
+        const itemsBeforeOutput = items.length;
 
         // Persistir todos los items serializables (mensajes + function_calls; sin reasoning)
         for (const item of output) {
@@ -743,6 +752,25 @@ class OpenAIManager {
         }
 
         if (functionCalls.length === 0) {
+          const consultedAvailability = runContext.toolTrace.some((entry) => (
+            entry.name === 'getAvailableSlots'
+            || entry.name === 'createAppointment'
+            || entry.name === 'rescheduleAppointment'
+            || entry.name === 'cancelAppointment'
+          ));
+          const replyText = this.parseReply(response);
+          if (
+            calendarRuntime?.ready
+            && !consultedAvailability
+            && replyOffersAppointmentTime(replyText)
+            && loops < MAX_TOOL_LOOPS
+          ) {
+            items.splice(itemsBeforeOutput);
+            toolsLocked = false;
+            forceCalendarLookup = true;
+            console.log('📅 Respuesta con horario sin consultar el calendario; se exige getAvailableSlots');
+            continue;
+          }
           break;
         }
 

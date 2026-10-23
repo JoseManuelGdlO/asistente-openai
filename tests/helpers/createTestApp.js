@@ -21,6 +21,9 @@ function createStubDeps(overrides = {}) {
     heartbeatEditLock: fnAsync({ clientId: 'C1', held: true, isHolder: true, expiresAt: '2099-01-01T00:00:00.000Z' }),
     releaseEditLock: fnAsync({ clientId: 'C1', held: false, isHolder: false, expiresAt: null }),
     assertEditLockHolder: fnAsync({ clientId: 'C1', held: true, isHolder: true, expiresAt: '2099-01-01T00:00:00.000Z' }),
+    getBlacklist: fnAsync([]),
+    addToBlacklist: fnAsync({ added: true, id: 'bl1' }),
+    removeFromBlacklist: fnAsync(true),
     ...overrides.firebaseService
   };
 
