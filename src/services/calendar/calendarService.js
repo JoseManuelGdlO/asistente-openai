@@ -12,6 +12,8 @@ const {
   localDate,
   addDays,
   parseLocalDateTime,
+  hasExplicitZone,
+  rollPastDate,
   fitsHours,
   rangesOverlap,
   generateSlots,
@@ -126,6 +128,7 @@ class CalendarService {
       services: doc.services || [],
       rules: doc.rules,
       timezone: doc.connection?.timezone || DEFAULT_TIMEZONE,
+      today: localDate(this.now(), doc.connection?.timezone || DEFAULT_TIMEZONE),
       calendarId: doc.connection?.calendarId || '',
       playgroundWriteEnabled: doc.playgroundWriteEnabled === true,
       enabled: doc.enabled === true
@@ -425,12 +428,50 @@ class CalendarService {
     }
     const doc = await this.store.getRaw(runtime.clientId);
     const today = localDate(this.now(), runtime.timezone);
-    const preferred = args.preferredStart ? parseLocalDateTime(args.preferredStart, runtime.timezone) : null;
-    const requestedDate = typeof args.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date)
+    const preferredText = typeof args.preferredStart === 'string' ? args.preferredStart.trim() : '';
+    if (preferredText && !parseLocalDateTime(preferredText, runtime.timezone)) {
+      return {
+        success: false,
+        error: 'Usa YYYY-MM-DDTHH:mm en la zona del calendario. Copia startLocal del horario ofrecido.',
+        instruction: hasExplicitZone(preferredText)
+          ? 'No envíes una hora con Z ni con desfase. Vuelve a consultar copiando startLocal.'
+          : 'El horario debe ir como YYYY-MM-DDTHH:mm. Copia startLocal del horario ofrecido.'
+      };
+    }
+    let preferred = preferredText ? parseLocalDateTime(preferredText, runtime.timezone) : null;
+    let requestedDate = typeof args.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date)
       ? args.date
       : (preferred ? localDate(preferred, runtime.timezone) : '');
-    const fromDate = requestedDate || today;
     const horizon = addDays(today, runtime.rules.maxDaysAhead);
+    let correctedFrom = null;
+    if (requestedDate) {
+      const rolled = rollPastDate(requestedDate, today);
+      if (rolled?.past) {
+        return {
+          success: false,
+          error: `La fecha ${requestedDate} ya pasó. Hoy es ${today}.`,
+          today,
+          instruction: 'No digas que no hay disponibilidad. Esa fecha ya pasó. Pide un día a partir de hoy.'
+        };
+      }
+      if (rolled?.correctedFrom) {
+        if (rolled.date > horizon) {
+          return {
+            success: false,
+            error: `La fecha ${rolled.correctedFrom} ya pasó. Hoy es ${today}.`,
+            today,
+            correctedDate: rolled.date,
+            instruction: `No digas que no hay disponibilidad. El día equivalente ${rolled.date} queda fuera de los ${runtime.rules.maxDaysAhead} días que se pueden agendar.`
+          };
+        }
+        correctedFrom = rolled.correctedFrom;
+        requestedDate = rolled.date;
+        if (preferredText) {
+          preferred = parseLocalDateTime(`${requestedDate}T${preferredText.slice(11, 16)}`, runtime.timezone);
+        }
+      }
+    }
+    const fromDate = requestedDate || today;
     const toDate = requestedDate || (addDays(today, 7) < horizon ? addDays(today, 7) : horizon);
     const suggestion = await this.suggest(doc, runtime, service, fromDate, toDate, null);
     if (suggestion.revoked) {
@@ -446,15 +487,27 @@ class CalendarService {
       const wanted = formatLocal(preferred, runtime.timezone);
       exact = suggestion.slots.find((slot) => slot.startLocal === wanted) || null;
     }
+    const slots = exact
+      ? [exact].concat(suggestion.slots.filter((slot) => slot.start !== exact.start)).slice(0, 6)
+      : suggestion.slots;
+    let instruction = exact
+      ? `Ese horario está libre. Hoy es ${today}. Pide confirmación antes de reservar.`
+      : `Hoy es ${today}. El año es ${today.slice(0, 4)}. Ofrece solo los horarios devueltos. No menciones otro año.`;
+    if (correctedFrom) {
+      const found = slots.length
+        ? `Ofrece solo los horarios del ${requestedDate}.`
+        : `El ${requestedDate} no tiene horarios. No digas que no hay disponibilidad en general.`;
+      instruction = `La fecha ${correctedFrom} ya pasó. Hoy es ${today}. El año es ${today.slice(0, 4)}. Busqué ${requestedDate}. ${found} No digas ${correctedFrom.slice(0, 4)}.`;
+    }
     return {
       success: true,
       service: { id: service.id, name: service.name, durationMinutes: service.durationMinutes },
       timezone: runtime.timezone,
+      today,
+      correctedFrom,
       exact: Boolean(exact),
-      slots: exact ? [exact].concat(suggestion.slots.filter((slot) => slot.start !== exact.start)).slice(0, 6) : suggestion.slots,
-      instruction: exact
-        ? 'Ese horario está libre. Pide confirmación antes de reservar.'
-        : 'Ofrece solo los horarios devueltos. Si la lista va vacía, di que no hay disponibilidad en ese rango.'
+      slots,
+      instruction
     };
   }
 
@@ -665,7 +718,16 @@ class CalendarService {
   }
 
   resolveSlot(runtime, service, startValue) {
-    const start = parseLocalDateTime(startValue, runtime.timezone);
+    const text = typeof startValue === 'string' ? startValue.trim() : '';
+    if (!/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/.test(text)) {
+      return {
+        ok: false,
+        error: hasExplicitZone(text)
+          ? 'Usa YYYY-MM-DDTHH:mm en la zona del calendario. Copia startLocal del horario ofrecido.'
+          : 'El horario debe ir como YYYY-MM-DDTHH:mm.'
+      };
+    }
+    const start = parseLocalDateTime(text, runtime.timezone);
     if (!start) return { ok: false, error: 'El horario debe ir como YYYY-MM-DDTHH:mm.' };
     const end = new Date(start.getTime() + service.durationMinutes * 60000);
     const now = this.now().getTime();

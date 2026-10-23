@@ -113,13 +113,20 @@
     function readRules() {
       const value = (name) => container.querySelector(`[data-rule="${name}"]`)?.value;
       const checked = (name) => Boolean(container.querySelector(`[data-rule-check="${name}"]`)?.checked);
+      const format = (name) => container.querySelector(`[data-rule-format="${name}"]`)?.value || '';
       return {
         minNoticeMinutes: Number(value('minNoticeMinutes')),
         maxDaysAhead: Number(value('maxDaysAhead')),
         slotIntervalMinutes: Number(value('slotIntervalMinutes')),
         bufferMinutes: Number(value('bufferMinutes')),
         allowCancel: checked('allowCancel'),
-        allowReschedule: checked('allowReschedule')
+        allowReschedule: checked('allowReschedule'),
+        formats: {
+          date: format('date') || 'YYYY-MM-DD',
+          dateTime: format('dateTime') || 'YYYY-MM-DDTHH:mm',
+          availability: format('availability') || 'times',
+          notes: format('notes')
+        }
       };
     }
 
@@ -268,9 +275,43 @@
             </div>
             <label class="check"><input type="checkbox" data-rule-check="allowCancel" ${state.rules.allowCancel ? 'checked' : ''} ${canEdit ? '' : 'disabled'}><span>Permitir cancelaciones</span></label>
             <label class="check"><input type="checkbox" data-rule-check="allowReschedule" ${state.rules.allowReschedule ? 'checked' : ''} ${canEdit ? '' : 'disabled'}><span>Permitir reprogramaciones</span></label>
+            ${formatFields(state.rules.formats)}
           </details>
           <div class="actions">
             <button type="button" id="calendar-save" ${canEdit && !busy ? '' : 'disabled'}>Guardar agenda</button>
+          </div>
+        `;
+      }
+
+      function formatFields(formats) {
+        const current = formats || {};
+        const dateTime = current.dateTime || 'YYYY-MM-DDTHH:mm';
+        const availability = current.availability || 'times';
+        const notes = current.notes || '';
+        return `
+          <div class="stack">
+            <h3>Subprompt de Google Calendar</h3>
+            <p class="muted">Estas reglas se agregan al bot solo al agendar. El prompt del assistant no cambia.</p>
+            <label>Formato de fecha
+              <select data-rule-format="date" ${canEdit ? '' : 'disabled'}>
+                <option value="YYYY-MM-DD" selected>YYYY-MM-DD (date)</option>
+              </select>
+            </label>
+            <label>Formato de hora
+              <select data-rule-format="dateTime" ${canEdit ? '' : 'disabled'}>
+                <option value="YYYY-MM-DDTHH:mm"${dateTime === 'YYYY-MM-DDTHH:mm' ? ' selected' : ''}>YYYY-MM-DDTHH:mm, hora local sin Z</option>
+                <option value="YYYY-MM-DDTHH:mm:ssZ"${dateTime === 'YYYY-MM-DDTHH:mm:ssZ' ? ' selected' : ''}>ISO con Z: se lee la hora del reloj, no se convierte a UTC</option>
+              </select>
+            </label>
+            <label>Qué mostrar
+              <select data-rule-format="availability" ${canEdit ? '' : 'disabled'}>
+                <option value="times"${availability === 'times' ? ' selected' : ''}>Horarios del día</option>
+                <option value="days"${availability === 'days' ? ' selected' : ''}>Un horario por día, para elegir el día</option>
+              </select>
+            </label>
+            <label>Notas del subprompt
+              <textarea data-rule-format="notes" maxlength="400" rows="3" ${canEdit ? '' : 'disabled'}>${escapeHtml(notes)}</textarea>
+            </label>
           </div>
         `;
       }
