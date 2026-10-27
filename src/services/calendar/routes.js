@@ -1,4 +1,15 @@
+const path = require('path');
 const { verifyState, stateSecret } = require('./oauthState');
+const {
+  createCalendarInviteToken,
+  calendarInviteFields,
+  calendarInviteStatus,
+  calendarInviteUrlFor,
+  inviteResultUrl,
+  readInviteResult
+} = require('./invite');
+
+const connectPage = path.join(__dirname, '../../../public/calendar-conectar.html');
 
 function appBase(req) {
   const configured = process.env.APP_BASE_URL || process.env.PUBLIC_BASE_URL || '';
@@ -32,7 +43,8 @@ function mountCalendarRoutes(app, deps) {
     calendarService,
     requireAdminAuth,
     requireEditLock,
-    commandManager
+    commandManager,
+    firebaseService
   } = deps;
 
   async function assertAssistant(res, clientId) {
@@ -50,16 +62,127 @@ function mountCalendarRoutes(app, deps) {
     return false;
   }
 
+  function inviteRedirect(req, payload) {
+    return inviteResultUrl(req, payload);
+  }
+
+  async function botNameFor(clientId) {
+    if (!firebaseService?.getClientById || !clientId) return '';
+    try {
+      const client = await firebaseService.getClientById(clientId);
+      return client?.name || '';
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  async function loadPublicInvite(token) {
+    if (!firebaseService?.getClientByCalendarInviteToken) {
+      const error = new Error('Servicio no disponible');
+      error.status = 503;
+      throw error;
+    }
+    const client = await firebaseService.getClientByCalendarInviteToken(token);
+    if (!client) {
+      const error = new Error('El link no es válido.');
+      error.status = 404;
+      throw error;
+    }
+    const panel = await calendarService.getPanel(client.id);
+    const botName = client.name || client.id;
+    if (panel.connection.status === 'connected' && panel.connection.email) {
+      return {
+        status: 'connected',
+        botName,
+        email: panel.connection.email,
+        clientId: client.id
+      };
+    }
+    const linkStatus = calendarInviteStatus(client);
+    if (linkStatus === 'expired') {
+      const error = new Error('Este link ya venció. Pide uno nuevo a quien administra el bot.');
+      error.status = 410;
+      throw error;
+    }
+    if (linkStatus !== 'pending') {
+      const error = new Error('El link no es válido.');
+      error.status = 404;
+      throw error;
+    }
+    return {
+      status: 'pending',
+      botName,
+      expiresAt: client.CALENDAR_INVITE_EXPIRES_AT || null,
+      oauthConfigured: panel.oauthConfigured,
+      clientId: client.id
+    };
+  }
+
+  app.get('/calendar/conectar/listo', (_req, res) => {
+    res.sendFile(connectPage);
+  });
+
+  app.get('/calendar/conectar/:token', (_req, res) => {
+    res.sendFile(connectPage);
+  });
+
+  app.get('/public/calendar/result', (req, res) => {
+    const result = readInviteResult(typeof req.query.r === 'string' ? req.query.r : '', stateSecret(process.env));
+    if (!result) {
+      return res.status(400).json({ ok: false, error: 'Este resultado ya no está disponible.' });
+    }
+    res.json({ ok: true, ...result });
+  });
+
+  app.get('/public/calendar/invite/:token', async (req, res) => {
+    try {
+      if (!calendarService) return unavailable(res);
+      const invite = await loadPublicInvite(req.params.token);
+      res.json({
+        ok: true,
+        status: invite.status,
+        botName: invite.botName,
+        email: invite.email || '',
+        expiresAt: invite.expiresAt || null,
+        oauthConfigured: invite.status === 'pending' ? invite.oauthConfigured : true
+      });
+    } catch (error) {
+      sendCalendarError(res, error, 'No se pudo abrir el link');
+    }
+  });
+
+  app.post('/public/calendar/invite/:token/start', async (req, res) => {
+    try {
+      if (!calendarService) return unavailable(res);
+      const invite = await loadPublicInvite(req.params.token);
+      if (invite.status === 'connected') {
+        return res.status(409).json({ ok: false, error: 'Este calendario ya está conectado.' });
+      }
+      const result = await calendarService.beginOAuth(invite.clientId, redirectUriFor(req), { via: 'invite' });
+      res.json({ ok: true, url: result.url });
+    } catch (error) {
+      sendCalendarError(res, error, 'Error iniciando la conexión con Google');
+    }
+  });
+
   app.get('/calendar/oauth/callback', async (req, res) => {
     if (!calendarService) return unavailable(res);
     const queryError = typeof req.query.error === 'string' ? req.query.error : '';
     const state = typeof req.query.state === 'string' ? req.query.state : '';
     const payload = verifyState(state, stateSecret(process.env));
     const clientId = payload?.clientId || '';
+    const viaInvite = payload?.via === 'invite';
     if (!clientId) {
-      return res.status(400).type('html').send('No se pudo completar la conexión con Google. Vuelve al Assistant e inténtalo de nuevo.');
+      return res.status(400).type('html').send('No se pudo completar la conexión con Google. Pide un link nuevo a quien administra el bot.');
     }
     if (queryError) {
+      if (viaInvite) {
+        return res.redirect(inviteRedirect(req, {
+          kind: queryError === 'access_denied' ? 'denied' : 'error',
+          email: '',
+          botName: await botNameFor(clientId)
+        }));
+      }
       return res.redirect(panelUrl(req, clientId, queryError === 'access_denied' ? 'denied' : 'error'));
     }
     try {
@@ -68,9 +191,23 @@ function mountCalendarRoutes(app, deps) {
         state,
         redirectUriFor(req)
       );
+      if (result.via === 'invite') {
+        return res.redirect(inviteRedirect(req, {
+          kind: 'connected',
+          email: result.email || '',
+          botName: await botNameFor(result.clientId)
+        }));
+      }
       return res.redirect(panelUrl(req, result.clientId, 'connected'));
     } catch (error) {
       console.error('Error completando OAuth de Google Calendar:', error.message);
+      if (viaInvite) {
+        return res.redirect(inviteRedirect(req, {
+          kind: 'error',
+          email: '',
+          botName: await botNameFor(clientId)
+        }));
+      }
       return res.redirect(panelUrl(req, clientId, 'error'));
     }
   });
@@ -148,6 +285,39 @@ function mountCalendarRoutes(app, deps) {
       res.json({ ok: true, calendars });
     } catch (error) {
       sendCalendarError(res, error, 'Error listando calendarios');
+    }
+  });
+
+  app.post('/clients/:clientId/calendar/invite', requireAdminAuth, async (req, res) => {
+    try {
+      if (!calendarService) return unavailable(res);
+      const { clientId } = req.params;
+      if (!(await assertAssistant(res, clientId))) return;
+      if (!(await requireEditLock(req, res, clientId))) return;
+      if (!commandManager?.updateClient) {
+        return res.status(503).json({ ok: false, error: 'No se pudo guardar el link.' });
+      }
+      const invite = createCalendarInviteToken();
+      await commandManager.updateClient(clientId, calendarInviteFields(invite));
+      res.json({
+        ok: true,
+        calendarInviteUrl: calendarInviteUrlFor(req, invite.token),
+        calendarInviteExpiresAt: invite.expiresAt
+      });
+    } catch (error) {
+      sendCalendarError(res, error, 'Error generando el link de Google Calendar');
+    }
+  });
+
+  app.post('/clients/:clientId/calendar/notice/dismiss', requireAdminAuth, async (req, res) => {
+    try {
+      if (!calendarService) return unavailable(res);
+      const { clientId } = req.params;
+      if (!(await assertAssistant(res, clientId))) return;
+      const calendar = await calendarService.dismissNotice(clientId);
+      res.json({ ok: true, calendar });
+    } catch (error) {
+      sendCalendarError(res, error, 'Error cerrando el aviso');
     }
   });
 

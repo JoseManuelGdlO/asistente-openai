@@ -17,7 +17,7 @@ function signState(payload, secret) {
   return `${body}.${sig}`;
 }
 
-function verifyState(state, secret, now = Date.now()) {
+function openSigned(state, secret, now = Date.now()) {
   if (!secret || typeof state !== 'string' || !state.includes('.')) return null;
   const [body, sig] = state.split('.');
   if (!body || !sig) return null;
@@ -32,8 +32,14 @@ function verifyState(state, secret, now = Date.now()) {
   } catch {
     return null;
   }
-  if (!payload || typeof payload.clientId !== 'string' || !payload.nonce) return null;
+  if (!payload || typeof payload !== 'object') return null;
   if (!Number.isFinite(payload.exp) || payload.exp < now) return null;
+  return payload;
+}
+
+function verifyState(state, secret, now = Date.now()) {
+  const payload = openSigned(state, secret, now);
+  if (!payload || typeof payload.clientId !== 'string' || !payload.nonce) return null;
   return payload;
 }
 
@@ -43,6 +49,7 @@ function stateSecret(env = process.env) {
 
 module.exports = {
   signState,
+  openSigned,
   verifyState,
   stateSecret
 };

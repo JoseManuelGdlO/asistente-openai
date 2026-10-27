@@ -31,7 +31,15 @@ function normalizeDoc(data) {
     playgroundWriteEnabled: data.playgroundWriteEnabled === true,
     encryptedTokens: typeof data.encryptedTokens === 'string' ? data.encryptedTokens : null,
     oauthNonce: data.oauthNonce || null,
-    oauthNonceExpiresAt: Number(data.oauthNonceExpiresAt) || null
+    oauthNonceExpiresAt: Number(data.oauthNonceExpiresAt) || null,
+    oauthVia: data.oauthVia === 'invite' ? 'invite' : null,
+    adminNotice: data.adminNotice && data.adminNotice.pending === true
+      ? {
+        pending: true,
+        email: typeof data.adminNotice.email === 'string' ? data.adminNotice.email : '',
+        connectedAt: asIso(data.adminNotice.connectedAt)
+      }
+      : null
   };
 }
 

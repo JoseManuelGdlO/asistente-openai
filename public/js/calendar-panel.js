@@ -61,8 +61,9 @@
   }
 
   function mount(container, options) {
-    const { clientId, canEdit, api, escapeHtml, onState, onError } = options;
+    const { clientId, canEdit, api, escapeHtml, onState, onError, onInviteUrl } = options;
     let state = null;
+    let inviteUrl = typeof options.inviteUrl === 'string' ? options.inviteUrl : '';
     let configOpen = false;
     let choosingCalendar = false;
     let calendars = [];
@@ -169,6 +170,8 @@
               </label>
             </div>
           </div>
+          ${noticeBlock()}
+          ${inviteBlock()}
           <div class="calendar-expand ${enabled ? 'open' : ''}">
             <div class="calendar-expand-inner stack" ${enabled ? '' : 'inert'}>
               ${connectionBlock()}
@@ -181,6 +184,36 @@
       `;
       bind();
       emit();
+
+      function noticeBlock() {
+        if (!state.adminNotice) return '';
+        const email = state.adminNotice.email || state.connection?.email || 'su cuenta de Google';
+        return `
+          <div class="notice-banner stack">
+            <strong>El cliente conectó Google Calendar</strong>
+            <p class="muted">${escapeHtml(email)}</p>
+            <div class="actions">
+              <button type="button" id="calendar-dismiss-notice">Listo, ya lo vi</button>
+            </div>
+          </div>
+        `;
+      }
+
+      function inviteBlock() {
+        if (connected) return '';
+        return `
+          <div class="invite-box">
+            <p class="muted">Pásale este link al cliente. Ahí ve qué botones pulsar en Google y conecta su cuenta sin entrar al panel.</p>
+            ${inviteUrl
+              ? `<code id="calendar-invite-url">${escapeHtml(inviteUrl)}</code>`
+              : '<p class="muted">Genera el link y cópialo.</p>'}
+            <div class="actions">
+              ${inviteUrl ? '<button type="button" class="btn-secondary" id="calendar-copy-invite">Copiar link</button>' : ''}
+              <button type="button" id="calendar-invite" ${canEdit ? '' : 'disabled'}>${inviteUrl ? 'Generar link nuevo' : 'Generar link para el cliente'}</button>
+            </div>
+          </div>
+        `;
+      }
 
       function connectionBlock() {
         if (!enabled) return '';
@@ -390,6 +423,40 @@
         } catch (err) {
           event.target.checked = !enabled;
           event.target.disabled = !canEdit;
+          fail(err);
+        }
+      });
+
+      container.querySelector('#calendar-dismiss-notice')?.addEventListener('click', async () => {
+        try {
+          const res = await api(`/clients/${encodeURIComponent(clientId)}/calendar/notice/dismiss`, { method: 'POST', body: {} });
+          state = res.calendar;
+          render();
+          flash('Aviso cerrado', 'ok');
+        } catch (err) {
+          fail(err);
+        }
+      });
+
+      container.querySelector('#calendar-copy-invite')?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(inviteUrl);
+          flash('Link copiado', 'ok');
+        } catch (_err) {
+          flash('No se pudo copiar el link', 'err');
+        }
+      });
+
+      container.querySelector('#calendar-invite')?.addEventListener('click', async () => {
+        if (!canEdit) return;
+        if (inviteUrl && !window.confirm('El link anterior dejará de servir. ¿Generar uno nuevo?')) return;
+        try {
+          const res = await api(`/clients/${encodeURIComponent(clientId)}/calendar/invite`, { method: 'POST', body: {} });
+          inviteUrl = res.calendarInviteUrl || '';
+          if (inviteUrl && typeof onInviteUrl === 'function') onInviteUrl(inviteUrl);
+          render();
+          flash('Link generado. Cópialo y envíaselo al cliente.', 'ok');
+        } catch (err) {
           fail(err);
         }
       });

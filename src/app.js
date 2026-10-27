@@ -14,6 +14,11 @@ const {
   sanitizeClientsMap,
   assertInviteUsable
 } = require('./services/metaInviteService');
+const {
+  createCalendarInviteToken,
+  calendarInviteFields,
+  calendarInviteUrlFor
+} = require('./services/calendar/invite');
 const defaultMetaSignup = require('./services/metaSignupService');
 const {
   verifyMetaWebhookChallenge,
@@ -684,12 +689,26 @@ function createApp(deps = {}) {
     }
   });
 
-  app.get('/clients', requireAdminAuth, (req, res) => {
+  async function calendarSummary(clientId) {
+    if (!deps.calendarService || typeof deps.calendarService.publicSummary !== 'function') return null;
     try {
-      const clients = webhookManager.commandManager.getClientConfig();
+      return await deps.calendarService.publicSummary(clientId);
+    } catch (error) {
+      console.error('Error leyendo el resumen de calendario:', error.message);
+      return null;
+    }
+  }
+
+  app.get('/clients', requireAdminAuth, async (req, res) => {
+    try {
+      const clients = sanitizeClientsMap(webhookManager.commandManager.getClientConfig());
+      await Promise.all(Object.values(clients).map(async (client) => {
+        const summary = await calendarSummary(client.id);
+        if (summary) client.calendar = summary;
+      }));
       res.json({
         ok: true,
-        clients: sanitizeClientsMap(clients),
+        clients,
         count: Object.keys(clients).length
       });
     } catch (error) {
@@ -818,6 +837,7 @@ function createApp(deps = {}) {
 
       const normalizedPrompt = typeof prompt === 'string' ? prompt : '';
       const invite = createInviteToken();
+      const calendarInvite = createCalendarInviteToken();
 
       const clientPayload = stripEmptyUltraMsgFields({
         id,
@@ -831,7 +851,8 @@ function createApp(deps = {}) {
         ULTRAMSG_TOKEN,
         ULTRAMSG_INSTANCE_ID,
         ULTRAMSG_WEBHOOK_TOKEN,
-        ...inviteFields(invite)
+        ...inviteFields(invite),
+        ...calendarInviteFields(calendarInvite)
       });
       if (assistantPhone) {
         clientPayload.assistantPhone = assistantPhone;
@@ -852,6 +873,8 @@ function createApp(deps = {}) {
         assistant: result.assistant,
         inviteUrl: inviteUrlFor(req, invite.token),
         inviteExpiresAt: invite.expiresAt,
+        calendarInviteUrl: calendarInviteUrlFor(req, calendarInvite.token),
+        calendarInviteExpiresAt: calendarInvite.expiresAt,
         message: 'Cliente y Assistant creados exitosamente'
       });
     } catch (error) {
@@ -1329,9 +1352,13 @@ function createApp(deps = {}) {
         });
       }
 
+      const safeClient = sanitizeClient(client);
+      const summary = await calendarSummary(clientId);
+      if (summary) safeClient.calendar = summary;
+
       res.json({
         ok: true,
-        client: sanitizeClient(client)
+        client: safeClient
       });
     } catch (error) {
       console.error('Error obteniendo cliente:', error);
@@ -1792,7 +1819,8 @@ function createApp(deps = {}) {
     calendarService: deps.calendarService || null,
     requireAdminAuth,
     requireEditLock: (req, res, clientId) => requireEditLockHolder(firebaseService, req, res, clientId),
-    commandManager
+    commandManager,
+    firebaseService
   });
 
   mountBlacklistRoutes(app, {

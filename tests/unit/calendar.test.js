@@ -217,13 +217,44 @@ describe('OAuth de Google Calendar', () => {
     const state = new URL(started.url).searchParams.get('state');
     const done = await service.completeOAuth('code', state, 'http://localhost/calendar/oauth/callback');
     expect(done.clientId).toBe('bot-1');
+    expect(done.via).toBe('panel');
     const panel = await service.getPanel('bot-1');
     expect(panel.connection.email).toBe('ana@example.com');
+    expect(panel.adminNotice).toBeNull();
+    expect(panel.enabled).toBe(false);
     expect(panel.connection.timezone).toBe('America/Bogota');
     expect(panel.encryptedTokens).toBeUndefined();
     const raw = await service.store.getRaw('bot-1');
     expect(typeof raw.encryptedTokens).toBe('string');
     expect(raw.encryptedTokens).not.toContain('refresh');
+  });
+
+  it('deja aviso solo cuando el cliente conecta desde el link', async () => {
+    const google = googleFake();
+    const service = new CalendarService({
+      store: new MemoryCalendarStore(),
+      google,
+      now: () => NOW,
+      env: { ADMIN_API_TOKEN: 'test-secret' }
+    });
+    const started = await service.beginOAuth('bot-1', 'http://localhost/calendar/oauth/callback', { via: 'invite' });
+    const state = new URL(started.url).searchParams.get('state');
+    const done = await service.completeOAuth('code', state, 'http://localhost/calendar/oauth/callback');
+    expect(done.via).toBe('invite');
+    const panel = await service.getPanel('bot-1');
+    expect(panel.enabled).toBe(false);
+    expect(panel.connection.calendarId).toBe('primary');
+    expect(panel.adminNotice).toEqual({
+      email: 'ana@example.com',
+      connectedAt: NOW.toISOString()
+    });
+    const summary = await service.publicSummary('bot-1');
+    expect(summary.noticePending).toBe(true);
+    expect(summary.connected).toBe(true);
+
+    const dismissed = await service.dismissNotice('bot-1');
+    expect(dismissed.adminNotice).toBeNull();
+    expect(dismissed.connection.email).toBe('ana@example.com');
   });
 });
 

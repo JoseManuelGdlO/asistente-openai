@@ -839,7 +839,7 @@
             <tbody>
               ${clients.map((client) => `
                 <tr>
-                  <td><a href="#/clients/${encodeURIComponent(client.id)}">${escapeHtml(client.name || client.id)}</a><div class="hint">${escapeHtml(client.id)}</div></td>
+                  <td><a href="#/clients/${encodeURIComponent(client.id)}">${escapeHtml(client.name || client.id)}</a><div class="hint">${escapeHtml(client.id)}</div>${calendarListMark(client)}</td>
                   <td>${escapeHtml(client.adminPhone || '')}</td>
                   <td>${escapeHtml(channelLabel(client))}</td>
                   <td>${statusBadge(client.botStatus)}</td>
@@ -865,6 +865,14 @@
         }
       });
     });
+  }
+
+  function calendarListMark(client) {
+    if (client.calendar?.noticePending) {
+      return '<div class="hint calendar-fresh">El cliente conectó Google Calendar</div>';
+    }
+    if (client.calendar?.connected) return '<div class="hint">Calendar conectado</div>';
+    return '';
   }
 
   function channelLabel(client) {
@@ -982,6 +990,9 @@
         if (result.inviteUrl) {
           sessionStorage.setItem(`inviteUrl:${result.client.id}`, result.inviteUrl);
         }
+        if (result.calendarInviteUrl) {
+          sessionStorage.setItem(`calendarInviteUrl:${result.client.id}`, result.calendarInviteUrl);
+        }
         location.hash = `#/clients/${encodeURIComponent(result.client.id)}`;
       } catch (err) {
         showFlash(flash, err.message, 'err');
@@ -1024,7 +1035,7 @@
 
     const body = document.getElementById('detail-body');
     if (currentTab === 'assistant') {
-      await renderAssistantTab(body, clientId, canEdit, notice);
+      await renderAssistantTab(body, clientId, canEdit, notice, client);
     } else if (currentTab === 'documentos') {
       await renderDocumentsTab(body, clientId);
     } else if (currentTab === 'sesiones') {
@@ -1048,9 +1059,39 @@
     return { title: 'Pendiente de vincular', body: 'Comparte el link con el dueño del WhatsApp para conectar Meta.' };
   }
 
+  function calendarLinkCopy(client) {
+    const calendar = client.calendar || {};
+    if (calendar.noticePending) {
+      return {
+        title: 'El cliente conectó Google Calendar',
+        body: calendar.noticeEmail || calendar.email || 'La cuenta ya quedó conectada.'
+      };
+    }
+    if (calendar.connected) {
+      return {
+        title: 'Google Calendar conectado',
+        body: calendar.email || 'Cuenta conectada'
+      };
+    }
+    if (client.calendarInvite?.status === 'expired') {
+      return {
+        title: 'Link de Google vencido',
+        body: 'Genera un link nuevo para que el cliente conecte su calendario.'
+      };
+    }
+    return {
+      title: 'Google Calendar sin conectar',
+      body: 'Comparte el link. El cliente ve el tutorial y conecta su cuenta sin entrar al panel.'
+    };
+  }
+
   function renderConsultorioTab(container, client, canEdit = true) {
     const storedInvite = sessionStorage.getItem(`inviteUrl:${client.id}`) || '';
+    const calendarFresh = client.calendarInvite?.status === 'pending';
+    const storedCalendarInvite = calendarFresh ? (sessionStorage.getItem(`calendarInviteUrl:${client.id}`) || '') : '';
     const status = metaStatusCopy(client);
+    const calendarCopy = calendarLinkCopy(client);
+    const calendarConnected = Boolean(client.calendar?.connected);
     container.innerHTML = `
       ${editLockBannerHtml(canEdit)}
       <div id="form-flash" hidden></div>
@@ -1068,6 +1109,21 @@
           ${client.meta?.connected
             ? '<button type="button" class="btn-secondary" id="disconnect-meta">Desconectar WhatsApp</button>'
             : '<button type="button" id="regen-invite">Generar link de vinculación</button>'}
+        </div>
+      </div>
+      <div class="card stack ${client.calendar?.noticePending ? 'notice-banner' : ''}">
+        <h2>${escapeHtml(calendarCopy.title)}</h2>
+        <p class="muted">${escapeHtml(calendarCopy.body)}</p>
+        ${!calendarConnected && storedCalendarInvite ? `
+          <div class="invite-box">
+            <code id="calendar-invite-url">${escapeHtml(storedCalendarInvite)}</code>
+            <div class="actions">
+              <button type="button" class="btn-secondary" id="copy-calendar-invite">Copiar link</button>
+            </div>
+          </div>` : ''}
+        <div class="actions">
+          ${client.calendar?.noticePending ? '<button type="button" id="dismiss-calendar-notice">Listo, ya lo vi</button>' : ''}
+          ${calendarConnected ? '' : `<button type="button" id="regen-calendar-invite" ${canEdit ? '' : 'disabled'}>${storedCalendarInvite ? 'Generar link nuevo' : 'Generar link de Google Calendar'}</button>`}
         </div>
       </div>
       <form id="client-form" class="card stack">
@@ -1127,6 +1183,50 @@
       });
     }
 
+    const copyCalendarBtn = document.getElementById('copy-calendar-invite');
+    if (copyCalendarBtn) {
+      copyCalendarBtn.addEventListener('click', async () => {
+        const url = document.getElementById('calendar-invite-url')?.textContent || '';
+        try {
+          await navigator.clipboard.writeText(url);
+          showFlash(document.getElementById('form-flash'), 'Link copiado', 'ok');
+        } catch {
+          showFlash(document.getElementById('form-flash'), 'No se pudo copiar el link', 'err');
+        }
+      });
+    }
+
+    const regenCalendarBtn = document.getElementById('regen-calendar-invite');
+    if (regenCalendarBtn) {
+      regenCalendarBtn.addEventListener('click', async () => {
+        if (!canEdit) return;
+        if (storedCalendarInvite && !confirm('El link anterior dejará de servir. ¿Generar uno nuevo?')) return;
+        try {
+          const result = await api(`/clients/${encodeURIComponent(client.id)}/calendar/invite`, { method: 'POST' });
+          if (result.calendarInviteUrl) {
+            sessionStorage.setItem(`calendarInviteUrl:${client.id}`, result.calendarInviteUrl);
+          }
+          showFlash(document.getElementById('form-flash'), 'Link generado. Copia y envíaselo al cliente.', 'ok');
+          render();
+        } catch (err) {
+          if (handleLostEditLock(document.getElementById('form-flash'), err)) return;
+          showFlash(document.getElementById('form-flash'), err.message, 'err');
+        }
+      });
+    }
+
+    const dismissCalendarBtn = document.getElementById('dismiss-calendar-notice');
+    if (dismissCalendarBtn) {
+      dismissCalendarBtn.addEventListener('click', async () => {
+        try {
+          await api(`/clients/${encodeURIComponent(client.id)}/calendar/notice/dismiss`, { method: 'POST' });
+          render();
+        } catch (err) {
+          showFlash(document.getElementById('form-flash'), err.message, 'err');
+        }
+      });
+    }
+
     const regenBtn = document.getElementById('regen-invite');
     if (regenBtn) {
       regenBtn.addEventListener('click', async () => {
@@ -1164,7 +1264,7 @@
     }
   }
 
-  async function renderAssistantTab(container, clientId, canEdit = true, notice = '') {
+  async function renderAssistantTab(container, clientId, canEdit = true, notice = '', client = null) {
     let assistant;
     try {
       const res = await api(`/assistants/${encodeURIComponent(clientId)}`);
@@ -1686,6 +1786,10 @@
         canEdit,
         api,
         escapeHtml,
+        inviteUrl: client?.calendarInvite?.status === 'pending'
+          ? (sessionStorage.getItem(`calendarInviteUrl:${clientId}`) || '')
+          : '',
+        onInviteUrl: (url) => sessionStorage.setItem(`calendarInviteUrl:${clientId}`, url),
         onState: applyPlaygroundCalendar,
         onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
       });

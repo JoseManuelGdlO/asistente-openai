@@ -81,6 +81,8 @@ function defaultDocument() {
     encryptedTokens: null,
     oauthNonce: null,
     oauthNonceExpiresAt: null,
+    oauthVia: null,
+    adminNotice: null,
     hours: defaultHours(),
     services: [],
     rules: defaultRules(),

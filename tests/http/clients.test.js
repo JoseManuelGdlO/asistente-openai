@@ -31,9 +31,15 @@ describe('Clientes y assistants', () => {
     expect(res.status).toBe(201);
     expect(res.body.client.id).toBe('C1');
     expect(res.body.inviteUrl).toMatch(/\/vincular\//);
+    expect(res.body.calendarInviteUrl).toMatch(/\/calendar\/conectar\//);
     expect(deps.commandManager.createClient).toHaveBeenCalled();
     const payload = deps.commandManager.createClient.mock.calls[0][0];
     expect(payload.META_INVITE_TOKEN_HASH).toMatch(/^[a-f0-9]{64}$/);
+    expect(payload.CALENDAR_INVITE_TOKEN_HASH).toMatch(/^[a-f0-9]{64}$/);
+    const calendarToken = decodeURIComponent(new URL(res.body.calendarInviteUrl).pathname.split('/').pop());
+    expect(payload.CALENDAR_INVITE_TOKEN_HASH).toBe(
+      require('crypto').createHash('sha256').update(calendarToken).digest('hex')
+    );
     expect(payload.assistantPhone).toBeUndefined();
   });
 

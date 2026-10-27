@@ -108,12 +108,30 @@ class CalendarService {
       hours: doc.hours,
       services: doc.services || [],
       rules: doc.rules,
-      playgroundWriteEnabled: doc.playgroundWriteEnabled === true
+      playgroundWriteEnabled: doc.playgroundWriteEnabled === true,
+      adminNotice: doc.adminNotice?.pending
+        ? {
+          email: doc.adminNotice.email || '',
+          connectedAt: doc.adminNotice.connectedAt || null
+        }
+        : null
     };
   }
 
   async getPanel(clientId) {
     return this.toPanel(await this.store.getRaw(clientId));
+  }
+
+  async publicSummary(clientId) {
+    const panel = await this.getPanel(clientId);
+    const notice = panel.adminNotice;
+    return {
+      connected: panel.connection.status === 'connected' && Boolean(panel.connection.email),
+      email: panel.connection.email || '',
+      noticePending: Boolean(notice),
+      noticeEmail: notice?.email || '',
+      noticeAt: notice?.connectedAt || null
+    };
   }
 
   async loadRuntime(clientId) {
@@ -216,12 +234,22 @@ class CalendarService {
         calendarSummary: '',
         connectedAt: null,
         lastError: ''
-      }
+      },
+      oauthVia: null,
+      adminNotice: null
     }));
     return this.toPanel(saved);
   }
 
-  async beginOAuth(clientId, redirectUri) {
+  async dismissNotice(clientId) {
+    const saved = await this.store.transaction(clientId, (doc) => ({
+      ...doc,
+      adminNotice: null
+    }));
+    return this.toPanel(saved);
+  }
+
+  async beginOAuth(clientId, redirectUri, options = {}) {
     if (!this.google?.configured?.()) {
       throw httpError(
         'Falta configurar GOOGLE_CALENDAR_CLIENT_ID y GOOGLE_CALENDAR_CLIENT_SECRET en el servidor.',
@@ -230,15 +258,17 @@ class CalendarService {
     }
     const secret = stateSecret(this.env);
     if (!secret) throw httpError('Falta ADMIN_API_TOKEN para firmar la conexión con Google.', 503);
+    const via = options.via === 'invite' ? 'invite' : 'panel';
     const nonce = crypto.randomBytes(16).toString('hex');
     const exp = this.now().getTime() + (10 * 60 * 1000);
     await this.store.transaction(clientId, (doc) => ({
       ...doc,
       oauthNonce: nonce,
-      oauthNonceExpiresAt: exp
+      oauthNonceExpiresAt: exp,
+      oauthVia: via
     }));
-    const state = signState({ clientId, nonce, exp }, secret);
-    return { url: this.google.authorizationUrl({ redirectUri, state }) };
+    const state = signState({ clientId, nonce, exp, via }, secret);
+    return { url: this.google.authorizationUrl({ redirectUri, state }), via };
   }
 
   async completeOAuth(code, state, redirectUri) {
@@ -262,23 +292,30 @@ class CalendarService {
       accessToken,
       expiry: this.now().getTime() + (Number(tokens.expires_in) || 3600) * 1000
     });
+    const via = current.oauthVia === 'invite' ? 'invite' : 'panel';
+    const connectedAt = this.now().toISOString();
+    const connectedEmail = email || current.connection.email || '';
     await this.store.transaction(payload.clientId, (doc) => ({
       ...doc,
       oauthNonce: null,
       oauthNonceExpiresAt: null,
+      oauthVia: null,
       encryptedTokens,
+      adminNotice: via === 'invite'
+        ? { pending: true, email: connectedEmail, connectedAt }
+        : null,
       connection: {
         ...doc.connection,
         status: 'connected',
-        email: email || doc.connection.email,
+        email: connectedEmail,
         calendarId: primary?.id || '',
         calendarSummary: primary?.summary || '',
         timezone: primary?.timeZone || doc.connection.timezone || DEFAULT_TIMEZONE,
-        connectedAt: this.now().toISOString(),
+        connectedAt,
         lastError: ''
       }
     }));
-    return { clientId: payload.clientId };
+    return { clientId: payload.clientId, email: connectedEmail, via };
   }
 
   async listCalendars(clientId) {

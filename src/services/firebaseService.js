@@ -1,5 +1,6 @@
 const admin = require('firebase-admin');
 const { hashInviteToken } = require('./metaInviteService');
+const { hashCalendarInviteToken } = require('./calendar/invite');
 const { parseAssistantVersionBody, promptExcerpt } = require('./assistantVersionInput');
 const {
   ROOT_COLLECTIONS,
@@ -476,6 +477,35 @@ class FirebaseService {
       };
     } catch (error) {
       console.error('❌ Error obteniendo cliente por invite token:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene un cliente activo por token público de conexión a Google Calendar
+   * @param {string} token
+   * @returns {Promise<Object|null>}
+   */
+  async getClientByCalendarInviteToken(token) {
+    try {
+      const hash = hashCalendarInviteToken(token);
+      if (!hash) return null;
+      const snapshot = await this.clientsCollection
+        .where('CALENDAR_INVITE_TOKEN_HASH', '==', hash)
+        .limit(5)
+        .get();
+
+      const doc = snapshot.docs.find((item) => item.data()?.status === 'active');
+      if (!doc) return null;
+      const clientData = doc.data();
+      return {
+        id: doc.id,
+        ...clientData,
+        createdAt: clientData.createdAt?.toDate(),
+        updatedAt: clientData.updatedAt?.toDate()
+      };
+    } catch (error) {
+      console.error('❌ Error obteniendo cliente por token de calendario:', error);
       throw error;
     }
   }
