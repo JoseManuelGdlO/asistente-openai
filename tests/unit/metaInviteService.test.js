@@ -55,11 +55,14 @@ describe('metaInviteService', () => {
       name: 'Bot',
       META_ACCESS_TOKEN: 'secret',
       META_INVITE_TOKEN_HASH: 'hash',
+      CALENDAR_INVITE_TOKEN_HASH: 'calendar-hash',
       ULTRAMSG_TOKEN: 'u',
       META_PHONE_NUMBER_ID: 'pn'
     });
     expect(clean.META_ACCESS_TOKEN).toBeUndefined();
     expect(clean.META_INVITE_TOKEN_HASH).toBeUndefined();
+    expect(clean.CALENDAR_INVITE_TOKEN_HASH).toBeUndefined();
+    expect(clean.calendarInvite.status).toBe('pending');
     expect(clean.ULTRAMSG_TOKEN).toBeUndefined();
     expect(clean.meta.connected).toBe(true);
   });

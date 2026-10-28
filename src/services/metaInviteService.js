@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { digitsOnly } = require('./metaConfig');
+const { describeCalendarInvite, redactCalendarInvite } = require('./calendar/invite');
 
 const INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const CLIENT_SECRET_KEYS = [
@@ -71,6 +72,8 @@ function sanitizeClient(client) {
   CLIENT_SECRET_KEYS.forEach((key) => {
     delete next[key];
   });
+  next.calendarInvite = describeCalendarInvite(client);
+  redactCalendarInvite(next);
   next.meta = describeMetaConnection(client);
   next.hasUltraMsg = Boolean(client.ULTRAMSG_INSTANCE_ID && client.ULTRAMSG_TOKEN);
   return next;

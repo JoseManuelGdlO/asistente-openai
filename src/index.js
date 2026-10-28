@@ -22,6 +22,11 @@ const confirmationManager = new ConfirmationManager();
 const userContextManager = new UserContextManager();
 const documentStore = new DocumentStore();
 const openAIManager = new OpenAIManager();
+const { createCalendarService } = require('./services/calendar/createCalendarService');
+const calendarService = createCalendarService({
+  firebaseService: openAIManager.firebaseService
+});
+openAIManager.calendarBooking = calendarService;
 const webhookManager = new WebhookManager(
   ultraMsgManager,
   openAIManager,
@@ -44,7 +49,8 @@ const app = createApp({
   userContextManager,
   schedulerController,
   documentStore,
-  reinitUltraMsgInstances
+  reinitUltraMsgInstances,
+  calendarService
 });
 
 async function autoReloadClients() {
@@ -84,6 +90,8 @@ app.listen(port, async () => {
     console.log('- META_APP_ID:', process.env.META_APP_ID ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- META_EMBEDDED_SIGNUP_CONFIG_ID:', process.env.META_EMBEDDED_SIGNUP_CONFIG_ID ? 'Configurado' : 'NO CONFIGURADO');
     console.log('- META_WEBHOOK_VERIFY_TOKEN:', process.env.META_WEBHOOK_VERIFY_TOKEN ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- GOOGLE_CALENDAR_CLIENT_ID:', process.env.GOOGLE_CALENDAR_CLIENT_ID ? 'Configurado' : 'NO CONFIGURADO');
+    console.log('- GOOGLE_CALENDAR_CLIENT_SECRET:', process.env.GOOGLE_CALENDAR_CLIENT_SECRET ? 'Configurado' : 'NO CONFIGURADO');
     console.log(`🔗 Webhook Meta: http://localhost:${port}/api/webhooks/meta`);
     console.log('- MESSAGE_DEBOUNCE_MS:', process.env.MESSAGE_DEBOUNCE_MS || '2500 (default)');
     console.log('- MESSAGE_DEBOUNCE_MAX_MS:', process.env.MESSAGE_DEBOUNCE_MAX_MS || '8000 (default)');

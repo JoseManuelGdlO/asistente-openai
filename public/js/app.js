@@ -403,7 +403,8 @@
         name: 'client-detail',
         clientId: decodeURIComponent(parts[1]),
         tab: parts[2] || 'consultorio',
-        page: query.get('page') || '1'
+        page: query.get('page') || '1',
+        notice: query.get('calendar') || ''
       };
     }
     if (parts[0] === 'clients') return { name: 'clients' };
@@ -552,7 +553,7 @@
       else if (route.name === 'session-detail') await renderSessionDetail(route);
       else if (route.name === 'clients') await renderClients();
       else if (route.name === 'client-new') renderClientForm();
-      else if (route.name === 'client-detail') await renderClientDetail(route.clientId, route.tab, route.page);
+      else if (route.name === 'client-detail') await renderClientDetail(route.clientId, route.tab, route.page, route.notice);
       else await renderDashboard();
     } catch (err) {
       if (err.status === 401 || err.status === 503) return;
@@ -838,7 +839,7 @@
             <tbody>
               ${clients.map((client) => `
                 <tr>
-                  <td><a href="#/clients/${encodeURIComponent(client.id)}">${escapeHtml(client.name || client.id)}</a><div class="hint">${escapeHtml(client.id)}</div></td>
+                  <td><a href="#/clients/${encodeURIComponent(client.id)}">${escapeHtml(client.name || client.id)}</a><div class="hint">${escapeHtml(client.id)}</div>${calendarListMark(client)}</td>
                   <td>${escapeHtml(client.adminPhone || '')}</td>
                   <td>${escapeHtml(channelLabel(client))}</td>
                   <td>${statusBadge(client.botStatus)}</td>
@@ -864,6 +865,14 @@
         }
       });
     });
+  }
+
+  function calendarListMark(client) {
+    if (client.calendar?.noticePending) {
+      return '<div class="hint calendar-fresh">El cliente conectó Google Calendar</div>';
+    }
+    if (client.calendar?.connected) return '<div class="hint">Calendar conectado</div>';
+    return '';
   }
 
   function channelLabel(client) {
@@ -981,6 +990,9 @@
         if (result.inviteUrl) {
           sessionStorage.setItem(`inviteUrl:${result.client.id}`, result.inviteUrl);
         }
+        if (result.calendarInviteUrl) {
+          sessionStorage.setItem(`calendarInviteUrl:${result.client.id}`, result.calendarInviteUrl);
+        }
         location.hash = `#/clients/${encodeURIComponent(result.client.id)}`;
       } catch (err) {
         showFlash(flash, err.message, 'err');
@@ -988,7 +1000,7 @@
     });
   }
 
-  async function renderClientDetail(clientId, tab, page) {
+  async function renderClientDetail(clientId, tab, page, notice) {
     const currentTab = ['consultorio', 'assistant', 'documentos', 'sesiones'].includes(tab) ? tab : 'consultorio';
     const clientRes = await api(`/clients/${encodeURIComponent(clientId)}`);
     const client = clientRes.client;
@@ -1023,7 +1035,7 @@
 
     const body = document.getElementById('detail-body');
     if (currentTab === 'assistant') {
-      await renderAssistantTab(body, clientId, canEdit);
+      await renderAssistantTab(body, clientId, canEdit, notice, client);
     } else if (currentTab === 'documentos') {
       await renderDocumentsTab(body, clientId);
     } else if (currentTab === 'sesiones') {
@@ -1047,9 +1059,39 @@
     return { title: 'Pendiente de vincular', body: 'Comparte el link con el dueño del WhatsApp para conectar Meta.' };
   }
 
+  function calendarLinkCopy(client) {
+    const calendar = client.calendar || {};
+    if (calendar.noticePending) {
+      return {
+        title: 'El cliente conectó Google Calendar',
+        body: calendar.noticeEmail || calendar.email || 'La cuenta ya quedó conectada.'
+      };
+    }
+    if (calendar.connected) {
+      return {
+        title: 'Google Calendar conectado',
+        body: calendar.email || 'Cuenta conectada'
+      };
+    }
+    if (client.calendarInvite?.status === 'expired') {
+      return {
+        title: 'Link de Google vencido',
+        body: 'Genera un link nuevo para que el cliente conecte su calendario.'
+      };
+    }
+    return {
+      title: 'Google Calendar sin conectar',
+      body: 'Comparte el link. El cliente ve el tutorial y conecta su cuenta sin entrar al panel.'
+    };
+  }
+
   function renderConsultorioTab(container, client, canEdit = true) {
     const storedInvite = sessionStorage.getItem(`inviteUrl:${client.id}`) || '';
+    const calendarFresh = client.calendarInvite?.status === 'pending';
+    const storedCalendarInvite = calendarFresh ? (sessionStorage.getItem(`calendarInviteUrl:${client.id}`) || '') : '';
     const status = metaStatusCopy(client);
+    const calendarCopy = calendarLinkCopy(client);
+    const calendarConnected = Boolean(client.calendar?.connected);
     container.innerHTML = `
       ${editLockBannerHtml(canEdit)}
       <div id="form-flash" hidden></div>
@@ -1067,6 +1109,21 @@
           ${client.meta?.connected
             ? '<button type="button" class="btn-secondary" id="disconnect-meta">Desconectar WhatsApp</button>'
             : '<button type="button" id="regen-invite">Generar link de vinculación</button>'}
+        </div>
+      </div>
+      <div class="card stack ${client.calendar?.noticePending ? 'notice-banner' : ''}">
+        <h2>${escapeHtml(calendarCopy.title)}</h2>
+        <p class="muted">${escapeHtml(calendarCopy.body)}</p>
+        ${!calendarConnected && storedCalendarInvite ? `
+          <div class="invite-box">
+            <code id="calendar-invite-url">${escapeHtml(storedCalendarInvite)}</code>
+            <div class="actions">
+              <button type="button" class="btn-secondary" id="copy-calendar-invite">Copiar link</button>
+            </div>
+          </div>` : ''}
+        <div class="actions">
+          ${client.calendar?.noticePending ? '<button type="button" id="dismiss-calendar-notice">Listo, ya lo vi</button>' : ''}
+          ${calendarConnected ? '' : `<button type="button" id="regen-calendar-invite" ${canEdit ? '' : 'disabled'}>${storedCalendarInvite ? 'Generar link nuevo' : 'Generar link de Google Calendar'}</button>`}
         </div>
       </div>
       <form id="client-form" class="card stack">
@@ -1126,6 +1183,50 @@
       });
     }
 
+    const copyCalendarBtn = document.getElementById('copy-calendar-invite');
+    if (copyCalendarBtn) {
+      copyCalendarBtn.addEventListener('click', async () => {
+        const url = document.getElementById('calendar-invite-url')?.textContent || '';
+        try {
+          await navigator.clipboard.writeText(url);
+          showFlash(document.getElementById('form-flash'), 'Link copiado', 'ok');
+        } catch {
+          showFlash(document.getElementById('form-flash'), 'No se pudo copiar el link', 'err');
+        }
+      });
+    }
+
+    const regenCalendarBtn = document.getElementById('regen-calendar-invite');
+    if (regenCalendarBtn) {
+      regenCalendarBtn.addEventListener('click', async () => {
+        if (!canEdit) return;
+        if (storedCalendarInvite && !confirm('El link anterior dejará de servir. ¿Generar uno nuevo?')) return;
+        try {
+          const result = await api(`/clients/${encodeURIComponent(client.id)}/calendar/invite`, { method: 'POST' });
+          if (result.calendarInviteUrl) {
+            sessionStorage.setItem(`calendarInviteUrl:${client.id}`, result.calendarInviteUrl);
+          }
+          showFlash(document.getElementById('form-flash'), 'Link generado. Copia y envíaselo al cliente.', 'ok');
+          render();
+        } catch (err) {
+          if (handleLostEditLock(document.getElementById('form-flash'), err)) return;
+          showFlash(document.getElementById('form-flash'), err.message, 'err');
+        }
+      });
+    }
+
+    const dismissCalendarBtn = document.getElementById('dismiss-calendar-notice');
+    if (dismissCalendarBtn) {
+      dismissCalendarBtn.addEventListener('click', async () => {
+        try {
+          await api(`/clients/${encodeURIComponent(client.id)}/calendar/notice/dismiss`, { method: 'POST' });
+          render();
+        } catch (err) {
+          showFlash(document.getElementById('form-flash'), err.message, 'err');
+        }
+      });
+    }
+
     const regenBtn = document.getElementById('regen-invite');
     if (regenBtn) {
       regenBtn.addEventListener('click', async () => {
@@ -1163,7 +1264,7 @@
     }
   }
 
-  async function renderAssistantTab(container, clientId, canEdit = true) {
+  async function renderAssistantTab(container, clientId, canEdit = true, notice = '', client = null) {
     let assistant;
     try {
       const res = await api(`/assistants/${encodeURIComponent(clientId)}`);
@@ -1181,13 +1282,16 @@
           <h2 class="playground-title">Versiones</h2>
           <div id="version-list"></div>
         </aside>
-        <form id="assistant-form" class="card stack">
-          <div id="version-viewing" class="version-viewing" hidden>
-            <p id="version-viewing-text"></p>
-            <button type="button" id="version-back" class="btn-sm btn-secondary">Regresar sin hacer cambios</button>
-          </div>
-          <p class="muted">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
-          <div>
+        <div class="assistant-editor">
+          <p class="muted assistant-intro">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
+          <div id="calendar-mount"></div>
+          <div id="blacklist-mount"></div>
+          <form id="assistant-form" class="card stack">
+            <div id="version-viewing" class="version-viewing" hidden>
+              <p id="version-viewing-text"></p>
+              <button type="button" id="version-back" class="btn-sm btn-secondary">Regresar sin hacer cambios</button>
+            </div>
+            <div>
             <button type="button" id="versions-toggle" class="btn-sm btn-secondary" aria-expanded="false" aria-controls="version-panel">Versiones</button>
             <label for="asst-prompt">Prompt</label>
             <textarea id="asst-prompt" class="prompt"${canEdit ? '' : ' readonly'}>${escapeHtml(assistant.prompt || '')}</textarea>
@@ -1224,12 +1328,20 @@
             <button type="button" id="asst-save-version" class="btn-secondary"${canEdit ? '' : ' disabled'}>Guardar versión</button>
           </div>
         </form>
+        </div>
         <aside class="card playground-card stack">
           <div class="page-head" style="margin:0">
             <h2 class="playground-title">Probar Assistant</h2>
             <button type="button" id="playground-reset" class="btn-sm btn-secondary">Nueva conversación</button>
           </div>
           <p class="muted">Usa el Assistant guardado. Gasta tokens de OpenAI. No envía WhatsApp. Varios mensajes seguidos se juntan (debounce) como en WhatsApp.</p>
+          <div class="calendar-test stack">
+            <p id="playground-calendar-mode" class="muted">Modo de prueba: se puede consultar disponibilidad. No se crean citas reales.</p>
+            <label class="check" for="playground-calendar-write">
+              <input type="checkbox" id="playground-calendar-write" disabled>
+              <span>Permitir crear citas reales</span>
+            </label>
+          </div>
           <div id="playground-log" class="playground-log"></div>
           <form id="playground-form" class="playground-composer">
             <textarea id="playground-input" rows="3" placeholder="Escribe un mensaje de prueba…"></textarea>
@@ -1637,6 +1749,81 @@
       }
     });
 
+    function applyPlaygroundCalendar(calendar) {
+      const box = document.getElementById('playground-calendar-write');
+      const note = document.getElementById('playground-calendar-mode');
+      if (!box || !note || !calendar) return;
+      const write = Boolean(calendar.playgroundWriteEnabled);
+      const ready = Boolean(calendar.ready);
+      box.checked = write;
+      box.disabled = !canEdit || !ready;
+      if (write && ready) {
+        note.className = 'calendar-warning';
+        note.textContent = 'Escritura de prueba activa: se crearán eventos reales en el Google Calendar conectado.';
+      } else if (!ready) {
+        note.className = 'muted';
+        note.textContent = 'Modo de prueba: la agenda todavía no está lista. No se crean citas reales.';
+      } else {
+        note.className = 'muted';
+        note.textContent = 'Modo de prueba: se puede consultar disponibilidad. No se crean citas reales.';
+      }
+    }
+
+    const calendarNotices = {
+      connected: ['Google Calendar conectado.', 'ok'],
+      denied: ['Se canceló la conexión con Google.', 'err'],
+      error: ['No se pudo conectar Google Calendar.', 'err']
+    };
+    if (notice && calendarNotices[notice]) {
+      showFlash(document.getElementById('form-flash'), calendarNotices[notice][0], calendarNotices[notice][1]);
+      const clean = `#/clients/${encodeURIComponent(clientId)}/assistant`;
+      history.replaceState(null, '', `${location.pathname}${location.search}${clean}`);
+    }
+
+    if (window.CalendarPanel) {
+      window.CalendarPanel.mount(document.getElementById('calendar-mount'), {
+        clientId,
+        canEdit,
+        api,
+        escapeHtml,
+        inviteUrl: client?.calendarInvite?.status === 'pending'
+          ? (sessionStorage.getItem(`calendarInviteUrl:${clientId}`) || '')
+          : '',
+        onInviteUrl: (url) => sessionStorage.setItem(`calendarInviteUrl:${clientId}`, url),
+        onState: applyPlaygroundCalendar,
+        onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
+      });
+    }
+
+    if (window.BlacklistPanel) {
+      window.BlacklistPanel.mount(document.getElementById('blacklist-mount'), {
+        clientId,
+        canEdit,
+        api,
+        escapeHtml,
+        onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
+      });
+    }
+
+    document.getElementById('playground-calendar-write').addEventListener('change', async (event) => {
+      const next = event.target.checked;
+      if (next && !window.confirm('Se crearán eventos reales en el Google Calendar conectado. ¿Activar la escritura de prueba?')) {
+        event.target.checked = false;
+        return;
+      }
+      try {
+        const res = await api(`/clients/${encodeURIComponent(clientId)}/calendar/playground-write`, {
+          method: 'PUT',
+          body: { enabled: next }
+        });
+        applyPlaygroundCalendar(res.calendar);
+      } catch (err) {
+        event.target.checked = !next;
+        if (handleLostEditLock(document.getElementById('form-flash'), err)) return;
+        showFlash(document.getElementById('form-flash'), err.message, 'err');
+      }
+    });
+
     await loadPlayground();
   }
 
@@ -1761,6 +1948,41 @@
       });
     });
   }
+
+  function applyEnvironmentBadge(firestore) {
+    const prefix = String(firestore?.collectionPrefix || '');
+    const databaseId = String(firestore?.databaseId || '');
+    const isQa = firestore?.environment === 'qa'
+      || prefix.toUpperCase().startsWith('QA')
+      || databaseId.toLowerCase().includes('qa');
+    const label = isQa ? 'QA' : 'Producción';
+    document.title = isQa ? 'QA · Intelekia Chatbot' : 'Intelekia Chatbot';
+
+    for (const id of ['login-env', 'app-env']) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.hidden = false;
+      el.textContent = label;
+      el.classList.toggle('env-badge-qa', isQa);
+      el.classList.toggle('env-badge-prod', !isQa);
+      el.title = databaseId ? `Base ${databaseId}` : '';
+    }
+
+    const banner = document.getElementById('env-banner');
+    if (banner) {
+      banner.hidden = !isQa;
+      banner.textContent = databaseId
+        ? `QA. Esta pantalla usa la base ${databaseId}, no producción.`
+        : 'QA. Esta pantalla no usa la base de producción.';
+    }
+  }
+
+  fetch('/health')
+    .then((res) => res.json())
+    .then((data) => {
+      if (data && data.firestore) applyEnvironmentBadge(data.firestore);
+    })
+    .catch(() => {});
 
   if (getToken()) {
     probeAuth().then(() => {

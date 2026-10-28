@@ -8,8 +8,10 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # 3001 en el servidor para poder convivir con producción, que ya usa 3000.
+    # Dentro del contenedor la app sigue en 3000.
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       NODE_ENV: production
       PORT: "3000"
@@ -37,6 +39,10 @@ services:
       META_SYSTEM_USER_TOKEN: ${META_SYSTEM_USER_TOKEN:-}
       CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      GOOGLE_CALENDAR_CLIENT_ID: ${GOOGLE_CALENDAR_CLIENT_ID:-}
+      GOOGLE_CALENDAR_CLIENT_SECRET: ${GOOGLE_CALENDAR_CLIENT_SECRET:-}
+      GOOGLE_CALENDAR_REDIRECT_URI: ${GOOGLE_CALENDAR_REDIRECT_URI:-}
     volumes:
       - ./uploads:/app/uploads
     healthcheck:
