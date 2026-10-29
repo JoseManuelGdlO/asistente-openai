@@ -156,6 +156,15 @@ function interpretSlotStart(value, timeZone) {
   return zonedToUtc(wall[1], wall[2], timeZone);
 }
 
+function formatDayLabel(start, timeZone) {
+  return new Intl.DateTimeFormat('es-MX', {
+    timeZone,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long'
+  }).format(start);
+}
+
 function formatSlotLabel(start, end, timeZone) {
   const day = new Intl.DateTimeFormat('es-MX', {
     timeZone,
@@ -181,7 +190,8 @@ function generateSlots({
   fromDate,
   toDate,
   busy = [],
-  limit = 8
+  limit = 8,
+  onePerDay = false
 }) {
   const interval = Math.max(5, Number(rules.slotIntervalMinutes) || 30);
   const bufferMs = Math.max(0, Number(rules.bufferMinutes) || 0) * 60000;
@@ -192,9 +202,11 @@ function generateSlots({
   let date = fromDate;
   while (date <= toDate && slots.length < limit) {
     const day = hours?.[weekdayKeyFromDate(date)];
+    let foundDay = false;
     if (day?.enabled && Array.isArray(day.intervals)) {
       const windows = [...day.intervals].sort((a, b) => a.start.localeCompare(b.start));
       for (const window of windows) {
+        if (foundDay) break;
         let cursor = zonedToUtc(date, window.start, timeZone);
         const close = zonedToUtc(date, window.end, timeZone);
         while (cursor.getTime() + durationMs <= close.getTime() && slots.length < limit) {
@@ -216,8 +228,13 @@ function generateSlots({
               end: end.toISOString(),
               startLocal: formatLocal(start, timeZone),
               endLocal: formatLocal(end, timeZone),
+              dayLabel: formatDayLabel(start, timeZone),
               label: formatSlotLabel(start, end, timeZone)
             });
+            if (onePerDay) {
+              foundDay = true;
+              break;
+            }
           }
           cursor = new Date(startMs + interval * 60000);
         }
@@ -241,6 +258,7 @@ module.exports = {
   rollPastDate,
   parseLocalDateTime,
   interpretSlotStart,
+  formatDayLabel,
   formatSlotLabel,
   generateSlots
 };

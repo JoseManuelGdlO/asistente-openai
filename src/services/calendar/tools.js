@@ -33,14 +33,14 @@ function toolDefinitions() {
     {
       type: 'function',
       name: 'getAvailableSlots',
-      description: 'Consulta disponibilidad real en Google Calendar para un servicio. No inventes horarios: usa solo lo que devuelva esta herramienta.',
+      description: 'Consulta disponibilidad real en Google Calendar. Si date es null, devuelve solo fechas libres (date y label), sin horas. Si date trae un día, devuelve los horarios de ese día. Ofrece primero las fechas y, cuando elijan una, vuelve a llamar con ese date.',
       strict: true,
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           serviceId: { type: 'string', description: 'Identificador del servicio configurado' },
-          date: nullable('Día YYYY-MM-DD en la zona del calendario, o null para buscar desde hoy'),
+          date: nullable('Día YYYY-MM-DD cuando ya eligieron un día. null para pedir la lista de días libres'),
           preferredStart: nullable('Inicio pedido como YYYY-MM-DDTHH:mm en la zona del calendario, o null')
         },
         required: ['serviceId', 'date', 'preferredStart']
@@ -117,11 +117,7 @@ function formatSubprompt(rules, timezone, today) {
   } else {
     lines.push('Campos start y preferredStart: YYYY-MM-DDTHH:mm en la zona del calendario. Copia startLocal. No envíes Z ni desfase.');
   }
-  if (formats.availability === 'days') {
-    lines.push('Si no pidieron un día, getAvailableSlots devuelve un horario por día. Ofrece esos días con label. Cuando elijan uno, vuelve a llamar la herramienta con date.');
-  } else {
-    lines.push('Ofrece los horarios devueltos usando label. Para reservar, copia startLocal del horario elegido.');
-  }
+  lines.push('Si date va vacío, getAvailableSlots devuelve solo fechas en date y label, sin horas. Ofrece solo esas fechas. Cuando elijan una, vuelve a llamar con ese date y ofrece los horarios usando label. Para reservar, copia startLocal.');
   if (formats.notes) lines.push(`Notas de formato: ${formats.notes}`);
   return lines.join('\n');
 }
@@ -145,7 +141,7 @@ function buildInstructions(runtime) {
     `Hoy es ${today} en ${timezone}. El año en curso es ${today.slice(0, 4)}. Si preguntan la fecha o el año, responde con este dato. No uses ningún otro año.`,
     'Tienes acceso solo a los servicios configurados abajo. Identifica cuál pidió la persona antes de ofrecer un horario.',
     'Antes de proponer, confirmar o dar por disponible cualquier hora o día de cita, llama getAvailableSlots en este turno. El horario operativo del prompt no es disponibilidad.',
-    'Ofrece solo horarios devueltos por getAvailableSlots. No inventes horarios, duraciones ni disponibilidad. La duración es la del servicio, en minutos.',
+    'La primera consulta va sin date y devuelve solo fechas. Ofrece solo esos date y label, sin horas. Cuando elijan un día, consulta ese date y ofrece solo esos horarios. No inventes horarios, días, duraciones ni disponibilidad. La duración es la del servicio, en minutos.',
     'Pide confirmación explícita antes de reservar, reprogramar o cancelar.',
     'Solo confirma una cita cuando createAppointment, rescheduleAppointment o cancelAppointment devuelva success true y un identificador. Si la respuesta trae dryRun o testMode, explica que es una simulación y que la cita no quedó agendada.',
     'Si no hay disponibilidad, ofrece únicamente los horarios alternativos devueltos por la herramienta.',

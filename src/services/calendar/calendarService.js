@@ -374,7 +374,7 @@ class CalendarService {
     return 'blocked';
   }
 
-  async suggest(doc, runtime, service, fromDate, toDate, excludeId) {
+  async suggest(doc, runtime, service, fromDate, toDate, excludeId, options = {}) {
     const from = parseLocalDateTime(`${fromDate}T00:00`, runtime.timezone);
     const to = parseLocalDateTime(`${addDays(toDate, 1)}T00:00`, runtime.timezone);
     let remote = [];
@@ -408,7 +408,8 @@ class CalendarService {
         fromDate,
         toDate,
         busy,
-        limit: 6
+        limit: options.limit || 6,
+        onePerDay: Boolean(options.onePerDay)
       })
     };
   }
@@ -506,9 +507,13 @@ class CalendarService {
         }
       }
     }
+    const dayMode = !requestedDate;
     const fromDate = requestedDate || today;
-    const toDate = requestedDate || (addDays(today, 7) < horizon ? addDays(today, 7) : horizon);
-    const suggestion = await this.suggest(doc, runtime, service, fromDate, toDate, null);
+    const toDate = requestedDate || horizon;
+    const suggestion = await this.suggest(doc, runtime, service, fromDate, toDate, null, {
+      limit: dayMode ? 10 : 12,
+      onePerDay: dayMode
+    });
     if (suggestion.revoked) {
       return {
         success: false,
@@ -522,12 +527,22 @@ class CalendarService {
       const wanted = formatLocal(preferred, runtime.timezone);
       exact = suggestion.slots.find((slot) => slot.startLocal === wanted) || null;
     }
-    const slots = exact
+    const timeSlots = exact
       ? [exact].concat(suggestion.slots.filter((slot) => slot.start !== exact.start)).slice(0, 6)
       : suggestion.slots;
+    const slots = dayMode
+      ? timeSlots.map((slot) => ({
+        date: slot.startLocal.slice(0, 10),
+        label: slot.dayLabel
+      }))
+      : timeSlots;
     let instruction = exact
       ? `Ese horario está libre. Hoy es ${today}. Pide confirmación antes de reservar.`
-      : `Hoy es ${today}. El año es ${today.slice(0, 4)}. Ofrece solo los horarios devueltos. No menciones otro año.`;
+      : dayMode
+        ? (slots.length
+          ? `Hoy es ${today}. El año es ${today.slice(0, 4)}. Esta respuesta solo trae fechas libres, en date y label. Ofrece solo esas fechas, sin horas. Cuando elijan una, vuelve a llamar getAvailableSlots con ese date. No menciones otro año.`
+          : `Hoy es ${today}. No hay días con horario libre en los próximos ${runtime.rules.maxDaysAhead} días. No inventes días ni horarios.`)
+        : `Hoy es ${today}. El año es ${today.slice(0, 4)}. Ofrece solo los horarios devueltos, usando label. No menciones otro año.`;
     if (correctedFrom) {
       const found = slots.length
         ? `Ofrece solo los horarios del ${requestedDate}.`
@@ -540,6 +555,7 @@ class CalendarService {
       timezone: runtime.timezone,
       today,
       correctedFrom,
+      mode: dayMode ? 'days' : 'times',
       exact: Boolean(exact),
       slots,
       instruction

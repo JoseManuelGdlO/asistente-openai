@@ -117,6 +117,29 @@ describe('horarios de Google Calendar', () => {
     expect(sunday).toEqual([]);
   });
 
+  it('devuelve un horario por día cuando se piden días', () => {
+    const slots = generateSlots({
+      now: NOW,
+      timeZone: 'America/Mexico_City',
+      hours: openMonday(),
+      durationMinutes: 60,
+      rules: { minNoticeMinutes: 0, maxDaysAhead: 14, slotIntervalMinutes: 60, bufferMinutes: 0 },
+      fromDate: '2026-10-26',
+      toDate: '2026-11-03',
+      busy: [],
+      limit: 4,
+      onePerDay: true
+    });
+    expect(slots.map((slot) => slot.startLocal.slice(0, 10))).toEqual([
+      '2026-10-26',
+      '2026-10-27',
+      '2026-11-02',
+      '2026-11-03'
+    ]);
+    expect(slots[0].dayLabel).toMatch(/26/);
+    expect(slots[0].label).toMatch(/09:00/);
+  });
+
   it('deja un tiempo de preparación entre citas', () => {
     const slots = generateSlots({
       now: NOW,
@@ -281,6 +304,29 @@ describe('agendamiento', () => {
     expect(rolled.slots.some((slot) => slot.startLocal.startsWith('2026-10-26'))).toBe(true);
     expect(rolled.instruction).toMatch(/El año es 2026/);
     expect(rolled.instruction).toMatch(/No digas 2023/);
+
+    const days = await service.execute('getAvailableSlots', {
+      serviceId: 'svc_premium01',
+      date: null,
+      preferredStart: null
+    }, { clientId: 'bot-1', origin: 'playground', userId: 'playground_bot-1' });
+    expect(days.mode).toBe('days');
+    expect(days.slots).toHaveLength(10);
+    expect(days.slots[0]).toEqual({ date: '2026-10-26', label: expect.stringMatching(/26/) });
+    expect(days.slots.map((slot) => slot.date)).toContain('2026-11-03');
+    expect(new Set(days.slots.map((slot) => slot.date)).size).toBe(10);
+    expect(JSON.stringify(days.slots)).not.toMatch(/\d{2}:\d{2}/);
+    expect(days.instruction).toMatch(/sin horas/);
+
+    const blocked = googleFake({
+      freeBusy: jest.fn(async () => [{ start: '2026-10-26T06:00:00.000Z', end: '2026-11-03T06:00:00.000Z' }])
+    });
+    const later = await serviceWith(readyDoc(), blocked).execute('getAvailableSlots', {
+      serviceId: 'svc_premium01',
+      date: null,
+      preferredStart: null
+    }, { clientId: 'bot-1', origin: 'playground', userId: 'playground_bot-1' });
+    expect(later.slots[0].date).toBe('2026-11-03');
 
     const preview = await service.execute('createAppointment', {
       serviceId: 'svc_premium01',
