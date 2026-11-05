@@ -402,16 +402,15 @@ class AgendaService {
         await this.markRevoked(runtime.clientId, error.message);
         return { revoked: true, slots: [] };
       }
-      if (error.code === 'denied') {
-        await this.settingsStore.transaction(runtime.clientId, (doc) => ({
-          ...doc,
-          connection: {
-            ...doc.connection,
-            status: 'error',
-            lastError: error.message || 'Google rechazó el acceso al calendario'
-          }
-        }));
-        return { denied: true, slots: [] };
+      if (error.code === 'denied' || error.code === 'revoked') {
+        // revoked ya se manejó arriba; denied no tumba permanentemente la fase ready
+        // (un 403 puntual no debe dejar la agenda inutilizable hasta reconectar).
+        return {
+          denied: error.code === 'denied',
+          googleError: true,
+          error: error.message || 'No se pudo consultar Google Calendar',
+          slots: []
+        };
       }
       // No inventar disponibilidad si Google falla: el diagrama exige consultar eventos/bloqueos.
       return { googleError: true, error: error.message || 'No se pudo consultar Google Calendar', slots: [] };
