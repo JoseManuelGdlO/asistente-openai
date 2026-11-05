@@ -74,6 +74,8 @@ class FirebaseService {
     this.loginConfirmationsCollection = col('login_confirmations');
     this.assistantEditLocksCollection = col('assistant_edit_locks');
     this.calendarSettingsCollection = col('calendar_settings');
+    this.agendaSettingsCollection = col('agenda_settings');
+    this.agendaAppointmentsCollection = col('agenda_appointments');
 
     if (process.env.NODE_ENV !== 'test' && !loggedFirestoreTarget) {
       loggedFirestoreTarget = true;
@@ -848,6 +850,7 @@ class FirebaseService {
       if (data.tools !== undefined) allowed.tools = data.tools;
       if (data.config !== undefined) allowed.config = data.config;
       if (data.responseSchema !== undefined) allowed.responseSchema = data.responseSchema;
+      if (data.agendaEngine !== undefined) allowed.agendaEngine = data.agendaEngine;
       allowed.updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
       await assistantRef.update(allowed);

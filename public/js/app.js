@@ -1284,6 +1284,7 @@
         </aside>
         <div class="assistant-editor">
           <p class="muted assistant-intro">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
+          <div id="configuracion-mount"></div>
           <div id="calendar-mount"></div>
           <div id="blacklist-mount"></div>
           <form id="assistant-form" class="card stack">
@@ -1780,8 +1781,34 @@
       history.replaceState(null, '', `${location.pathname}${location.search}${clean}`);
     }
 
-    if (window.CalendarPanel) {
-      window.CalendarPanel.mount(document.getElementById('calendar-mount'), {
+    const agendaEngine = assistant?.agendaEngine === 'v2' ? 'v2' : 'v1';
+    const calendarMount = document.getElementById('calendar-mount');
+    if (window.ConfiguracionHub) {
+      window.ConfiguracionHub.mount(document.getElementById('configuracion-mount'), {
+        clientId,
+        canEdit,
+        api,
+        escapeHtml,
+        agendaEngine,
+        onOpenAgenda: (slot) => {
+          if (!slot) return;
+          if (window.AgendaPanel) {
+            window.AgendaPanel.mount(slot, {
+              clientId,
+              canEdit,
+              api,
+              escapeHtml,
+              onState: applyPlaygroundCalendar,
+              onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
+            });
+          }
+        }
+      });
+    }
+    if (agendaEngine === 'v2') {
+      if (calendarMount) calendarMount.innerHTML = '';
+    } else if (window.CalendarPanel) {
+      window.CalendarPanel.mount(calendarMount, {
         clientId,
         canEdit,
         api,
@@ -1812,11 +1839,14 @@
         return;
       }
       try {
-        const res = await api(`/clients/${encodeURIComponent(clientId)}/calendar/playground-write`, {
+        const playgroundPath = agendaEngine === 'v2'
+          ? `/clients/${encodeURIComponent(clientId)}/configuracion/agenda/playground-write`
+          : `/clients/${encodeURIComponent(clientId)}/calendar/playground-write`;
+        const res = await api(playgroundPath, {
           method: 'PUT',
           body: { enabled: next }
         });
-        applyPlaygroundCalendar(res.calendar);
+        applyPlaygroundCalendar(res.agenda || res.calendar);
       } catch (err) {
         event.target.checked = !next;
         if (handleLostEditLock(document.getElementById('form-flash'), err)) return;

@@ -41,11 +41,25 @@ function sendCalendarError(res, error, fallback) {
 function mountCalendarRoutes(app, deps) {
   const {
     calendarService,
+    agendaService,
+    resolveAgendaEngine,
     requireAdminAuth,
     requireEditLock,
     commandManager,
     firebaseService
   } = deps;
+
+  async function oauthServiceFor(clientId) {
+    if (agendaService && typeof resolveAgendaEngine === 'function') {
+      try {
+        const engine = await resolveAgendaEngine(clientId);
+        if (engine === 'v2') return agendaService;
+      } catch (_error) {
+        // fallback calendar
+      }
+    }
+    return calendarService;
+  }
 
   async function assertAssistant(res, clientId) {
     if (!commandManager || typeof commandManager.getAssistantConfig !== 'function') return true;
@@ -158,7 +172,9 @@ function mountCalendarRoutes(app, deps) {
       if (invite.status === 'connected') {
         return res.status(409).json({ ok: false, error: 'Este calendario ya está conectado.' });
       }
-      const result = await calendarService.beginOAuth(invite.clientId, redirectUriFor(req), { via: 'invite' });
+      const oauthService = await oauthServiceFor(invite.clientId);
+      if (!oauthService) return unavailable(res);
+      const result = await oauthService.beginOAuth(invite.clientId, redirectUriFor(req), { via: 'invite' });
       res.json({ ok: true, url: result.url });
     } catch (error) {
       sendCalendarError(res, error, 'Error iniciando la conexión con Google');
@@ -166,7 +182,7 @@ function mountCalendarRoutes(app, deps) {
   });
 
   app.get('/calendar/oauth/callback', async (req, res) => {
-    if (!calendarService) return unavailable(res);
+    if (!calendarService && !agendaService) return unavailable(res);
     const queryError = typeof req.query.error === 'string' ? req.query.error : '';
     const state = typeof req.query.state === 'string' ? req.query.state : '';
     const payload = verifyState(state, stateSecret(process.env));
@@ -186,7 +202,9 @@ function mountCalendarRoutes(app, deps) {
       return res.redirect(panelUrl(req, clientId, queryError === 'access_denied' ? 'denied' : 'error'));
     }
     try {
-      const result = await calendarService.completeOAuth(
+      const oauthService = await oauthServiceFor(clientId);
+      if (!oauthService) return unavailable(res);
+      const result = await oauthService.completeOAuth(
         typeof req.query.code === 'string' ? req.query.code : '',
         state,
         redirectUriFor(req)
