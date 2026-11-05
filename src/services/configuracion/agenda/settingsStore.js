@@ -58,6 +58,10 @@ class MemorySettingsStore {
     return clone(this.docs.get(clientId));
   }
 
+  async listClientIds() {
+    return [...this.docs.keys()];
+  }
+
   async transaction(clientId, mutator) {
     const current = this.docs.has(clientId) ? clone(this.docs.get(clientId)) : defaultSettings();
     const next = mutator(current);
@@ -80,6 +84,11 @@ class FirestoreSettingsStore {
     const snap = await this.collection.doc(clientId).get();
     if (!snap.exists) return defaultSettings();
     return normalizeSettings(snap.data());
+  }
+
+  async listClientIds() {
+    const snap = await this.collection.get();
+    return snap.docs.map((doc) => doc.id);
   }
 
   async transaction(clientId, mutator) {

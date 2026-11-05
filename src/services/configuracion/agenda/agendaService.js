@@ -737,11 +737,19 @@ class AgendaService {
   }
 
   async processSyncQueue({ limitPerClient = 20 } = {}) {
-    const clientIds = await this.appointmentsStore.listAllClientIds();
+    // Preferir bots con agenda_settings: el doc padre de appointments puede no existir aún.
+    const fromSettings = typeof this.settingsStore.listClientIds === 'function'
+      ? await this.settingsStore.listClientIds()
+      : [];
+    const fromAppointments = await this.appointmentsStore.listAllClientIds();
+    const clientIds = [...new Set(fromSettings.concat(fromAppointments))];
     const summary = [];
     for (const clientId of clientIds) {
       const settings = await this.settingsStore.getRaw(clientId);
       if (!settings.enabled || settings.connection?.status !== 'connected') continue;
+      if (typeof this.appointmentsStore.ensureParent === 'function') {
+        try { await this.appointmentsStore.ensureParent(clientId); } catch (_error) { /* ignore */ }
+      }
       try {
         const result = await processClientSyncQueue({
           clientId,

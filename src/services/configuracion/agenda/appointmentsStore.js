@@ -141,26 +141,48 @@ class FirestoreAppointmentsStore {
     return snap.docs.map((doc) => doc.id);
   }
 
+  async ensureParent(clientId) {
+    // Sin doc padre, collection.get() no lista el bot y el sync worker no corre.
+    await this.root.doc(clientId).set({
+      clientId,
+      updatedAt: this.FieldValue.serverTimestamp()
+    }, { merge: true });
+  }
+
   async runTransaction(clientId, fn) {
+    await this.ensureParent(clientId);
     const col = this.items(clientId);
+    const parentRef = this.root.doc(clientId);
     return this.db.runTransaction(async (tx) => {
+      const pendingWrites = [];
       const api = {
         get: async (id) => {
           const snap = await tx.get(col.doc(id));
           return snap.exists ? normalizeAppointment(snap.id, snap.data()) : null;
         },
         set: async (id, value) => {
-          tx.set(col.doc(id), {
-            ...value,
-            updatedAt: this.FieldValue.serverTimestamp()
-          }, { merge: true });
+          pendingWrites.push({
+            ref: col.doc(id),
+            value: {
+              ...value,
+              updatedAt: this.FieldValue.serverTimestamp()
+            }
+          });
         },
         listConfirmed: async () => {
           const snap = await tx.get(col.where('status', '==', 'confirmed'));
           return snap.docs.map((doc) => normalizeAppointment(doc.id, doc.data()));
         }
       };
-      return fn(api);
+      const result = await fn(api);
+      tx.set(parentRef, {
+        clientId,
+        updatedAt: this.FieldValue.serverTimestamp()
+      }, { merge: true });
+      for (const write of pendingWrites) {
+        tx.set(write.ref, write.value, { merge: true });
+      }
+      return result;
     });
   }
 }
