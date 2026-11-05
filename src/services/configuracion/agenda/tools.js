@@ -33,7 +33,7 @@ function toolDefinitions() {
     {
       type: 'function',
       name: 'getAvailableSlots',
-      description: 'Consulta disponibilidad real en Google Calendar. Si date es null, devuelve solo fechas libres (date y label), sin horas. Si date trae un día, devuelve los horarios de ese día. Ofrece primero las fechas y, cuando elijan una, vuelve a llamar con ese date.',
+      description: 'Consulta disponibilidad real. Si date es null, devuelve una lista de fechas libres (date y label) para que la persona elija el día. Si date trae un día YYYY-MM-DD, devuelve los horarios de ese día. Debes ofrecer TODAS las fechas u horarios devueltos, no solo uno. Si ya dijeron un día, llama con ese date; si también dijeron una hora, mándala en preferredStart.',
       strict: true,
       parameters: {
         type: 'object',
@@ -141,7 +141,11 @@ function buildInstructions(runtime) {
     `Hoy es ${today} en ${timezone}. El año en curso es ${today.slice(0, 4)}. Si preguntan la fecha o el año, responde con este dato. No uses ningún otro año.`,
     'Tienes acceso solo a los servicios configurados abajo. Identifica cuál pidió la persona antes de ofrecer un horario.',
     'Antes de proponer, confirmar o dar por disponible cualquier hora o día de cita, llama getAvailableSlots en este turno. El horario operativo del prompt no es disponibilidad.',
-    'La primera consulta va sin date y devuelve solo fechas. Ofrece solo esos date y label, sin horas. Cuando elijan un día, consulta ese date y ofrece solo esos horarios. No inventes horarios, días, duraciones ni disponibilidad. La duración es la del servicio, en minutos.',
+    'Flujo para que la persona elija fecha y hora:',
+    '1) Si aún no hay día: llama getAvailableSlots sin date. En tu respuesta lista TODAS las fechas devueltas (label). No ofrezcas solo una fecha.',
+    '2) Cuando elijan un día (o lo digan ellos), llama getAvailableSlots con ese date. Lista TODOS los horarios devueltos (label). No ofrezcas solo una hora.',
+    '3) Si ya dijeron día y hora, llama getAvailableSlots con date y preferredStart; si el horario está libre, pide confirmación y reserva.',
+    'No inventes horarios, días, duraciones ni disponibilidad. La duración es la del servicio, en minutos.',
     'Pide confirmación explícita antes de reservar, reprogramar o cancelar.',
     'Solo confirma una cita cuando createAppointment, rescheduleAppointment o cancelAppointment devuelva success true y un identificador. Si la respuesta trae dryRun o testMode, explica que es una simulación y que la cita no quedó agendada.',
     'Si no hay disponibilidad, ofrece únicamente los horarios alternativos devueltos por la herramienta.',

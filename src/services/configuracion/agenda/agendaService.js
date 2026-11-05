@@ -507,7 +507,7 @@ class AgendaService {
         success: true,
         dates,
         instruction: dates.length
-          ? 'Ofrece solo estas fechas (date y label), sin horas. Cuando elijan una, vuelve a llamar getAvailableSlots con ese date.'
+          ? `Enumera las ${dates.length} fechas (label) para que la persona elija el día. No ofrezcas solo una. Sin horas todavía. Cuando elijan, llama getAvailableSlots con ese date.`
           : 'No hay fechas libres en el horizonte. Sugiere otra fecha o servicio.'
       };
     }
@@ -537,8 +537,8 @@ class AgendaService {
       date,
       slots: slots.slice(0, 8),
       instruction: slots.length
-        ? 'Ofrece solo estos horarios usando label. Para reservar copia startLocal.'
-        : 'No hay cupo ese día. Ofrece buscar otra fecha.'
+        ? `Enumera los ${slots.length} horarios (label) para que elijan la hora. No ofrezcas solo uno. Para reservar copia startLocal del elegido.`
+        : 'No hay cupo ese día. Ofrece buscar otra fecha de la lista.'
     };
   }
 
