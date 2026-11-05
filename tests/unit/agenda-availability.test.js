@@ -160,4 +160,20 @@ describe('buildAvailableSlots capacity', () => {
     });
     expect(slots).toEqual([]);
   });
+
+  it('respeta maxSlotsPerDay', () => {
+    const slots = buildAvailableSlots({
+      now,
+      timeZone: 'America/Mexico_City',
+      hours: mondayHours(),
+      service,
+      rules: { ...rules, maxSlotsPerDay: 2 },
+      fromDate: '2026-11-09',
+      toDate: '2026-11-09',
+      appointments: [],
+      googleBusy: [],
+      limit: 20
+    });
+    expect(slots).toHaveLength(2);
+  });
 });

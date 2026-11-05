@@ -605,7 +605,8 @@ class AgendaService {
       customerPhone: cleanPhone(context.userId),
       notes,
       googleBusy,
-      rules: runtime.rules
+      rules: runtime.rules,
+      timeZone: runtime.timezone
     });
     if (!booked.ok) {
       const alternatives = await this.suggest(runtime, service, day, day, { limit: 8 });
@@ -672,7 +673,8 @@ class AgendaService {
       start: slot.start,
       end: slot.end,
       googleBusy,
-      rules: runtime.rules
+      rules: runtime.rules,
+      timeZone: runtime.timezone
     });
     if (!moved.ok) {
       return { success: false, error: 'No se pudo reprogramar ese horario.', instruction: 'No confirmes el cambio.' };

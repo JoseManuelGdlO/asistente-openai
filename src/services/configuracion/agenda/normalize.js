@@ -172,6 +172,8 @@ function normalizeRules(input) {
   if (!interval.ok) return interval;
   const buffer = readInt(source.bufferMinutes ?? defaults.bufferMinutes, defaults.bufferMinutes, 0, 240, 'El tiempo de preparación');
   if (!buffer.ok) return buffer;
+  const maxSlots = readInt(source.maxSlotsPerDay ?? defaults.maxSlotsPerDay, defaults.maxSlotsPerDay, 1, 200, 'Los slots por día');
+  if (!maxSlots.ok) return maxSlots;
   return {
     ok: true,
     value: {
@@ -179,6 +181,7 @@ function normalizeRules(input) {
       maxDaysAhead: maxDays.value,
       slotIntervalMinutes: interval.value,
       bufferMinutes: buffer.value,
+      maxSlotsPerDay: maxSlots.value,
       allowCancel: source.allowCancel !== false,
       allowReschedule: source.allowReschedule !== false
     }

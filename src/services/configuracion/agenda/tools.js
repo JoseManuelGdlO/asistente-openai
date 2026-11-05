@@ -148,7 +148,7 @@ function buildInstructions(runtime) {
     'Puedes llamar las herramientas necesarias en este turno. Después responde en el formato de salida del bot, sin volver a llamar herramientas.',
     'Si la respuesta del bot es JSON, conserva ese contrato y escribe el mensaje para la persona en el campo reply.',
     `Zona horaria: ${timezone}.`,
-    `Anticipación mínima: ${rules.minNoticeMinutes} minutos. Horizonte: ${rules.maxDaysAhead} días. Intervalo ofrecido: ${rules.slotIntervalMinutes} minutos. Preparación entre citas: ${rules.bufferMinutes} minutos.`,
+    `Anticipación mínima: ${rules.minNoticeMinutes} minutos. Horizonte: ${rules.maxDaysAhead} días. Intervalo ofrecido: ${rules.slotIntervalMinutes} minutos. Máximo de slots por día: ${rules.maxSlotsPerDay || 16}. Preparación entre citas: ${rules.bufferMinutes} minutos.`,
     `Cancelaciones: ${rules.allowCancel ? 'permitidas' : 'no permitidas'}. Reprogramaciones: ${rules.allowReschedule ? 'permitidas' : 'no permitidas'}.`,
     formatSubprompt(rules, timezone, today),
     'Servicios activos:',

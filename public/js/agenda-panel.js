@@ -98,13 +98,55 @@
         if (closed || !start || !end) return { date, closed: true };
         return { date, closed: false, intervals: [{ start, end }] };
       }).filter((item) => item.date);
+      const rules = state.rules || {};
       return {
         timezone: state.connection?.timezone || 'America/Mexico_City',
         hours,
         services,
         exceptions,
-        rules: state.rules || {}
+        rules: {
+          ...rules,
+          minNoticeMinutes: Number(container.querySelector('[data-rule="minNoticeMinutes"]')?.value || rules.minNoticeMinutes || 60),
+          maxDaysAhead: Number(container.querySelector('[data-rule="maxDaysAhead"]')?.value || rules.maxDaysAhead || 30),
+          slotIntervalMinutes: Number(container.querySelector('[data-rule="slotIntervalMinutes"]')?.value || rules.slotIntervalMinutes || 30),
+          bufferMinutes: Number(container.querySelector('[data-rule="bufferMinutes"]')?.value || rules.bufferMinutes || 0),
+          maxSlotsPerDay: Number(container.querySelector('[data-rule="maxSlotsPerDay"]')?.value || rules.maxSlotsPerDay || 16),
+          allowCancel: Boolean(container.querySelector('[data-rule-check="allowCancel"]')?.checked),
+          allowReschedule: Boolean(container.querySelector('[data-rule-check="allowReschedule"]')?.checked)
+        }
       };
+    }
+
+    function rulesBlock() {
+      const rules = state.rules || {};
+      return `
+        <div class="stack">
+          <label>Slots máximos por día
+            <input type="number" min="1" max="200" data-rule="maxSlotsPerDay" value="${escapeHtml(rules.maxSlotsPerDay ?? 16)}" ${canEdit ? '' : 'disabled'}>
+          </label>
+          <p class="muted">Tope de citas/slots que se pueden ofrecer o reservar en un mismo día.</p>
+          <label>Intervalo entre horarios (min)
+            <input type="number" min="5" data-rule="slotIntervalMinutes" value="${escapeHtml(rules.slotIntervalMinutes ?? 30)}" ${canEdit ? '' : 'disabled'}>
+          </label>
+          <label>Anticipación mínima (min)
+            <input type="number" min="0" data-rule="minNoticeMinutes" value="${escapeHtml(rules.minNoticeMinutes ?? 60)}" ${canEdit ? '' : 'disabled'}>
+          </label>
+          <label>Días a futuro
+            <input type="number" min="1" data-rule="maxDaysAhead" value="${escapeHtml(rules.maxDaysAhead ?? 30)}" ${canEdit ? '' : 'disabled'}>
+          </label>
+          <label>Buffer entre citas (min)
+            <input type="number" min="0" data-rule="bufferMinutes" value="${escapeHtml(rules.bufferMinutes ?? 0)}" ${canEdit ? '' : 'disabled'}>
+          </label>
+          <label class="check">
+            <input type="checkbox" data-rule-check="allowCancel" ${rules.allowCancel !== false ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+            <span>Permitir cancelar</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" data-rule-check="allowReschedule" ${rules.allowReschedule !== false ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+            <span>Permitir reprogramar</span>
+          </label>
+        </div>
+      `;
     }
 
     function render() {
@@ -126,6 +168,8 @@
             <button type="button" id="agenda-disconnect" class="btn-secondary" ${canEdit ? '' : 'disabled'}>Desconectar</button>
             <button type="button" id="agenda-migrate" class="btn-secondary" ${canEdit ? '' : 'disabled'}>Migrar desde Calendar</button>
           </div>
+          <h3>Reglas de agenda</h3>
+          ${rulesBlock()}
           <h3>Horarios</h3>
           ${hoursBlock()}
           <h3>Servicios (con cupo)</h3>

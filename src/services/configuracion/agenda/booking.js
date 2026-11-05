@@ -16,6 +16,7 @@ async function bookAppointment({
   notes = '',
   googleBusy = [],
   rules,
+  timeZone = 'America/Mexico_City',
   excludeAppointmentId = null
 }) {
   const startIso = start instanceof Date ? start.toISOString() : String(start);
@@ -31,6 +32,7 @@ async function bookAppointment({
       rules,
       appointments: confirmed,
       googleBusy,
+      timeZone,
       excludeAppointmentId
     });
     if (!open) {
@@ -67,7 +69,8 @@ async function rescheduleAppointmentRecord({
   start,
   end,
   googleBusy = [],
-  rules
+  rules,
+  timeZone = 'America/Mexico_City'
 }) {
   const startIso = start instanceof Date ? start.toISOString() : String(start);
   const endIso = end instanceof Date ? end.toISOString() : String(end);
@@ -85,6 +88,7 @@ async function rescheduleAppointmentRecord({
       rules,
       appointments: confirmed,
       googleBusy,
+      timeZone,
       excludeAppointmentId: appointmentId
     });
     if (!open) return { ok: false, code: 'slot_full' };

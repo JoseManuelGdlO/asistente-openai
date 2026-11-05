@@ -3,11 +3,24 @@ const {
   formatLocal,
   formatDayLabel,
   formatSlotLabel,
+  localDate,
   rangesOverlap,
   weekdayKeyFromDate,
   zonedToUtc,
   dayWindows
 } = require('./time');
+
+function countConfirmedOnLocalDay(appointments, date, timeZone, excludeAppointmentId = null) {
+  let count = 0;
+  for (const item of appointments || []) {
+    if (!item || item.status !== 'confirmed') continue;
+    if (excludeAppointmentId && item.id === excludeAppointmentId) continue;
+    const start = Date.parse(item.start);
+    if (!Number.isFinite(start)) continue;
+    if (localDate(new Date(start), timeZone) === date) count += 1;
+  }
+  return count;
+}
 
 function appointmentBusyMs(appointments) {
   return (appointments || [])
@@ -89,18 +102,21 @@ function buildAvailableSlots({
       .filter((id) => typeof id === 'string' && id)
   );
 
+  const maxSlotsPerDay = Math.max(1, Number(rules.maxSlotsPerDay) || 16);
   const slots = [];
   let date = fromDate;
   while (date <= toDate && slots.length < limit) {
     const windows = dayWindows(date, hours, exceptions);
     let foundDay = false;
-    if (!windows.closed && windows.intervals.length) {
+    const bookedThatDay = countConfirmedOnLocalDay(appointments, date, timeZone, excludeAppointmentId);
+    let daySlotsLeft = Math.max(0, maxSlotsPerDay - bookedThatDay);
+    if (!windows.closed && windows.intervals.length && daySlotsLeft > 0) {
       const ordered = [...windows.intervals].sort((a, b) => a.start.localeCompare(b.start));
       for (const window of ordered) {
-        if (foundDay) break;
+        if (foundDay || daySlotsLeft <= 0) break;
         let cursor = zonedToUtc(date, window.start, timeZone);
         const close = zonedToUtc(date, window.end, timeZone);
-        while (cursor.getTime() + durationMs <= close.getTime() && slots.length < limit) {
+        while (cursor.getTime() + durationMs <= close.getTime() && slots.length < limit && daySlotsLeft > 0) {
           const startMs = cursor.getTime();
           const endMs = startMs + durationMs;
           const allowed = startMs >= minStart && startMs <= maxStart;
@@ -125,6 +141,7 @@ function buildAvailableSlots({
               label: formatSlotLabel(start, end, timeZone),
               remaining: capacity - occupied
             });
+            daySlotsLeft -= 1;
             if (onePerDay) {
               foundDay = true;
               break;
@@ -146,15 +163,20 @@ function isSlotOpen({
   rules,
   appointments,
   googleBusy,
+  timeZone = 'America/Mexico_City',
   excludeAppointmentId = null
 }) {
   const capacity = Math.max(1, Number(service.capacity) || 1);
+  const maxSlotsPerDay = Math.max(1, Number(rules.maxSlotsPerDay) || 16);
   const bufferMs = Math.max(0, Number(rules.bufferMinutes) || 0) * 60000;
   const ownEventIds = new Set(
     (appointments || [])
       .map((item) => item.eventId)
       .filter((id) => typeof id === 'string' && id)
   );
+  const day = localDate(start, timeZone);
+  const bookedThatDay = countConfirmedOnLocalDay(appointments, day, timeZone, excludeAppointmentId);
+  if (bookedThatDay >= maxSlotsPerDay) return false;
   const occupied = countOccupancy({
     startMs: start.getTime(),
     endMs: end.getTime(),
@@ -171,6 +193,7 @@ module.exports = {
   appointmentBusyMs,
   googleBusyMs,
   countOccupancy,
+  countConfirmedOnLocalDay,
   buildAvailableSlots,
   isSlotOpen,
   weekdayKeyFromDate

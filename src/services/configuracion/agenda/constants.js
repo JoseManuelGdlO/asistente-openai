@@ -27,6 +27,7 @@ function defaultRules() {
     maxDaysAhead: 30,
     slotIntervalMinutes: 30,
     bufferMinutes: 0,
+    maxSlotsPerDay: 16,
     allowCancel: true,
     allowReschedule: true
   };
