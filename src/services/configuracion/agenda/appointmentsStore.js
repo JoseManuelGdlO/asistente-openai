@@ -104,9 +104,10 @@ class FirestoreAppointmentsStore {
   }
 
   async listConfirmedInRange(clientId, timeMinIso, timeMaxIso) {
+    // Solo filtra por status en Firestore (evita índice compuesto status+start).
+    // El rango se aplica en memoria; el volumen por bot es pequeño.
     const snap = await this.items(clientId)
       .where('status', '==', 'confirmed')
-      .where('start', '<', timeMaxIso)
       .get();
     const min = Date.parse(timeMinIso);
     const max = Date.parse(timeMaxIso);

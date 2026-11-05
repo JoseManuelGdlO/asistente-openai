@@ -402,7 +402,19 @@ class AgendaService {
         await this.markRevoked(runtime.clientId, error.message);
         return { revoked: true, slots: [] };
       }
-      throw error;
+      if (error.code === 'denied') {
+        await this.settingsStore.transaction(runtime.clientId, (doc) => ({
+          ...doc,
+          connection: {
+            ...doc.connection,
+            status: 'error',
+            lastError: error.message || 'Google rechazó el acceso al calendario'
+          }
+        }));
+        return { denied: true, slots: [] };
+      }
+      // No inventar disponibilidad si Google falla: el diagrama exige consultar eventos/bloqueos.
+      return { googleError: true, error: error.message || 'No se pudo consultar Google Calendar', slots: [] };
     }
     return {
       revoked: false,
@@ -478,12 +490,14 @@ class AgendaService {
     const horizon = addDays(today, runtime.rules.maxDaysAhead);
     if (!args.date) {
       const suggestion = await this.suggest(runtime, service, today, horizon, { onePerDay: true, limit: 14 });
-      if (suggestion.revoked) {
+      if (suggestion.revoked || suggestion.denied || suggestion.googleError) {
         return {
           success: false,
-          error: 'La autorización de Google venció o fue revocada.',
-          phase: 'revoked',
-          instruction: 'No inventes horarios. Pide que se vuelva a conectar Google Calendar.'
+          error: suggestion.revoked
+            ? 'La autorización de Google venció o fue revocada.'
+            : (suggestion.error || 'No se pudo consultar Google Calendar.'),
+          phase: suggestion.revoked ? 'revoked' : (suggestion.denied ? 'error' : runtime.phase),
+          instruction: 'No inventes horarios ni disponibilidad. Pide reintentar o reconectar Google Calendar.'
         };
       }
       const dates = suggestion.slots.map((slot) => ({
@@ -500,12 +514,14 @@ class AgendaService {
     }
     const date = String(args.date).trim();
     const suggestion = await this.suggest(runtime, service, date, date, { limit: 16 });
-    if (suggestion.revoked) {
+    if (suggestion.revoked || suggestion.denied || suggestion.googleError) {
       return {
         success: false,
-        error: 'La autorización de Google venció o fue revocada.',
-        phase: 'revoked',
-        instruction: 'No inventes horarios. Pide que se vuelva a conectar Google Calendar.'
+        error: suggestion.revoked
+          ? 'La autorización de Google venció o fue revocada.'
+          : (suggestion.error || 'No se pudo consultar Google Calendar.'),
+        phase: suggestion.revoked ? 'revoked' : (suggestion.denied ? 'error' : runtime.phase),
+        instruction: 'No inventes horarios ni disponibilidad. Pide reintentar o reconectar Google Calendar.'
       };
     }
     let slots = suggestion.slots;
