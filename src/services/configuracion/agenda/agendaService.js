@@ -503,11 +503,13 @@ class AgendaService {
         date: localDate(new Date(slot.start), runtime.timezone),
         label: slot.dayLabel
       }));
+      const offerList = dates.map((item, index) => `${index + 1}. ${item.label}`).join('\n');
       return {
         success: true,
         dates,
+        offerList,
         instruction: dates.length
-          ? `Enumera las ${dates.length} fechas (label) para que la persona elija el día. No ofrezcas solo una. Sin horas todavía. Cuando elijan, llama getAvailableSlots con ese date.`
+          ? `Copia al usuario la lista completa offerList (${dates.length} fechas). Prohibido mostrar solo una. Sin horas todavía. Cuando elijan un día, llama getAvailableSlots con ese date.`
           : 'No hay fechas libres en el horizonte. Sugiere otra fecha o servicio.'
       };
     }
@@ -524,20 +526,30 @@ class AgendaService {
       };
     }
     let slots = suggestion.slots;
+    let preferredAvailable = null;
     if (args.preferredStart) {
       const preferred = interpretSlotStart(args.preferredStart, runtime.timezone);
       if (preferred) {
         const wanted = formatLocal(preferred, runtime.timezone);
         const exact = slots.find((slot) => slot.startLocal === wanted);
+        preferredAvailable = Boolean(exact);
         if (exact) slots = [exact].concat(slots.filter((slot) => slot.start !== exact.start));
+      } else {
+        preferredAvailable = false;
       }
     }
+    slots = slots.slice(0, 12);
+    const offerList = slots.map((slot, index) => `${index + 1}. ${slot.label}`).join('\n');
     return {
       success: true,
       date,
-      slots: slots.slice(0, 8),
+      slots,
+      offerList,
+      preferredAvailable,
       instruction: slots.length
-        ? `Enumera los ${slots.length} horarios (label) para que elijan la hora. No ofrezcas solo uno. Para reservar copia startLocal del elegido.`
+        ? (preferredAvailable === false
+          ? `Ese horario ya no está libre. Copia al usuario la lista completa offerList (${slots.length} alternativas). Prohibido mostrar solo una hora. Para reservar usa startLocal.`
+          : `Copia al usuario la lista completa offerList (${slots.length} horarios). Prohibido mostrar solo una hora. Para reservar copia startLocal del elegido.`)
         : 'No hay cupo ese día. Ofrece buscar otra fecha de la lista.'
     };
   }
@@ -624,12 +636,17 @@ class AgendaService {
       timeZone: runtime.timezone
     });
     if (!booked.ok) {
-      const alternatives = await this.suggest(runtime, service, day, day, { limit: 8 });
+      const alternatives = await this.suggest(runtime, service, day, day, { limit: 12 });
+      const altSlots = alternatives.slots || [];
+      const offerList = altSlots.map((slot, index) => `${index + 1}. ${slot.label}`).join('\n');
       return {
         success: false,
         error: 'Ese horario ya no tiene cupo.',
-        slots: alternatives.slots || [],
-        instruction: 'No confirmes la cita. Ofrece solo los horarios alternativos.'
+        slots: altSlots,
+        offerList,
+        instruction: altSlots.length
+          ? `No confirmes esa hora. Copia al usuario offerList completa (${altSlots.length} alternativas). Prohibido ofrecer solo una.`
+          : 'No confirmes la cita. Ese día ya no tiene horarios; ofrece otra fecha.'
       };
     }
     return {
