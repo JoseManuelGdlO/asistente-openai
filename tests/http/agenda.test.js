@@ -164,6 +164,121 @@ describe('API configuracion agenda', () => {
     );
   });
 
+  describe('public invite link', () => {
+    function googleReady() {
+      return {
+        configured: () => true,
+        authorizationUrl: ({ state }) => `https://accounts.google.com/o/oauth2/v2/auth?state=${encodeURIComponent(state)}`,
+        exchangeCode: jest.fn(async () => ({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 })),
+        userEmail: jest.fn(async () => 'ana@example.com'),
+        listCalendars: jest.fn(async () => [{ id: 'primary', summary: 'Principal', primary: true, timeZone: 'America/Mexico_City' }]),
+        revoke: jest.fn(async () => {})
+      };
+    }
+
+    function inviteApp(client) {
+      const agendaService = createAgendaService({
+        settingsStore: new MemorySettingsStore(),
+        appointmentsStore: new MemoryAppointmentsStore(),
+        google: googleReady(),
+        env: process.env
+      });
+      const { app, deps } = createTestApp({
+        commandManager: {
+          getAssistantConfig: jest.fn().mockResolvedValue({ clientId: 'C1', status: 'active' }),
+          updateClient: jest.fn().mockResolvedValue({ id: 'C1', name: 'Clínica' })
+        },
+        firebaseService: {
+          getClientById: jest.fn().mockResolvedValue({ id: 'C1', name: 'Clínica' }),
+          getClientByCalendarInviteToken: jest.fn(async (token) => (token && client ? client : null))
+        },
+        agendaService
+      });
+      return { app, deps, agendaService };
+    }
+
+    const future = new Date(Date.now() + 86400000).toISOString();
+    const pendingClient = {
+      id: 'C1',
+      name: 'Clínica',
+      CALENDAR_INVITE_TOKEN_HASH: 'hash',
+      CALENDAR_INVITE_EXPIRES_AT: future
+    };
+
+    it('serves the tutorial, connects via invite and leaves an admin notice', async () => {
+      const { app } = inviteApp(pendingClient);
+      const page = await request(app).get('/calendar/conectar/token-publico');
+      expect(page.status).toBe(200);
+      expect(page.text).toMatch(/calendar-connect-root/);
+
+      const invite = await request(app).get('/public/calendar/invite/token-publico');
+      expect(invite.status).toBe(200);
+      expect(invite.body.status).toBe('pending');
+      expect(invite.body.botName).toBe('Clínica');
+      expect(invite.body.oauthConfigured).toBe(true);
+
+      const start = await request(app).post('/public/calendar/invite/token-publico/start').send({});
+      expect(start.status).toBe(200);
+      const state = new URL(start.body.url).searchParams.get('state');
+      const done = await request(app)
+        .get('/configuracion/agenda/oauth/callback')
+        .query({ code: 'code', state });
+      expect(done.status).toBe(302);
+      expect(done.headers.location).toMatch(/\/calendar\/conectar\/listo\?r=/);
+      expect(done.headers.location).not.toMatch(/#\/clients/);
+
+      const resultToken = new URL(done.headers.location).searchParams.get('r');
+      const result = await request(app).get('/public/calendar/result').query({ r: resultToken });
+      expect(result.body.kind).toBe('connected');
+      expect(result.body.email).toBe('ana@example.com');
+      expect(result.body.botName).toBe('Clínica');
+
+      const panel = await request(app).get(BASE).set(authHeader());
+      expect(panel.body.agenda.enabled).toBe(false);
+      expect(panel.body.agenda.connection.email).toBe('ana@example.com');
+      expect(panel.body.agenda.adminNotice.email).toBe('ana@example.com');
+
+      const dismissed = await request(app).post(`${BASE}/notice/dismiss`).set(authHeader()).send({});
+      expect(dismissed.status).toBe(200);
+      expect(dismissed.body.agenda.adminNotice).toBeNull();
+      expect(dismissed.body.agenda.connection.email).toBe('ana@example.com');
+    });
+
+    it('panel OAuth leaves no notice; connected link blocks restart; expired link is 410', async () => {
+      const { app } = inviteApp(pendingClient);
+      const start = await request(app).post(`${BASE}/oauth/start`).set(authHeader()).send({});
+      expect(start.status).toBe(200);
+      const state = new URL(start.body.url).searchParams.get('state');
+      const done = await request(app)
+        .get('/configuracion/agenda/oauth/callback')
+        .query({ code: 'code', state });
+      expect(done.status).toBe(302);
+      expect(done.headers.location).toMatch(/calendar=connected/);
+      const panel = await request(app).get(BASE).set(authHeader());
+      expect(panel.body.agenda.adminNotice).toBeNull();
+
+      const again = await request(app).get('/public/calendar/invite/token-publico');
+      expect(again.body.status).toBe('connected');
+      const blocked = await request(app).post('/public/calendar/invite/token-publico/start').send({});
+      expect(blocked.status).toBe(409);
+
+      const expired = inviteApp({
+        ...pendingClient,
+        CALENDAR_INVITE_EXPIRES_AT: new Date(Date.now() - 1000).toISOString()
+      });
+      const stale = await request(expired.app).get('/public/calendar/invite/viejo');
+      expect(stale.status).toBe(410);
+    });
+
+    it('rejects an unknown link with 404 and an invalid result with 400', async () => {
+      const { app } = inviteApp(null);
+      const missing = await request(app).get('/public/calendar/invite/no-existe');
+      expect(missing.status).toBe(404);
+      const bad = await request(app).get('/public/calendar/result').query({ r: 'garbage' });
+      expect(bad.status).toBe(400);
+    });
+  });
+
   describe('public OAuth callback', () => {
     const CALLBACK = '/configuracion/agenda/oauth/callback';
 

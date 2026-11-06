@@ -1,10 +1,15 @@
+const path = require('path');
 const { verifyState, stateSecret } = require('./oauthState');
 const {
   createCalendarInviteToken,
   calendarInviteFields,
+  calendarInviteStatus,
   calendarInviteUrlFor,
-  inviteResultUrl
+  inviteResultUrl,
+  readInviteResult
 } = require('./invite');
+
+const connectPage = path.join(__dirname, '../../../../public/calendar-conectar.html');
 
 const OAUTH_CALLBACK_PATH = '/configuracion/agenda/oauth/callback';
 
@@ -23,6 +28,12 @@ function redirectUriFor(req, env = process.env) {
 
 function panelUrl(req, clientId, code) {
   return `${appBase(req)}/#/clients/${encodeURIComponent(clientId)}/assistant?calendar=${encodeURIComponent(code)}`;
+}
+
+function httpErr(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 function sendAgendaError(res, error, fallback) {
@@ -133,6 +144,79 @@ function mountAgendaRoutes(app, deps) {
       calendarInviteUrl: calendarInviteUrlFor(req, invite.token),
       calendarInviteExpiresAt: invite.expiresAt
     });
+  });
+
+  async function loadPublicInvite(token) {
+    if (!firebaseService?.getClientByCalendarInviteToken) {
+      throw httpErr('Servicio no disponible', 503);
+    }
+    const client = await firebaseService.getClientByCalendarInviteToken(token);
+    if (!client) throw httpErr('El link no es válido.', 404);
+    const panel = await agendaService.getPanel(client.id);
+    const botName = client.name || client.id;
+    if (panel.connection.status === 'connected' && panel.connection.email) {
+      return { status: 'connected', botName, email: panel.connection.email, clientId: client.id };
+    }
+    const linkStatus = calendarInviteStatus(client);
+    if (linkStatus === 'expired') {
+      throw httpErr('Este link ya venció. Pide uno nuevo a quien administra el bot.', 410);
+    }
+    if (linkStatus !== 'pending') throw httpErr('El link no es válido.', 404);
+    return {
+      status: 'pending',
+      botName,
+      expiresAt: client.CALENDAR_INVITE_EXPIRES_AT || null,
+      oauthConfigured: panel.oauthConfigured,
+      clientId: client.id
+    };
+  }
+
+  // Páginas y API públicas del link de conexión (sin auth admin; el token del link es la credencial).
+  app.get('/calendar/conectar/listo', (_req, res) => {
+    res.sendFile(connectPage);
+  });
+
+  app.get('/calendar/conectar/:token', (_req, res) => {
+    res.sendFile(connectPage);
+  });
+
+  app.get('/public/calendar/result', (req, res) => {
+    const result = readInviteResult(typeof req.query.r === 'string' ? req.query.r : '', stateSecret(process.env));
+    if (!result) {
+      return res.status(400).json({ ok: false, error: 'Este resultado ya no está disponible.' });
+    }
+    res.json({ ok: true, ...result });
+  });
+
+  app.get('/public/calendar/invite/:token', async (req, res) => {
+    try {
+      if (!agendaService) return unavailable(res);
+      const invite = await loadPublicInvite(req.params.token);
+      res.json({
+        ok: true,
+        status: invite.status,
+        botName: invite.botName,
+        email: invite.email || '',
+        expiresAt: invite.expiresAt || null,
+        oauthConfigured: invite.status === 'pending' ? invite.oauthConfigured : true
+      });
+    } catch (error) {
+      sendAgendaError(res, error, 'No se pudo abrir el link');
+    }
+  });
+
+  app.post('/public/calendar/invite/:token/start', async (req, res) => {
+    try {
+      if (!agendaService) return unavailable(res);
+      const invite = await loadPublicInvite(req.params.token);
+      if (invite.status === 'connected') {
+        return res.status(409).json({ ok: false, error: 'Este calendario ya está conectado.' });
+      }
+      const result = await agendaService.beginOAuth(invite.clientId, redirectUriFor(req), { via: 'invite' });
+      res.json({ ok: true, url: result.url });
+    } catch (error) {
+      sendAgendaError(res, error, 'Error iniciando la conexión con Google');
+    }
   });
 
   // Callback público de Google (sin auth admin; se valida con el state firmado).

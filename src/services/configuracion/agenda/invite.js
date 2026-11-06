@@ -6,7 +6,7 @@ const { signState, openSigned, stateSecret } = require('./oauthState');
 const CALENDAR_INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const RESULT_TTL_MS = 15 * 60 * 1000;
 
-// Página pública del invitado: se sigue sirviendo bajo esta ruta hasta el cutover (Task 7).
+// Página pública del invitado: se mantiene la ruta para no invalidar los links ya emitidos.
 const INVITE_PAGE_PATH = '/calendar/conectar';
 
 function hashCalendarInviteToken(token) {
@@ -63,6 +63,24 @@ function calendarInviteFields(invite) {
   };
 }
 
+function redactCalendarInvite(client) {
+  if (!client || typeof client !== 'object') return client;
+  delete client.CALENDAR_INVITE_TOKEN_HASH;
+  return client;
+}
+
+function publicCalendarSummary(panel) {
+  const notice = panel?.adminNotice || null;
+  const email = panel?.connection?.email || '';
+  return {
+    connected: panel?.connection?.status === 'connected' && Boolean(email),
+    email,
+    noticePending: Boolean(notice),
+    noticeEmail: notice?.email || '',
+    noticeAt: notice?.connectedAt || null
+  };
+}
+
 function signInviteResult(payload, secret, now = Date.now()) {
   return signState({ ...payload, exp: now + RESULT_TTL_MS }, secret);
 }
@@ -93,6 +111,8 @@ module.exports = {
   calendarInviteStatus,
   describeCalendarInvite,
   calendarInviteFields,
+  redactCalendarInvite,
+  publicCalendarSummary,
   signInviteResult,
   readInviteResult,
   inviteResultUrl

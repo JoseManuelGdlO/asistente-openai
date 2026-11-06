@@ -1,6 +1,6 @@
 const admin = require('firebase-admin');
 const { hashInviteToken } = require('./metaInviteService');
-const { hashCalendarInviteToken } = require('./calendar/invite');
+const { hashCalendarInviteToken } = require('./configuracion/agenda/invite');
 const { parseAssistantVersionBody, promptExcerpt } = require('./assistantVersionInput');
 const {
   ROOT_COLLECTIONS,
@@ -850,7 +850,6 @@ class FirebaseService {
       if (data.tools !== undefined) allowed.tools = data.tools;
       if (data.config !== undefined) allowed.config = data.config;
       if (data.responseSchema !== undefined) allowed.responseSchema = data.responseSchema;
-      if (data.agendaEngine !== undefined) allowed.agendaEngine = data.agendaEngine;
       allowed.updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
       await assistantRef.update(allowed);

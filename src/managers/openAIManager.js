@@ -1,7 +1,7 @@
 const OpenAI = require('openai');
 const FirebaseService = require('../services/firebaseService');
 
-const { replyOffersAppointmentTime } = require('../services/calendar/tools');
+const { replyOffersAppointmentTime } = require('../services/configuracion/agenda/tools');
 
 const MAX_HISTORY_ITEMS = 40;
 const MAX_TOOL_LOOPS = 3;
@@ -456,7 +456,7 @@ class OpenAIManager {
       args = {};
     }
 
-    if (this.calendarBooking && this.calendarBooking.isCalendarTool(functionName)) {
+    if (this.calendarBooking && this.calendarBooking.isAgendaTool(functionName)) {
       try {
         return await this.calendarBooking.execute(functionName, args, {
           clientId: runContext?.clientId,
@@ -689,7 +689,7 @@ class OpenAIManager {
         ? this.calendarBooking.mergeTools(storedTools, calendarToolDefs)
         : storedTools;
       const visibleTools = this.calendarBooking && !calendarRuntime?.ready
-        ? allTools.filter((tool) => !this.calendarBooking.isCalendarTool(tool?.name || tool?.function?.name))
+        ? allTools.filter((tool) => !this.calendarBooking.isAgendaTool(tool?.name || tool?.function?.name))
         : allTools;
       const canOfferPdf = await this.canOfferEnviarPdf(
         message,

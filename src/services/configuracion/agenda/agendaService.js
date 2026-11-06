@@ -22,6 +22,7 @@ const {
   interpretSlotStart,
   fitsHours
 } = require('./time');
+const { publicCalendarSummary } = require('./invite');
 const { isAgendaTool, toolDefinitions, mergeTools, buildInstructions } = require('./tools');
 
 const OAUTH_TTL_MS = 10 * 60 * 1000;
@@ -117,6 +118,11 @@ class AgendaService {
 
   async getPanel(clientId) {
     return this.toPanel(await this.settingsStore.getRaw(clientId));
+  }
+
+  /** Resumen mínimo para el listado de clientes. */
+  async publicSummary(clientId) {
+    return publicCalendarSummary(await this.getPanel(clientId));
   }
 
   async loadRuntime(clientId) {
