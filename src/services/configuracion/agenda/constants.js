@@ -32,6 +32,22 @@ const MAX_EXCEPTIONS = 366;
 /** Estados de cita que ya no ocupan lugar en la agenda. */
 const NON_BLOCKING_STATUSES = Object.freeze(['cancelled', 'canceled', 'rescheduled', 'expired']);
 
+/** Espera (ms) antes de reintentar sincronizar con Google; el último paso se repite. */
+const SYNC_BACKOFF_MS = Object.freeze([
+  30 * 1000,
+  60 * 1000,
+  2 * 60 * 1000,
+  5 * 60 * 1000,
+  10 * 60 * 1000,
+  30 * 60 * 1000,
+  60 * 60 * 1000,
+  2 * 60 * 60 * 1000,
+  4 * 60 * 60 * 1000,
+  8 * 60 * 60 * 1000,
+  12 * 60 * 60 * 1000,
+  24 * 60 * 60 * 1000
+]);
+
 function defaultRules() {
   return {
     minNoticeMinutes: 60,
@@ -64,6 +80,7 @@ module.exports = {
   MAX_SERVICES,
   MAX_EXCEPTIONS,
   NON_BLOCKING_STATUSES,
+  SYNC_BACKOFF_MS,
   defaultRules,
   defaultHours
 };
