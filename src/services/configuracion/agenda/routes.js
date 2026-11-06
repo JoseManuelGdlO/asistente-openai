@@ -12,6 +12,7 @@ const {
 const connectPage = path.join(__dirname, '../../../../public/calendar-conectar.html');
 
 const OAUTH_CALLBACK_PATH = '/configuracion/agenda/oauth/callback';
+const LEGACY_OAUTH_CALLBACK_PATH = '/calendar/oauth/callback';
 
 function appBase(req, env = process.env) {
   const configured = env.APP_BASE_URL || env.PUBLIC_BASE_URL || '';
@@ -220,7 +221,9 @@ function mountAgendaRoutes(app, deps) {
   });
 
   // Callback público de Google (sin auth admin; se valida con el state firmado).
-  app.get(OAUTH_CALLBACK_PATH, async (req, res) => {
+  // También se expone en la ruta legada /calendar/oauth/callback para que los
+  // GOOGLE_CALENDAR_REDIRECT_URI existentes sigan funcionando.
+  app.get([OAUTH_CALLBACK_PATH, LEGACY_OAUTH_CALLBACK_PATH], async (req, res) => {
     if (!agendaService) return unavailable(res);
     const queryError = typeof req.query.error === 'string' ? req.query.error : '';
     const state = typeof req.query.state === 'string' ? req.query.state : '';

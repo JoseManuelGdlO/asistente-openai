@@ -288,6 +288,19 @@ describe('API configuracion agenda', () => {
       expect(res.status).toBe(400);
     });
 
+    it('serves the legacy /calendar/oauth/callback alias with the same handler', async () => {
+      const { app } = agendaApp();
+      const bad = await request(app).get('/calendar/oauth/callback?state=bad&code=x');
+      expect(bad.status).toBe(400);
+      const state = signState(
+        { clientId: 'C1', nonce: 'n1', exp: Date.now() + 60000, via: 'panel' },
+        stateSecret(process.env)
+      );
+      const res = await request(app).get(`/calendar/oauth/callback?error=access_denied&state=${encodeURIComponent(state)}`);
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toContain('/#/clients/C1/assistant?calendar=denied');
+    });
+
     it('redirects to the panel with denied when the user refuses (panel flow)', async () => {
       const { app } = agendaApp();
       const state = signState(
