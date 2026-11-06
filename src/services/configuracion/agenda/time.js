@@ -124,7 +124,88 @@ function dayWindows({ date, hours, exceptions }) {
   };
 }
 
+const LOCAL_DATETIME_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
+const EXPLICIT_ZONE_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+function hasExplicitZone(value) {
+  return typeof value === 'string' && EXPLICIT_ZONE_RE.test(value.trim());
+}
+
+function sameMonthDayInYear(dateStr, year) {
+  const match = String(dateStr).match(/^\d{4}-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const candidate = `${year}-${match[1]}-${match[2]}`;
+  const [y, m, d] = candidate.split('-').map(Number);
+  const check = new Date(Date.UTC(y, m - 1, d));
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== d) return null;
+  return candidate;
+}
+
+/**
+ * Una fecha anterior a hoy con otro año se mueve al mismo mes y día de este año
+ * (o del siguiente si ya pasó). El mismo año se deja como pasado para que el llamador lo rechace.
+ */
+function rollPastDate(dateStr, today) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return null;
+  if (dateStr >= today) return { date: dateStr, correctedFrom: null, past: false };
+  if (dateStr.slice(0, 4) === today.slice(0, 4)) {
+    return { date: dateStr, correctedFrom: null, past: true };
+  }
+  const year = Number(today.slice(0, 4));
+  let rolled = sameMonthDayInYear(dateStr, year);
+  if (!rolled || rolled < today) rolled = sameMonthDayInYear(dateStr, year + 1);
+  if (!rolled) return { date: dateStr, correctedFrom: null, past: true };
+  return { date: rolled, correctedFrom: dateStr, past: false };
+}
+
+function parseLocalDateTime(value, timeZone) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const local = value.trim().match(LOCAL_DATETIME_RE);
+  if (!local) return null;
+  return zonedToUtc(local[1], local[2], timeZone);
+}
+
+/**
+ * Acepta la hora local con o sin segundos, y también un ISO con Z o desfase
+ * (instante real). Sin zona, la hora del reloj se lee en la zona de la agenda.
+ */
+function interpretSlotStart(value, timeZone) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = value.trim();
+  if (hasExplicitZone(text)) {
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const wall = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/);
+  if (!wall) return null;
+  return zonedToUtc(wall[1], wall[2], timeZone);
+}
+
+function clockMinutes(value) {
+  const [hour, minute] = String(value || '').split(':');
+  return (Number(hour) * 60) + Number(minute);
+}
+
+/** ¿[startUtc, endUtc] cabe completo en una ventana de atención de ese día (excepciones incluidas)? */
+function fitsHours(startUtc, endUtc, { hours, exceptions = [], timeZone }) {
+  const date = localDate(startUtc, timeZone);
+  if (date !== localDate(endUtc, timeZone)) return false;
+  const { intervals } = dayWindows({ date, hours, exceptions });
+  const startParts = formatParts(startUtc, timeZone);
+  const endParts = formatParts(endUtc, timeZone);
+  const startMin = (Number(startParts.hour) * 60) + Number(startParts.minute);
+  const endMin = (Number(endParts.hour) * 60) + Number(endParts.minute);
+  return intervals.some((interval) => (
+    startMin >= clockMinutes(interval.start) && endMin <= clockMinutes(interval.end)
+  ));
+}
+
 module.exports = {
+  hasExplicitZone,
+  rollPastDate,
+  parseLocalDateTime,
+  interpretSlotStart,
+  fitsHours,
   WEEKDAY_KEYS,
   formatParts,
   zonedToUtc,

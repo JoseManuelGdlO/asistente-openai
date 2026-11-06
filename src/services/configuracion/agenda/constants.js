@@ -71,7 +71,20 @@ function defaultHours() {
   return hours;
 }
 
+/** Orígenes que escriben en la agenda real; playground solo con playgroundWriteEnabled. */
+const LIVE_ORIGINS = new Set(['meta', 'ultramsg', 'own']);
+
+const AGENDA_TOOL_NAMES = Object.freeze([
+  'listBookingServices',
+  'getAvailableSlots',
+  'createAppointment',
+  'rescheduleAppointment',
+  'cancelAppointment'
+]);
+
 module.exports = {
+  LIVE_ORIGINS,
+  AGENDA_TOOL_NAMES,
   DEFAULT_TIMEZONE,
   WEEKDAYS,
   TIMEZONES,
