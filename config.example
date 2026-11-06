@@ -17,5 +17,12 @@ META_SYSTEM_USER_TOKEN=
 CREDENTIALS_ENCRYPTION_KEY=replace-with-a-long-random-string
 PUBLIC_BASE_URL=https://tu-dominio.example
 
+# Google Calendar (Configuración → Agendar citas)
+GOOGLE_CALENDAR_CLIENT_ID=
+GOOGLE_CALENDAR_CLIENT_SECRET=
+# Opcional. Si se omite: ${PUBLIC_BASE_URL}/configuracion/agenda/oauth/callback
+# Registra esa URI en Google Cloud Console (el alias legado /calendar/oauth/callback sigue activo).
+GOOGLE_CALENDAR_REDIRECT_URI=
+
 # Server Configuration
 PORT=3000
