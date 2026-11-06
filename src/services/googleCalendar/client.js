@@ -106,6 +106,19 @@ class GoogleCalendarClient {
     }
   }
 
+  /** Revoca el refresh token en Google (mejor esfuerzo; el llamador ignora fallos). */
+  async revoke(refreshToken) {
+    try {
+      const body = new URLSearchParams({ token: refreshToken });
+      await axios.post('https://oauth2.googleapis.com/revoke', body.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 15000
+      });
+    } catch (error) {
+      throw mapAxiosError(error);
+    }
+  }
+
   async userEmail(token) {
     try {
       const res = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {

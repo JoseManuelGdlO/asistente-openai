@@ -68,6 +68,21 @@ describe('API configuracion agenda', () => {
     expect(saved.body.agenda.hours.monday.intervals).toEqual([{ start: '09:00', end: '12:00' }]);
   });
 
+  it('exposes sync errors of failed appointments on the panel payload', async () => {
+    const { app, agendaService } = agendaApp();
+    await agendaService.appointmentsStore.runTransaction('C1', async (tx) => {
+      tx.set('apt_f', {
+        id: 'apt_f', serviceId: 'svc', start: '2026-11-09T15:00:00.000Z', end: '2026-11-09T15:30:00.000Z',
+        status: 'confirmed', sync: 'failed', eventId: '', syncAttempts: 12, lastSyncError: 'Google 500',
+        updatedAt: '2026-11-09T10:00:00.000Z'
+      });
+    });
+    const res = await request(app).get(BASE).set(authHeader());
+    expect(res.status).toBe(200);
+    expect(res.body.agenda.lastSyncError).toBe('Google 500');
+    expect(res.body.agenda.syncIssues).toEqual({ retryCount: 0, failedCount: 1, lastError: 'Google 500' });
+  });
+
   it('rejects invalid settings with 400', async () => {
     const { app } = agendaApp();
     const res = await request(app)

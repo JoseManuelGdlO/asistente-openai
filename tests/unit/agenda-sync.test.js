@@ -137,6 +137,49 @@ describe('agenda sync', () => {
     expect(saved.sync).toBe('pending');
   });
 
+  it('skips a stale pending snapshot when the immediate sync already created the event', async () => {
+    const store = new MemoryAppointmentsStore();
+    const stale = baseApt({ id: 'apt_race' });
+    await seed(store, stale);
+    const google = {
+      createEvent: jest.fn().mockResolvedValueOnce({ id: 'ev1' }).mockResolvedValueOnce({ id: 'ev2' }),
+      updateEvent: jest.fn(),
+      deleteEvent: jest.fn()
+    };
+    // Sync inmediato post-reserva: crea ev1 y deja la fila synced.
+    await syncOneAppointment(args(store, { ...stale }, google));
+    expect((await store.get('C1', 'apt_race')).eventId).toBe('ev1');
+    // El worker llega después con el snapshot viejo (pending, sin eventId).
+    const result = await syncOneAppointment(args(store, { ...stale }, google));
+    expect(result.skipped).toBe(true);
+    expect(google.createEvent).toHaveBeenCalledTimes(1);
+    const saved = await store.get('C1', 'apt_race');
+    expect(saved.eventId).toBe('ev1');
+    expect(saved.sync).toBe('synced');
+  });
+
+  it('does not overwrite a newer synced row when another sync finishes during the create', async () => {
+    const store = new MemoryAppointmentsStore();
+    const stale = baseApt({ id: 'apt_race2' });
+    await seed(store, stale);
+    const google = {
+      createEvent: jest.fn().mockImplementation(async () => {
+        // Una sincronización paralela (otro proceso) termina mientras se espera a Google.
+        await store.update('C1', 'apt_race2', { sync: 'synced', eventId: 'ev1' });
+        return { id: 'ev2' };
+      }),
+      deleteEvent: jest.fn().mockResolvedValue(undefined)
+    };
+    const result = await syncOneAppointment(args(store, { ...stale }, google));
+    expect(result.ok).toBe(false);
+    expect(result.skipped).toBe(true);
+    const saved = await store.get('C1', 'apt_race2');
+    expect(saved.eventId).toBe('ev1');
+    expect(saved.sync).toBe('synced');
+    // El evento duplicado recién creado se limpia en Google.
+    expect(google.deleteEvent).toHaveBeenCalledWith('t', 'primary', 'ev2');
+  });
+
   it('stops retrying after MAX_SYNC_ATTEMPTS', async () => {
     const store = new MemoryAppointmentsStore();
     const apt = baseApt({ id: 'apt_8', sync: 'retry', syncAttempts: MAX_SYNC_ATTEMPTS - 1 });

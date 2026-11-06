@@ -314,7 +314,14 @@
       const phaseBadge = PHASE_BADGES[state.phase] || 'badge-muted';
       const missing = (state.missing || []).map((key) => MISSING_LABELS[key]).filter(Boolean);
       const timezones = TIMEZONES.includes(state.timezone) ? TIMEZONES : [state.timezone].concat(TIMEZONES);
+      const issues = state.syncIssues || {};
       const syncError = state.lastSyncError || '';
+      const retryCount = Number(issues.retryCount) || 0;
+      const failedCount = Number(issues.failedCount) || 0;
+      const syncParts = [];
+      if (failedCount) syncParts.push(`${failedCount} sin copiar al calendario tras varios intentos`);
+      if (retryCount) syncParts.push(`${retryCount} reintentando`);
+      const syncSummary = syncParts.length ? ` (${syncParts.join(', ')})` : '';
       const ready = Boolean(state.ready);
       container.innerHTML = `
         <section class="card stack calendar-card" data-agenda-form>
@@ -324,7 +331,7 @@
           ${missing.length && state.enabled ? `
             <ul class="calendar-missing">${missing.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
           ` : ''}
-          ${syncError ? `<p class="calendar-warning">Error de sincronización con Google: ${escapeHtml(syncError)}</p>` : ''}
+          ${syncError || syncSummary ? `<p class="calendar-warning">Error de sincronización con Google${escapeHtml(syncSummary)}${syncError ? `: ${escapeHtml(syncError)}` : ''}. Las citas siguen confirmadas.</p>` : ''}
           ${state.adminNotice ? `
             <div class="notice-banner stack">
               <p>El cliente conectó Google Calendar${state.adminNotice.email ? `: ${escapeHtml(state.adminNotice.email)}` : ''}.</p>

@@ -33,7 +33,7 @@ class Scheduler {
     // Limpieza diaria de webhook_dedup expirados (3:00 AM)
     this.scheduleWebhookDedupCleanup();
 
-    // Sync de citas agenda v2 con Google Calendar (cada 2 minutos)
+    // Sync de citas agenda con Google Calendar (cada 2 minutos)
     this.scheduleAgendaSync();
     
     console.log('✅ Tareas programadas inicializadas');
@@ -45,14 +45,14 @@ class Scheduler {
       try {
         await this.agendaSyncHandler();
       } catch (error) {
-        console.error('❌ Error en sync de agenda v2:', error.message);
+        console.error('❌ Error en sync de agenda:', error.message);
       }
     }, {
       scheduled: true,
       timezone: 'America/Mexico_City'
     });
     this.tasks.set('agendaSync', task);
-    console.log('📅 Sync agenda v2 programado cada 2 minutos');
+    console.log('📅 Sync agenda programado cada 2 minutos');
   }
 
   // Programar envío de agenda diaria a las 10:00 AM

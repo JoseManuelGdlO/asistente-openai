@@ -359,6 +359,28 @@ describe('agenda service panel and sync', () => {
     expect((await appointmentsStore.get(CLIENT, booked.appointmentId)).eventId).toBe('g2');
   });
 
+  it('getPanel exposes sync issues from retry and failed appointments', async () => {
+    const { service, appointmentsStore } = await setup();
+    const clean = await service.getPanel(CLIENT);
+    expect(clean.syncIssues).toEqual({ retryCount: 0, failedCount: 0, lastError: '' });
+    expect(clean.lastSyncError).toBe('');
+
+    const row = (id, sync, lastSyncError, updatedAt) => ({
+      id, serviceId: 'svc_a', start: SLOT_10_START, end: SLOT_10_END, status: 'confirmed',
+      sync, eventId: '', syncAttempts: 3, lastSyncError, updatedAt
+    });
+    await appointmentsStore.runTransaction(CLIENT, async (tx) => {
+      tx.set('a1', row('a1', 'retry', 'Google timeout', '2026-11-09T10:00:00.000Z'));
+      tx.set('a2', row('a2', 'failed', 'Sin permiso', '2026-11-09T11:00:00.000Z'));
+      tx.set('a3', row('a3', 'synced', '', '2026-11-09T11:30:00.000Z'));
+    });
+    const panel = await service.getPanel(CLIENT);
+    expect(panel.syncIssues).toEqual({ retryCount: 1, failedCount: 1, lastError: 'Sin permiso' });
+    expect(panel.lastSyncError).toBe('Sin permiso');
+    // las respuestas de mutación también lo incluyen
+    expect((await service.setEnabled(CLIENT, true)).lastSyncError).toBe('Sin permiso');
+  });
+
   it('saveAgenda validates and persists, toPanel hides secrets', async () => {
     const { service } = await setup();
     const panel = await service.saveAgenda(CLIENT, {

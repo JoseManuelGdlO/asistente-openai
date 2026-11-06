@@ -86,9 +86,12 @@ class AgendaService {
   buildInstructions(runtime) { return buildInstructions(runtime); }
 
   // ── Panel ───────────────────────────────────────────────────────────────
-  toPanel(doc) {
+  toPanel(doc, syncIssues = null) {
     const phase = describePhase(doc);
+    const issues = syncIssues || { retryCount: 0, failedCount: 0, lastError: '' };
     return {
+      syncIssues: issues,
+      lastSyncError: issues.lastError || '',
       enabled: doc.enabled === true,
       phase: phase.phase,
       phaseLabel: phase.label,
@@ -116,8 +119,30 @@ class AgendaService {
     };
   }
 
+  /** Citas en retry/failed: el dueño las ve en el panel aunque la reserva siga confirmada. */
+  async loadSyncIssues(clientId) {
+    const empty = { retryCount: 0, failedCount: 0, lastError: '' };
+    if (typeof this.appointmentsStore?.listSyncIssues !== 'function') return empty;
+    const rows = await this.appointmentsStore.listSyncIssues(clientId);
+    let latest = null;
+    for (const row of rows) {
+      if (row.sync === 'retry') empty.retryCount += 1;
+      if (row.sync === 'failed') empty.failedCount += 1;
+      if (!row.lastSyncError) continue;
+      const at = Date.parse(row.updatedAt) || 0;
+      if (!latest || at >= latest.at) latest = { at, error: row.lastSyncError };
+    }
+    empty.lastError = latest?.error || '';
+    return empty;
+  }
+
+  /** Panel completo (incluye errores de sync). Toda respuesta al panel pasa por aquí. */
+  async panelFor(clientId, doc) {
+    return this.toPanel(doc, await this.loadSyncIssues(clientId));
+  }
+
   async getPanel(clientId) {
-    return this.toPanel(await this.settingsStore.getRaw(clientId));
+    return this.panelFor(clientId, await this.settingsStore.getRaw(clientId));
   }
 
   /** Resumen mínimo para el listado de clientes. */
@@ -148,7 +173,7 @@ class AgendaService {
 
   async setEnabled(clientId, enabled) {
     const saved = await this.settingsStore.transaction(clientId, (doc) => ({ ...doc, enabled: Boolean(enabled) }));
-    return this.toPanel(saved);
+    return this.panelFor(clientId, saved);
   }
 
   async setPlaygroundWrite(clientId, enabled) {
@@ -156,7 +181,7 @@ class AgendaService {
       ...doc,
       playgroundWriteEnabled: Boolean(enabled)
     }));
-    return this.toPanel(saved);
+    return this.panelFor(clientId, saved);
   }
 
   async saveAgenda(clientId, input) {
@@ -178,7 +203,7 @@ class AgendaService {
           : doc.connection.calendarSummary
       }
     }));
-    return this.toPanel(saved);
+    return this.panelFor(clientId, saved);
   }
 
   async selectCalendar(clientId, input) {
@@ -194,12 +219,12 @@ class AgendaService {
         connection: { ...doc.connection, calendarId, calendarSummary: calendarSummary || calendarId }
       };
     });
-    return this.toPanel(saved);
+    return this.panelFor(clientId, saved);
   }
 
   async dismissNotice(clientId) {
     const saved = await this.settingsStore.transaction(clientId, (doc) => ({ ...doc, adminNotice: null }));
-    return this.toPanel(saved);
+    return this.panelFor(clientId, saved);
   }
 
   // ── OAuth y tokens ──────────────────────────────────────────────────────
@@ -300,7 +325,7 @@ class AgendaService {
         lastError: ''
       }
     }));
-    return this.toPanel(saved);
+    return this.panelFor(clientId, saved);
   }
 
   async listCalendars(clientId) {

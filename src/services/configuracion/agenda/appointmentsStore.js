@@ -1,4 +1,5 @@
 const SYNC_PENDING = ['pending', 'retry'];
+const SYNC_ISSUE = ['retry', 'failed'];
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -75,6 +76,12 @@ class MemoryAppointmentsStore {
   async listSyncDue(clientId, nowMs = Date.now()) {
     const rows = [...(this.items.get(clientId)?.values() || [])];
     return rows.filter((row) => isSyncDue(row, nowMs)).map(clone);
+  }
+
+  /** Filas con sync en retry/failed (errores visibles en el panel). */
+  async listSyncIssues(clientId) {
+    const rows = [...(this.items.get(clientId)?.values() || [])];
+    return rows.filter((row) => SYNC_ISSUE.includes(row.sync)).map(clone);
   }
 
   async listAllClientIds() {
@@ -158,6 +165,11 @@ class FirestoreAppointmentsStore {
     return snap.docs
       .map((doc) => normalizeAppointment(doc.id, doc.data()))
       .filter((row) => row && isSyncDue(row, nowMs));
+  }
+
+  async listSyncIssues(clientId) {
+    const snap = await this._items(clientId).where('sync', 'in', SYNC_ISSUE).get();
+    return snap.docs.map((doc) => normalizeAppointment(doc.id, doc.data())).filter(Boolean);
   }
 
   /** Incluye clientes cuyo doc padre no existe (solo tienen subcolección items). */

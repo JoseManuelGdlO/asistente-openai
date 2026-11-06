@@ -6,6 +6,8 @@ const MAX_ERROR_LENGTH = 300;
 /** Claves clientId:appointmentId en curso dentro de este proceso (evita eventos duplicados). */
 const inFlight = new Set();
 
+const SYNCABLE = new Set(['pending', 'retry']);
+
 function nextSyncBackoffMs(attemptIndex) {
   const last = SYNC_BACKOFF_MS.length - 1;
   const index = Math.min(Math.max(Number(attemptIndex) || 0, 0), last);
@@ -59,24 +61,31 @@ function eventBody({ service, appointment, timeZone, clientId }) {
 /**
  * Persiste el resultado dentro de una transacción. Si la cita cambió mientras se hablaba con Google
  * (cancelada o reprogramada), no se marca synced: queda pending para que la siguiente pasada la reconcilie.
+ *
+ * Conflicto: otra sincronización ya resolvió la fila (cambió el eventId o dejó de estar pending/retry).
+ * En ese caso no se escribe nada: un resultado viejo nunca pisa una fila más nueva.
+ * Devuelve { row, conflict }.
  */
 async function writeOutcome({ appointmentsStore, clientId, appointment, build }) {
   return appointmentsStore.runTransaction(clientId, async (tx) => {
     const current = await tx.get(appointment.id);
-    if (!current) return null;
+    if (!current) return { row: null, conflict: false };
+    const conflict = (current.eventId || '') !== (appointment.eventId || '')
+      || !SYNCABLE.has(current.sync);
+    if (conflict) return { row: current, conflict: true };
     const changed = !sameSlot(current, appointment);
     const patch = build(current, changed);
-    if (!patch) return current;
+    if (!patch) return { row: current, conflict: false };
     const next = { ...current, ...patch, id: appointment.id, updatedAt: new Date().toISOString() };
     tx.set(appointment.id, next);
-    return next;
+    return { row: next, conflict: false };
   });
 }
 
 const PENDING_AGAIN = { sync: 'pending', syncAttempts: 0, nextRetryAt: null, lastSyncError: '' };
 
 async function markSynced(ctx, eventId) {
-  await writeOutcome({
+  return writeOutcome({
     ...ctx,
     build: (current, changed) => {
       if (changed) return { ...PENDING_AGAIN, eventId };
@@ -124,8 +133,14 @@ async function syncOneAppointment({
   const key = `${clientId}:${appointment.id}`;
   if (inFlight.has(key)) return { ok: false, skipped: true };
   inFlight.add(key);
-  const ctx = { appointmentsStore, clientId, appointment };
+  let ctx = { appointmentsStore, clientId, appointment };
   try {
+    // El snapshot de la cola puede estar viejo (otra sincronización pudo resolver la fila): se relee.
+    const fresh = await appointmentsStore.get(clientId, appointment.id);
+    if (!fresh) return { ok: false, skipped: true, reason: 'missing' };
+    if (!SYNCABLE.has(fresh.sync)) return { ok: false, skipped: true, reason: 'not_pending' };
+    appointment = fresh;
+    ctx = { appointmentsStore, clientId, appointment };
     const eventId = appointment.eventId || '';
 
     if (appointment.status === 'cancelled') {
@@ -163,7 +178,18 @@ async function syncOneAppointment({
       savedId = created?.id || '';
     }
     if (!savedId) throw new Error('Google no devolvió el id del evento');
-    await markSynced(ctx, savedId);
+    const outcome = await markSynced(ctx, savedId);
+    if (outcome?.conflict) {
+      // Otra sincronización ya resolvió la fila: el evento recién creado quedaría huérfano.
+      if (action === 'created' && savedId !== (outcome.row?.eventId || '')) {
+        try {
+          await google.deleteEvent(token, calendarId, savedId);
+        } catch (_error) {
+          // Mejor esfuerzo: no debe tumbar la sincronización.
+        }
+      }
+      return { ok: false, skipped: true, reason: 'conflict' };
+    }
     return { ok: true, action, eventId: savedId };
   } catch (error) {
     try {
@@ -217,6 +243,7 @@ async function processClientSyncQueue({
         google, token: null, calendarId: '', timeZone: '', clientId, service: null,
         appointment: row, appointmentsStore, nowMs: at
       });
+      if (out.skipped) continue;
       result.processed += 1;
       if (out.ok) result.synced += 1;
     } else {
