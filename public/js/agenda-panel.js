@@ -32,6 +32,7 @@
     let inviteUrl = initialInviteUrl || '';
     let calendars = null;
     let busy = false;
+    let destroyed = false;
 
     const path = (suffix = '') => `/clients/${encodeURIComponent(clientId)}/configuracion/agenda${suffix}`;
 
@@ -159,7 +160,9 @@
     }
 
     async function load() {
+      if (destroyed) return;
       const res = await api(path());
+      if (destroyed) return;
       state = res.agenda;
       render();
       if (onState) onState(state);
@@ -303,6 +306,7 @@
     }
 
     function render() {
+      if (destroyed) return;
       if (!state) {
         container.innerHTML = '<section class="card stack"><p class="muted">Cargando agenda…</p></section>';
         return;
@@ -572,11 +576,18 @@
     return {
       /** Sincroniza el panel cuando otra parte de la UI cambió la agenda (p. ej. el playground). */
       setState(agenda) {
-        if (!agenda) return;
+        if (destroyed || !agenda) return;
         syncFromDom();
         const { timezone, hours, services, exceptions, rules } = state || agenda;
         state = { ...agenda, timezone, hours, services, exceptions, rules };
         render();
+      },
+      /** Marca el panel como destruido: render/load/setState pasan a ser no-ops. */
+      destroy() {
+        destroyed = true;
+      },
+      isDestroyed() {
+        return destroyed;
       }
     };
   }

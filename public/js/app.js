@@ -1785,6 +1785,10 @@
       window.ConfiguracionHub.mount(document.getElementById('configuracion-mount'), {
         // Al volver de Google (?calendar=...) se abre la agenda directamente.
         autoOpen: Boolean(notice && calendarNotices[notice]),
+        onCloseAgenda: () => {
+          if (agendaPanel && typeof agendaPanel.destroy === 'function') agendaPanel.destroy();
+          agendaPanel = null;
+        },
         onOpenAgenda: (slot) => {
           if (!slot || !window.AgendaPanel) return;
           agendaPanel = window.AgendaPanel.mount(slot, {
@@ -1830,7 +1834,9 @@
           body: { enabled: next }
         });
         applyPlaygroundCalendar(res.agenda);
-        if (agendaPanel) agendaPanel.setState(res.agenda);
+        if (agendaPanel && !(typeof agendaPanel.isDestroyed === 'function' && agendaPanel.isDestroyed())) {
+          agendaPanel.setState(res.agenda);
+        }
       } catch (err) {
         event.target.checked = !next;
         if (handleLostEditLock(document.getElementById('form-flash'), err)) return;

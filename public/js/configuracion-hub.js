@@ -1,6 +1,6 @@
 (function () {
   function mount(container, options) {
-    const { onOpenAgenda, autoOpen = false } = options || {};
+    const { onOpenAgenda, onCloseAgenda, autoOpen = false } = options || {};
     if (!container) return;
 
     container.innerHTML = `
@@ -22,6 +22,7 @@
       open = !open;
       button.setAttribute('aria-expanded', String(open));
       if (!open) {
+        if (typeof onCloseAgenda === 'function') onCloseAgenda();
         slot.innerHTML = '';
         return;
       }
