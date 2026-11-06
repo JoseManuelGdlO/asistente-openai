@@ -118,10 +118,7 @@ function createStubDeps(overrides = {}) {
     firebaseService,
     commandManager,
     metaSignup: overrides.metaSignup,
-    calendarService: overrides.calendarService || null,
-    agendaService: overrides.agendaService || null,
-    resolveAgendaEngine: overrides.resolveAgendaEngine || null,
-    migrateAgendaClient: overrides.migrateAgendaClient || null
+    calendarService: overrides.calendarService || null
   };
 }
 

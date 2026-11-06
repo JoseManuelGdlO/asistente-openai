@@ -41,8 +41,6 @@ function sendCalendarError(res, error, fallback) {
 function mountCalendarRoutes(app, deps) {
   const {
     calendarService,
-    agendaService,
-    resolveAgendaEngine,
     requireAdminAuth,
     requireEditLock,
     commandManager,
@@ -50,14 +48,6 @@ function mountCalendarRoutes(app, deps) {
   } = deps;
 
   async function oauthServiceFor(clientId) {
-    if (agendaService && typeof resolveAgendaEngine === 'function') {
-      try {
-        const engine = await resolveAgendaEngine(clientId);
-        if (engine === 'v2') return agendaService;
-      } catch (_error) {
-        // fallback calendar
-      }
-    }
     return calendarService;
   }
 
@@ -182,7 +172,7 @@ function mountCalendarRoutes(app, deps) {
   });
 
   app.get('/calendar/oauth/callback', async (req, res) => {
-    if (!calendarService && !agendaService) return unavailable(res);
+    if (!calendarService) return unavailable(res);
     const queryError = typeof req.query.error === 'string' ? req.query.error : '';
     const state = typeof req.query.state === 'string' ? req.query.state : '';
     const payload = verifyState(state, stateSecret(process.env));

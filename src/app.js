@@ -29,7 +29,6 @@ const { parseAssistantVersionBody } = require('./services/assistantVersionInput'
 const { sendHttpError } = require('./utils/httpError');
 const { describeFirestoreTarget } = require('./services/firestoreEnv');
 const { mountCalendarRoutes } = require('./services/calendar/routes');
-const { mountAgendaRoutes } = require('./services/configuracion/agenda/routes');
 const { mountBlacklistRoutes } = require('./services/blacklist/routes');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
@@ -692,13 +691,6 @@ function createApp(deps = {}) {
 
   async function calendarSummary(clientId) {
     let service = deps.calendarService || null;
-    if (deps.agendaService && typeof deps.resolveAgendaEngine === 'function') {
-      try {
-        if ((await deps.resolveAgendaEngine(clientId)) === 'v2') service = deps.agendaService;
-      } catch (_error) {
-        // keep calendar
-      }
-    }
     if (!service || typeof service.publicSummary !== 'function') return null;
     try {
       return await service.publicSummary(clientId);
@@ -1826,20 +1818,10 @@ function createApp(deps = {}) {
 
   mountCalendarRoutes(app, {
     calendarService: deps.calendarService || null,
-    agendaService: deps.agendaService || null,
-    resolveAgendaEngine: deps.resolveAgendaEngine || null,
     requireAdminAuth,
     requireEditLock: (req, res, clientId) => requireEditLockHolder(firebaseService, req, res, clientId),
     commandManager,
     firebaseService
-  });
-
-  mountAgendaRoutes(app, {
-    agendaService: deps.agendaService || null,
-    migrateClient: deps.migrateAgendaClient || null,
-    requireAdminAuth,
-    requireEditLock: (req, res, clientId) => requireEditLockHolder(firebaseService, req, res, clientId),
-    commandManager
   });
 
   mountBlacklistRoutes(app, {

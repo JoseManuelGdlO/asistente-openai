@@ -23,47 +23,11 @@ const userContextManager = new UserContextManager();
 const documentStore = new DocumentStore();
 const openAIManager = new OpenAIManager();
 const { createCalendarService } = require('./services/calendar/createCalendarService');
-const { createAgendaService } = require('./services/configuracion/agenda/createAgendaService');
-const { BookingRouter } = require('./services/configuracion/agenda/bookingRouter');
-const { migrateClient } = require('./services/configuracion/agenda/migrate');
-const { FirestoreCalendarStore } = require('./services/calendar/firestoreStore');
 
 const calendarService = createCalendarService({
   firebaseService: openAIManager.firebaseService
 });
-const agendaService = createAgendaService({
-  firebaseService: openAIManager.firebaseService
-});
-
-async function resolveAgendaEngine(clientId) {
-  try {
-    const snap = await openAIManager.firebaseService.assistantsCollection.doc(clientId).get();
-    if (snap.exists && snap.data()?.agendaEngine === 'v2') return 'v2';
-  } catch (_error) {
-    // default v1
-  }
-  return 'v1';
-}
-
-const bookingRouter = new BookingRouter({
-  v1: calendarService,
-  v2: agendaService,
-  resolveEngine: resolveAgendaEngine
-});
-openAIManager.calendarBooking = bookingRouter;
-
-async function migrateAgendaClient(clientId) {
-  const calendarStore = new FirestoreCalendarStore(openAIManager.firebaseService);
-  return migrateClient({
-    clientId,
-    calendarStore,
-    settingsStore: agendaService.settingsStore,
-    appointmentsStore: agendaService.appointmentsStore,
-    setAgendaEngine: async (id, engine) => {
-      await openAIManager.firebaseService.updateAssistant(id, { agendaEngine: engine });
-    }
-  });
-}
+openAIManager.calendarBooking = calendarService;
 
 const webhookManager = new WebhookManager(
   ultraMsgManager,
@@ -74,7 +38,8 @@ const webhookManager = new WebhookManager(
 );
 const schedulerController = new SchedulerController(scheduler);
 webhookManager.debounceManager.startSweep();
-scheduler.setAgendaSyncHandler(() => bookingRouter.processSyncQueue());
+// Sync de agenda: se reconecta en el cutover de la nueva agenda (Task 7/8).
+scheduler.setAgendaSyncHandler(null);
 
 async function reinitUltraMsgInstances() {
   console.log('🔄 Re-inicializando instancias UltraMsg...');
@@ -89,10 +54,7 @@ const app = createApp({
   schedulerController,
   documentStore,
   reinitUltraMsgInstances,
-  calendarService,
-  agendaService,
-  resolveAgendaEngine,
-  migrateAgendaClient
+  calendarService
 });
 
 async function autoReloadClients() {
