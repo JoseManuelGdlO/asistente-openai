@@ -29,6 +29,7 @@ const { parseAssistantVersionBody } = require('./services/assistantVersionInput'
 const { sendHttpError } = require('./utils/httpError');
 const { describeFirestoreTarget } = require('./services/firestoreEnv');
 const { mountCalendarRoutes } = require('./services/calendar/routes');
+const { mountAgendaRoutes } = require('./services/configuracion/agenda/routes');
 const { mountBlacklistRoutes } = require('./services/blacklist/routes');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
@@ -1823,6 +1824,16 @@ function createApp(deps = {}) {
     commandManager,
     firebaseService
   });
+
+  if (deps.agendaService) {
+    mountAgendaRoutes(app, {
+      agendaService: deps.agendaService,
+      requireAdminAuth,
+      requireEditLock: (req, res, clientId) => requireEditLockHolder(firebaseService, req, res, clientId),
+      commandManager,
+      firebaseService
+    });
+  }
 
   mountBlacklistRoutes(app, {
     firebaseService,
