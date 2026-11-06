@@ -35,13 +35,26 @@ function hasValidRange(start, end) {
   return Number.isFinite(s) && Number.isFinite(e) && e > s;
 }
 
-function isFull({ confirmed, googleBusy, service, rules, start, end, excludeAppointmentId }) {
+/**
+ * Ids propios: confirmadas + canceladas con eventId aún pendiente de borrar en Google
+ * (su espejo sigue en freeBusy hasta que el sync lo elimine).
+ */
+async function loadOwnEventIds(tx, confirmed) {
+  const ids = ownEventIdsFrom(confirmed);
+  const cancelled = typeof tx.listCancelledWithEventId === 'function'
+    ? await tx.listCancelledWithEventId()
+    : [];
+  for (const id of ownEventIdsFrom(cancelled)) ids.add(id);
+  return ids;
+}
+
+function isFull({ confirmed, ownEventIds, googleBusy, service, rules, start, end, excludeAppointmentId }) {
   const occupied = countOccupancy({
     startMs: toDate(start).getTime(),
     endMs: toDate(end).getTime(),
     appointments: confirmed,
     googleBusy: googleBusy || [],
-    ownEventIds: ownEventIdsFrom(confirmed),
+    ownEventIds: ownEventIds || ownEventIdsFrom(confirmed),
     bufferMs: bufferMsOf(rules),
     excludeAppointmentId: excludeAppointmentId || null
   });
@@ -72,7 +85,8 @@ async function bookAppointment({
 
   return appointmentsStore.runTransaction(clientId, async (tx) => {
     const confirmed = await tx.listConfirmed();
-    if (isFull({ confirmed, googleBusy, service, rules, start, end, excludeAppointmentId })) {
+    const ownEventIds = await loadOwnEventIds(tx, confirmed);
+    if (isFull({ confirmed, ownEventIds, googleBusy, service, rules, start, end, excludeAppointmentId })) {
       return { ok: false, code: 'slot_full' };
     }
     const nowIso = new Date().toISOString();
@@ -122,8 +136,9 @@ async function rescheduleAppointmentRecord({
     const current = await tx.get(appointmentId);
     if (!current || current.status !== 'confirmed') return { ok: false, code: 'not_found' };
     const confirmed = await tx.listConfirmed();
+    const ownEventIds = await loadOwnEventIds(tx, confirmed);
     if (isFull({
-      confirmed, googleBusy, service, rules, start, end, excludeAppointmentId: appointmentId
+      confirmed, ownEventIds, googleBusy, service, rules, start, end, excludeAppointmentId: appointmentId
     })) {
       return { ok: false, code: 'slot_full' };
     }

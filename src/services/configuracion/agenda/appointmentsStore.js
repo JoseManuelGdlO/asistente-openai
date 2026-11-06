@@ -46,7 +46,7 @@ function isSyncDue(row, nowMs) {
 
 /**
  * Almacén en memoria. Mismo contrato que FirestoreAppointmentsStore:
- *  runTransaction(clientId, fn) — fn recibe tx { get(id), set(id,row), listConfirmed() }.
+ *  runTransaction(clientId, fn) — fn recibe tx { get(id), set(id,row), listConfirmed(), listCancelledWithEventId() }.
  *  Las transacciones se serializan por cliente; las escrituras se aplican al terminar fn.
  */
 class MemoryAppointmentsStore {
@@ -109,6 +109,13 @@ class MemoryAppointmentsStore {
           const merged = new Map(bucket);
           for (const [id, row] of writes) merged.set(id, row);
           return [...merged.values()].filter((row) => row.status === 'confirmed').map(clone);
+        },
+        listCancelledWithEventId: async () => {
+          const merged = new Map(bucket);
+          for (const [id, row] of writes) merged.set(id, row);
+          return [...merged.values()]
+            .filter((row) => row.status === 'cancelled' && row.eventId)
+            .map(clone);
         }
       };
       const result = await fn(tx);
@@ -188,6 +195,12 @@ class FirestoreAppointmentsStore {
         listConfirmed: async () => {
           const snap = await t.get(items.where('status', '==', 'confirmed'));
           return snap.docs.map((doc) => normalizeAppointment(doc.id, doc.data())).filter(Boolean);
+        },
+        listCancelledWithEventId: async () => {
+          const snap = await t.get(items.where('status', '==', 'cancelled'));
+          return snap.docs
+            .map((doc) => normalizeAppointment(doc.id, doc.data()))
+            .filter((row) => row && row.eventId);
         }
       };
       const result = await fn(tx);

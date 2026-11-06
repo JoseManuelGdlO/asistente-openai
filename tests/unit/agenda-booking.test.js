@@ -77,6 +77,26 @@ describe('agenda booking', () => {
     expect(again.ok).toBe(true);
   });
 
+  it('cancelled appointment with pending-delete eventId does not block its slot via google mirror', async () => {
+    const store = new MemoryAppointmentsStore();
+    const a = await bookAppointment({ ...base, appointmentsStore: store, customerName: 'A' });
+    await store.runTransaction('C1', async (tx) => {
+      const row = await tx.get(a.appointment.id);
+      tx.set(a.appointment.id, { ...row, eventId: 'g1', sync: 'synced' });
+    });
+    await cancelAppointmentRecord({
+      appointmentsStore: store, clientId: 'C1', appointmentId: a.appointment.id
+    });
+    const cancelled = await store.get('C1', a.appointment.id);
+    expect(cancelled).toMatchObject({ status: 'cancelled', sync: 'pending', eventId: 'g1' });
+
+    const googleBusy = [{ id: 'g1', start: start.toISOString(), end: end.toISOString() }];
+    const again = await bookAppointment({
+      ...base, appointmentsStore: store, customerName: 'B', googleBusy
+    });
+    expect(again.ok).toBe(true);
+  });
+
   it('cancel on missing appointment returns not_found', async () => {
     const store = new MemoryAppointmentsStore();
     const res = await cancelAppointmentRecord({ appointmentsStore: store, clientId: 'C1', appointmentId: 'nope' });
