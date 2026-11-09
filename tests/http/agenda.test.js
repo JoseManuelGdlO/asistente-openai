@@ -36,7 +36,7 @@ function agendaApp({ google = { configured: () => false }, firebaseService, comm
 }
 
 describe('API configuracion agenda', () => {
-  it('starts disabled and saves settings with capacity', async () => {
+  it('starts disabled and saves settings with appointmentsPerBlock', async () => {
     const { app } = agendaApp();
     const first = await request(app).get(BASE).set(authHeader());
     expect(first.status).toBe(200);
@@ -52,20 +52,159 @@ describe('API configuracion agenda', () => {
       .send({
         timezone: 'America/Mexico_City',
         hours: HOURS,
-        services: [{ name: 'Consulta', durationMinutes: 30, capacity: 3, active: true }],
+        services: [{ name: 'Consulta', durationMinutes: 30, capacity: 9, active: true }],
         exceptions: [],
         rules: {
           minNoticeMinutes: 60,
           maxDaysAhead: 30,
           slotIntervalMinutes: 30,
           bufferMinutes: 0,
+          appointmentsPerBlock: 3,
           allowCancel: true,
           allowReschedule: true
         }
       });
     expect(saved.status).toBe(200);
-    expect(saved.body.agenda.services[0].capacity).toBe(3);
+    expect(saved.body.agenda.services[0]).not.toHaveProperty('capacity');
+    expect(saved.body.agenda.rules.appointmentsPerBlock).toBe(3);
     expect(saved.body.agenda.hours.monday.intervals).toEqual([{ start: '09:00', end: '12:00' }]);
+  });
+
+  it('returns a read-only week preview with open hours, appointments and Google events', async () => {
+    const listEvents = jest.fn().mockResolvedValue([
+      {
+        id: 'g_own',
+        summary: 'Espejo de Ana',
+        start: '2026-11-09T15:00:00.000Z',
+        end: '2026-11-09T15:30:00.000Z'
+      },
+      {
+        id: 'g_ext',
+        summary: 'Junta externa',
+        start: '2026-11-09T17:00:00.000Z',
+        end: '2026-11-09T18:00:00.000Z'
+      }
+    ]);
+    const { app, agendaService } = agendaApp({
+      google: {
+        configured: () => true,
+        listEvents,
+        refresh: jest.fn()
+      }
+    });
+    await agendaService.settingsStore.transaction('C1', (doc) => ({
+      ...doc,
+      connection: {
+        ...doc.connection,
+        status: 'connected',
+        email: 'owner@example.com',
+        calendarId: 'primary',
+        calendarSummary: 'Principal'
+      },
+      encryptedTokens: 'tok-placeholder'
+    }));
+    // bypass ensureAccessToken crypto: force tokenOverride on service
+    agendaService.tokenOverride = 'access-tok';
+    await request(app).put(`${BASE}/settings`).set(authHeader()).send({
+      timezone: 'America/Mexico_City',
+      hours: HOURS,
+      services: [{ name: 'Consulta', durationMinutes: 30, active: true }],
+      exceptions: [],
+      rules: { appointmentsPerBlock: 1 }
+    });
+    // settings save may wipe connection — re-apply connection after save
+    await agendaService.settingsStore.transaction('C1', (doc) => ({
+      ...doc,
+      connection: {
+        ...doc.connection,
+        status: 'connected',
+        email: 'owner@example.com',
+        calendarId: 'primary',
+        calendarSummary: 'Principal'
+      }
+    }));
+    await agendaService.appointmentsStore.runTransaction('C1', async (tx) => {
+      tx.set('apt_1', {
+        id: 'apt_1',
+        serviceName: 'Consulta',
+        customerName: 'Ana',
+        start: '2026-11-09T15:00:00.000Z',
+        end: '2026-11-09T15:30:00.000Z',
+        status: 'confirmed',
+        sync: 'synced',
+        eventId: 'g_own'
+      });
+      tx.set('apt_x', {
+        id: 'apt_x',
+        serviceName: 'Consulta',
+        customerName: 'Cancelada',
+        start: '2026-11-09T16:00:00.000Z',
+        end: '2026-11-09T16:30:00.000Z',
+        status: 'cancelled',
+        sync: 'pending'
+      });
+    });
+    const res = await request(app)
+      .get(`${BASE}/preview`)
+      .query({ weekStart: '2026-11-12' }) // miércoles → normaliza a lunes 9
+      .set(authHeader());
+    expect(res.status).toBe(200);
+    expect(res.body.preview.weekStart).toBe('2026-11-09');
+    expect(res.body.preview.weekEnd).toBe('2026-11-15');
+    expect(res.body.preview.days).toHaveLength(7);
+    expect(res.body.preview.days[0]).toMatchObject({
+      date: '2026-11-09',
+      weekday: 'monday',
+      closed: false,
+      intervals: [{ start: '09:00', end: '12:00' }]
+    });
+    expect(res.body.preview.appointments).toHaveLength(1);
+    expect(res.body.preview.appointments[0]).toMatchObject({
+      id: 'apt_1',
+      serviceName: 'Consulta',
+      customerName: 'Ana',
+      startLocal: '2026-11-09T09:00',
+      endLocal: '2026-11-09T09:30',
+      sync: 'synced'
+    });
+    expect(listEvents).toHaveBeenCalled();
+    expect(res.body.preview.google).toEqual({ connected: true, ok: true, error: '' });
+    expect(res.body.preview.googleEvents).toEqual([
+      expect.objectContaining({
+        id: 'g_ext',
+        summary: 'Junta externa',
+        startLocal: '2026-11-09T11:00',
+        endLocal: '2026-11-09T12:00'
+      })
+    ]);
+    expect(res.body.preview.serviceId).toBeTruthy();
+    expect(res.body.preview.durationMinutes).toBe(30);
+    expect(res.body.preview.slotIntervalMinutes).toBe(30);
+    expect(res.body.preview.appointmentsPerBlock).toBe(1);
+    expect(res.body.preview.calendarColumns).toBe(1);
+    expect(res.body.preview.blocks.length).toBeGreaterThan(0);
+    const mondayBlocks = res.body.preview.blocks.filter((b) => b.date === '2026-11-09');
+    expect(mondayBlocks.map((b) => b.startLocal)).toEqual([
+      '2026-11-09T09:00',
+      '2026-11-09T09:30',
+      '2026-11-09T10:00',
+      '2026-11-09T10:30',
+      '2026-11-09T11:00',
+      '2026-11-09T11:30',
+      '2026-11-09T12:00'
+    ]);
+    const nine = mondayBlocks.find((b) => b.startLocal === '2026-11-09T09:00');
+    expect(nine).toMatchObject({
+      endLocal: '2026-11-09T09:30',
+      occupied: 1,
+      capacity: 1,
+      bookable: true,
+      full: true
+    });
+    expect(mondayBlocks.find((b) => b.startLocal === '2026-11-09T12:00')).toMatchObject({
+      bookable: false,
+      full: false
+    });
   });
 
   it('exposes sync errors of failed appointments on the panel payload', async () => {

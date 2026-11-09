@@ -25,7 +25,7 @@ function fakeGoogle(overrides = {}) {
   };
 }
 
-async function setup({ google = fakeGoogle(), capacity = 1, docPatch = {} } = {}) {
+async function setup({ google = fakeGoogle(), appointmentsPerBlock = 1, docPatch = {} } = {}) {
   const settingsStore = new MemorySettingsStore();
   const appointmentsStore = new MemoryAppointmentsStore();
   await settingsStore.transaction(CLIENT, (doc) => ({
@@ -39,9 +39,10 @@ async function setup({ google = fakeGoogle(), capacity = 1, docPatch = {} } = {}
       calendarSummary: 'Principal'
     },
     services: [
-      { id: 'svc_a', name: 'Consulta', description: '', durationMinutes: 30, capacity, active: true },
-      { id: 'svc_off', name: 'Inactivo', description: '', durationMinutes: 30, capacity: 1, active: false }
+      { id: 'svc_a', name: 'Consulta', description: '', durationMinutes: 30, active: true },
+      { id: 'svc_off', name: 'Inactivo', description: '', durationMinutes: 30, active: false }
     ],
+    rules: { ...doc.rules, appointmentsPerBlock },
     ...docPatch
   }));
   const service = new AgendaService({
@@ -124,19 +125,74 @@ describe('agenda service execute', () => {
     expect(starts.length).toBeGreaterThan(0);
   });
 
-  it('does not double count the own google mirror of a confirmed appointment', async () => {
+  it('returns every free slot in the workday, not a short list', async () => {
+    const { service } = await setup({
+      docPatch: {
+        rules: {
+          minNoticeMinutes: 0,
+          maxDaysAhead: 30,
+          slotIntervalMinutes: 30,
+          bufferMinutes: 0,
+          allowCancel: true,
+          allowReschedule: true
+        }
+      }
+    });
+    const result = await service.execute('getAvailableSlots', {
+      serviceId: 'svc_a', date: '2026-11-09', preferredStart: null
+    }, { clientId: CLIENT });
+    expect(result.success).toBe(true);
+    expect(result.mode).toBe('times');
+    // 09:00–18:00 cada 30 min → 18 inicios (último 17:30)
+    expect(result.slots).toHaveLength(18);
+    expect(result.slotCount).toBe(18);
+    expect(result.offerText.split('\n')).toHaveLength(18);
+    expect(result.instruction).toMatch(/18 horarios/);
+    expect(result.instruction).toMatch(/TODOS/);
+    expect(result.slots[0].startLocal).toBe('2026-11-09T09:00');
+    expect(result.slots[result.slots.length - 1].startLocal).toBe('2026-11-09T17:30');
+  });
+
+  it('still returns all remaining free slots when the day already has bookings', async () => {
+    const { service, google } = await setup({
+      docPatch: {
+        rules: {
+          minNoticeMinutes: 0,
+          maxDaysAhead: 30,
+          slotIntervalMinutes: 30,
+          bufferMinutes: 0,
+          allowCancel: true,
+          allowReschedule: true
+        }
+      }
+    });
+    await create(service); // 10:00 tomada en nuestra agenda
+    // Aunque Google diga busy, la oferta sale solo de citas locales
+    google.freeBusy.mockResolvedValue([{ start: SLOT_10_START, end: SLOT_10_END }]);
+    const result = await service.execute('getAvailableSlots', {
+      serviceId: 'svc_a', date: '2026-11-09', preferredStart: null
+    }, { clientId: CLIENT });
+    expect(result.success).toBe(true);
+    expect(result.slotCount).toBe(17);
+    expect(result.slots.map((s) => s.startLocal)).not.toContain(SLOT_10);
+    expect(result.offerText).toContain('09:00');
+    expect(result.offerText).toContain('17:30');
+    expect(result.instruction).toMatch(/17 horarios/);
+    expect(google.freeBusy).not.toHaveBeenCalled();
+  });
+
+  it('offers remaining capacity from our agenda even if Google freeBusy looks full', async () => {
     const google = fakeGoogle();
-    const { service } = await setup({ google, capacity: 2 });
+    const { service } = await setup({ google, appointmentsPerBlock: 2 });
     const booked = await create(service);
     expect(booked.success).toBe(true);
-    // Google devuelve el espejo de la cita propia (eventId g_evt, ya sincronizada)
     google.freeBusy.mockResolvedValue([{ start: SLOT_10_START, end: SLOT_10_END }]);
     const result = await service.execute('getAvailableSlots', { serviceId: 'svc_a', date: '2026-11-09', preferredStart: SLOT_10 }, { clientId: CLIENT });
     expect(result.success).toBe(true);
     expect(result.exact).toBe(true);
-    // Y una segunda reserva sigue cabiendo (capacidad 2)
     const second = await create(service, undefined, { customerName: 'Luis' });
     expect(second.success).toBe(true);
+    expect(google.freeBusy).not.toHaveBeenCalled();
   });
 
   it('offers days when date is null', async () => {
@@ -179,9 +235,7 @@ describe('agenda createAppointment', () => {
 
   it('still returns success when the token cannot be obtained for sync', async () => {
     const { service, appointmentsStore } = await setup();
-    service.ensureAccessToken = jest.fn()
-      .mockResolvedValueOnce('tok') // freeBusy
-      .mockRejectedValueOnce(new Error('sin token'));
+    service.ensureAccessToken = jest.fn().mockRejectedValue(new Error('sin token'));
     const result = await create(service);
     expect(result.success).toBe(true);
     expect(result.syncPending).toBe(true);
@@ -189,7 +243,7 @@ describe('agenda createAppointment', () => {
     expect(saved.sync).toBe('pending');
   });
 
-  it('capacity race: only one concurrent booking wins and loser gets fresh offerList', async () => {
+  it('block race: only one concurrent booking wins and loser gets fresh offerList', async () => {
     const { service, appointmentsStore } = await setup();
     const context = { clientId: CLIENT, origin: 'meta', userId: '1@c.us' };
     const [a, b] = await Promise.all([
@@ -208,21 +262,21 @@ describe('agenda createAppointment', () => {
     expect(rows).toHaveLength(1);
   });
 
-  it('respects capacity greater than one', async () => {
-    const { service } = await setup({ capacity: 2 });
+  it('respects appointmentsPerBlock greater than one', async () => {
+    const { service } = await setup({ appointmentsPerBlock: 2 });
     const r1 = await create(service);
     const r2 = await create(service, undefined, { customerName: 'Luis' });
     const r3 = await create(service, undefined, { customerName: 'Eva' });
     expect([r1.success, r2.success, r3.success]).toEqual([true, true, false]);
   });
 
-  it('treats google busy blocks as occupancy', async () => {
+  it('does not block booking based on Google freeBusy; only our agenda matters', async () => {
     const google = fakeGoogle({ freeBusy: jest.fn().mockResolvedValue([{ start: SLOT_10_START, end: SLOT_10_END }]) });
     const { service, appointmentsStore } = await setup({ google });
     const result = await create(service);
-    expect(result.success).toBe(false);
-    expect(result.code).toBe('slot_full');
-    expect(await appointmentsStore.listConfirmedInRange(CLIENT, 0, Date.now() + 9e12)).toHaveLength(0);
+    expect(result.success).toBe(true);
+    expect(await appointmentsStore.listConfirmedInRange(CLIENT, 0, Date.now() + 9e12)).toHaveLength(1);
+    expect(google.freeBusy).not.toHaveBeenCalled();
   });
 
   it('requires a customer name and a valid slot', async () => {
@@ -243,21 +297,32 @@ describe('agenda createAppointment', () => {
     expect(result.success).toBe(false);
   });
 
-  it('fails without booking when availability cannot be verified', async () => {
+  it('still books from local availability when freeBusy is temporarily down', async () => {
     const google = fakeGoogle({ freeBusy: jest.fn().mockRejectedValue(new Error('google caído')) });
     const { service, appointmentsStore } = await setup({ google });
     const result = await create(service);
-    expect(result.success).toBe(false);
-    expect(await appointmentsStore.listConfirmedInRange(CLIENT, 0, Date.now() + 9e12)).toHaveLength(0);
+    expect(result.success).toBe(true);
+    expect(await appointmentsStore.listConfirmedInRange(CLIENT, 0, Date.now() + 9e12)).toHaveLength(1);
   });
 
-  it('marks the connection revoked when google reports revoked access', async () => {
-    const error = Object.assign(new Error('revocado'), { code: 'revoked' });
-    const google = fakeGoogle({ freeBusy: jest.fn().mockRejectedValue(error) });
-    const { service, settingsStore } = await setup({ google });
+  it('keeps the local reservation if Google sync fails after booking', async () => {
+    const google = fakeGoogle({
+      createEvent: jest.fn().mockRejectedValue(new Error('google caído'))
+    });
+    const { service, appointmentsStore } = await setup({ google });
     const result = await create(service);
-    expect(result.success).toBe(false);
-    expect(result.phase).toBe('revoked');
+    expect(result.success).toBe(true);
+    expect(result.syncPending).toBe(true);
+    expect(await appointmentsStore.listConfirmedInRange(CLIENT, 0, Date.now() + 9e12)).toHaveLength(1);
+  });
+
+  it('marks the connection revoked when listing calendars gets a revoked token', async () => {
+    const error = Object.assign(new Error('revocado'), { code: 'revoked' });
+    const google = fakeGoogle({
+      listCalendars: jest.fn().mockRejectedValue(error)
+    });
+    const { service, settingsStore } = await setup({ google });
+    await expect(service.listCalendars(CLIENT)).rejects.toMatchObject({ code: 'revoked' });
     expect((await settingsStore.getRaw(CLIENT)).connection.status).toBe('revoked');
   });
 });
@@ -385,10 +450,12 @@ describe('agenda service panel and sync', () => {
     const { service } = await setup();
     const panel = await service.saveAgenda(CLIENT, {
       timezone: 'America/Bogota',
-      services: [{ name: 'Corte', durationMinutes: 45, capacity: 3 }]
+      services: [{ name: 'Corte', durationMinutes: 45, capacity: 9 }],
+      rules: { appointmentsPerBlock: 3 }
     });
     expect(panel.timezone).toBe('America/Bogota');
-    expect(panel.services[0].capacity).toBe(3);
+    expect(panel.services[0]).not.toHaveProperty('capacity');
+    expect(panel.rules.appointmentsPerBlock).toBe(3);
     expect(panel).not.toHaveProperty('encryptedTokens');
     await expect(service.saveAgenda(CLIENT, { timezone: 'Nope/Zone' })).rejects.toMatchObject({ status: 400 });
   });

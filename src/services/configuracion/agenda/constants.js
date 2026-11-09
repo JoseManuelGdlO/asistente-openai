@@ -54,6 +54,8 @@ function defaultRules() {
     maxDaysAhead: 30,
     slotIntervalMinutes: 30,
     bufferMinutes: 0,
+    appointmentsPerBlock: 1,
+    calendarColumns: 1,
     allowCancel: true,
     allowReschedule: true
   };

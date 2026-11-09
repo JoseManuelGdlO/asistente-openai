@@ -45,9 +45,10 @@ Colecciones nuevas (no leer `calendar_settings`):
 - `connection`: status, email, calendarId, calendarSummary, timezone, connectedAt, lastError
 - `encryptedTokens`, oauth nonce (mismo patrón de cifrado)
 - `hours`: por día `{ enabled, intervals: [{ start, end }] }`
-- `services[]`: `{ id, name, description, durationMinutes, capacity, active }` — `capacity` = cupo del mismo slot
+- `services[]`: `{ id, name, description, durationMinutes, active }`
 - `exceptions[]`: fecha `YYYY-MM-DD` → cerrado o intervalos distintos ese día
-- `rules`: minNoticeMinutes, maxDaysAhead, slotIntervalMinutes, bufferMinutes, allowCancel, allowReschedule
+- `rules`: minNoticeMinutes, maxDaysAhead, slotIntervalMinutes, bufferMinutes, appointmentsPerBlock, allowCancel, allowReschedule — `appointmentsPerBlock` = cupo global por bloque de duración del servicio
+- *(Superseded for capacity: see `2026-11-06-agenda-citas-por-bloque-design.md`.)*
 - `playgroundWriteEnabled`, `adminNotice`
 
 ### `agenda_appointments/{clientId}/items/{appointmentId}`

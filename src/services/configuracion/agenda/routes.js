@@ -101,6 +101,12 @@ function mountAgendaRoutes(app, deps) {
     res.json({ ok: true, agenda: await agendaService.getPanel(clientId) });
   });
 
+  route('get', '/preview', { fallback: 'Error leyendo la vista previa' }, async (req, res, clientId) => {
+    const weekStart = typeof req.query?.weekStart === 'string' ? req.query.weekStart : '';
+    const serviceId = typeof req.query?.serviceId === 'string' ? req.query.serviceId : '';
+    res.json({ ok: true, preview: await agendaService.getWeekPreview(clientId, weekStart, serviceId) });
+  });
+
   route('put', '/settings', { lock: true, fallback: 'Error guardando la agenda' }, async (req, res, clientId) => {
     res.json({ ok: true, agenda: await agendaService.saveAgenda(clientId, req.body || {}) });
   });

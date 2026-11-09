@@ -16,12 +16,18 @@ const {
   addDays,
   zonedToUtc,
   formatLocal,
+  formatDayLabel,
   formatSlotLabel,
+  weekdayKeyFromDate,
+  mondayOfWeek,
+  dayWindows,
   rollPastDate,
   parseLocalDateTime,
   interpretSlotStart,
   fitsHours
 } = require('./time');
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const { publicCalendarSummary } = require('./invite');
 const { isAgendaTool, toolDefinitions, mergeTools, buildInstructions } = require('./tools');
 
@@ -37,8 +43,8 @@ function cleanPhone(userId) {
   return String(userId || '').replace(/@.+$/, '').trim();
 }
 
-function capacityOf(service) {
-  const number = Number(service?.capacity ?? 1);
+function appointmentsPerBlockOf(rules) {
+  const number = Number(rules?.appointmentsPerBlock ?? 1);
   if (!Number.isInteger(number)) return CAPACITY_MIN;
   return Math.min(CAPACITY_MAX, Math.max(CAPACITY_MIN, number));
 }
@@ -407,6 +413,188 @@ class AgendaService {
     }
   }
 
+  /**
+   * Vista previa semanal (solo lectura): franjas abiertas + bloques del servicio
+   * + citas confirmadas + eventos del Google Calendar conectado
+   * (excepto los que ya son espejo de una cita).
+   * weekStart / serviceId opcionales.
+   */
+  async getWeekPreview(clientId, weekStartInput = '', serviceIdInput = '') {
+    const doc = await this.settingsStore.getRaw(clientId);
+    const timezone = doc.timezone || DEFAULT_TIMEZONE;
+    const today = localDate(this.now(), timezone);
+    const seed = DATE_RE.test(String(weekStartInput || '')) ? String(weekStartInput) : today;
+    const weekStart = mondayOfWeek(seed);
+    const weekEnd = addDays(weekStart, 6);
+    const days = [];
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = addDays(weekStart, offset);
+      const windows = dayWindows({
+        date,
+        hours: doc.hours,
+        exceptions: doc.exceptions || []
+      });
+      days.push({
+        date,
+        weekday: weekdayKeyFromDate(date),
+        label: formatDayLabel(zonedToUtc(date, '12:00', timezone), timezone),
+        closed: Boolean(windows.closed),
+        intervals: windows.intervals || []
+      });
+    }
+    const fromMs = zonedToUtc(weekStart, '00:00', timezone).getTime();
+    const toMs = zonedToUtc(addDays(weekEnd, 1), '00:00', timezone).getTime();
+    const rows = typeof this.appointmentsStore.listConfirmedInRange === 'function'
+      ? await this.appointmentsStore.listConfirmedInRange(clientId, fromMs, toMs)
+      : [];
+    const ownEventIds = new Set();
+    const appointments = (rows || []).map((row) => {
+      if (row.eventId) ownEventIds.add(row.eventId);
+      const start = new Date(row.start);
+      const end = new Date(row.end);
+      return {
+        id: row.id,
+        serviceName: row.serviceName || '',
+        customerName: row.customerName || '',
+        start: row.start,
+        end: row.end,
+        startLocal: Number.isFinite(start.getTime()) ? formatLocal(start, timezone) : '',
+        endLocal: Number.isFinite(end.getTime()) ? formatLocal(end, timezone) : '',
+        sync: row.sync || '',
+        eventId: row.eventId || ''
+      };
+    });
+
+    const activeServices = (doc.services || []).filter((service) => service.active);
+    const serviceList = activeServices.map((service) => ({
+      id: service.id,
+      name: service.name,
+      durationMinutes: service.durationMinutes
+    }));
+    const selectedService = activeServices.find((service) => service.id === serviceIdInput)
+      || activeServices[0]
+      || null;
+    // Cupo = columnas verticales del calendario (citas simultáneas por horario de inicio).
+    const capacity = appointmentsPerBlockOf(doc.rules);
+    const calendarColumns = Math.min(12, Math.max(1, capacity));
+    const bufferMs = Math.max(0, Number(doc.rules?.bufferMinutes) || 0) * 60000;
+    const durationMinutes = Math.max(5, Number(selectedService?.durationMinutes) || 30);
+    const durationMs = durationMinutes * 60000;
+    const stepMinutes = Math.max(5, Number(doc.rules?.slotIntervalMinutes) || 30);
+    const stepMs = stepMinutes * 60000;
+    // Filas del calendario: cada 30 min desde la apertura hasta el cierre inclusive
+    // (p. ej. 09:00 … 15:00). bookable=false si la duración del servicio ya no cabe.
+    const blocks = [];
+    if (selectedService) {
+      for (const day of days) {
+        for (const interval of day.intervals || []) {
+          let cursor = zonedToUtc(day.date, interval.start, timezone).getTime();
+          const close = zonedToUtc(day.date, interval.end, timezone).getTime();
+          while (cursor <= close) {
+            const startMs = cursor;
+            const bookable = startMs + durationMs <= close;
+            const endMs = bookable ? startMs + durationMs : Math.min(startMs + stepMs, close);
+            cursor += stepMs;
+            const occupied = bookable
+              ? countOccupancy({
+                startMs,
+                endMs,
+                appointments: rows || [],
+                googleBusy: [],
+                ownEventIds,
+                bufferMs
+              })
+              : 0;
+            const start = new Date(startMs);
+            const end = new Date(bookable ? endMs : startMs);
+            blocks.push({
+              date: day.date,
+              start: start.toISOString(),
+              end: end.toISOString(),
+              startLocal: formatLocal(start, timezone),
+              endLocal: formatLocal(end, timezone),
+              occupied,
+              capacity,
+              bookable,
+              full: bookable && occupied >= capacity
+            });
+          }
+        }
+      }
+    }
+
+    let googleEvents = [];
+    let googleStatus = { connected: false, ok: false, error: '' };
+    const calendarId = doc.connection?.calendarId || '';
+    const connected = doc.connection?.status === 'connected' && Boolean(calendarId);
+    if (connected) {
+      googleStatus.connected = true;
+      try {
+        const token = await this.ensureAccessToken(clientId);
+        const raw = typeof this.google.listEvents === 'function'
+          ? await this.google.listEvents(token, {
+            calendarId,
+            timeMin: new Date(fromMs).toISOString(),
+            timeMax: new Date(toMs).toISOString(),
+            timeZone: timezone
+          })
+          : [];
+        googleEvents = (Array.isArray(raw) ? raw : [])
+          .filter((item) => item?.id && !ownEventIds.has(item.id))
+          .map((item) => {
+            let start = item.start;
+            let end = item.end;
+            if (item.allDay || (/^\d{4}-\d{2}-\d{2}$/.test(String(start)) && /^\d{4}-\d{2}-\d{2}$/.test(String(end)))) {
+              const startDate = String(start).slice(0, 10);
+              const endDate = String(end).slice(0, 10);
+              start = zonedToUtc(startDate, '00:00', timezone).toISOString();
+              end = zonedToUtc(endDate, '00:00', timezone).toISOString();
+            } else {
+              start = new Date(start).toISOString();
+              end = new Date(end).toISOString();
+            }
+            const startDate = new Date(start);
+            const endDate = new Date(end);
+            return {
+              id: item.id,
+              summary: item.summary || '(sin título)',
+              start,
+              end,
+              startLocal: Number.isFinite(startDate.getTime()) ? formatLocal(startDate, timezone) : '',
+              endLocal: Number.isFinite(endDate.getTime()) ? formatLocal(endDate, timezone) : '',
+              allDay: Boolean(item.allDay)
+            };
+          })
+          .filter((item) => item.startLocal && item.endLocal);
+        googleStatus.ok = true;
+      } catch (error) {
+        if (error.code === 'revoked') await this.markRevoked(clientId, error.message);
+        googleStatus.error = String(error?.message || error);
+        console.warn(
+          `Agenda ${clientId}: preview Google no disponible (${error.code || error.message})`
+        );
+      }
+    }
+
+    return {
+      timezone,
+      weekStart,
+      weekEnd,
+      days,
+      appointments,
+      googleEvents,
+      google: googleStatus,
+      services: serviceList,
+      serviceId: selectedService?.id || '',
+      serviceName: selectedService?.name || '',
+      durationMinutes: selectedService ? durationMinutes : null,
+      slotIntervalMinutes: stepMinutes,
+      appointmentsPerBlock: capacity,
+      calendarColumns,
+      blocks
+    };
+  }
+
   // ── Disponibilidad ──────────────────────────────────────────────────────
   /** Citas confirmadas + ids de eventos propios (incluye canceladas con borrado pendiente en Google). */
   async occupancySnapshot(clientId) {
@@ -422,7 +610,11 @@ class AgendaService {
     });
   }
 
-  /** Bloques ocupados de Google en [fromMs, toMs]. Devuelve { revoked } si la autorización cayó. */
+  /**
+   * Bloques ocupados de Google en [fromMs, toMs].
+   * Si la auth está revocada → { revoked:true }.
+   * Otros errores de Google no tumban la consulta: se sigue con citas locales (busy []).
+   */
   async loadGoogleBusy(runtime, fromMs, toMs) {
     try {
       const token = await this.ensureAccessToken(runtime.clientId);
@@ -438,17 +630,19 @@ class AgendaService {
         await this.markRevoked(runtime.clientId, error.message);
         return { revoked: true, busy: [] };
       }
-      throw error;
+      console.warn(
+        `Agenda ${runtime.clientId}: freeBusy no disponible (${error.code || error.message}); uso solo citas locales.`
+      );
+      return { revoked: false, busy: [] };
     }
   }
 
-  /** Horarios libres entre dos fechas locales. Mismo cálculo (ownEventIds incluido) que la reserva. */
+  /**
+   * Horarios libres entre dos fechas locales.
+   * Fuente de verdad: nuestra agenda (citas confirmadas en Firestore) + horarios/cupos/excepciones.
+   * Google Calendar solo se usa después para sincronizar eventos; no filtra la oferta.
+   */
   async findSlots(runtime, service, fromDate, toDate, options = {}) {
-    const fromMs = zonedToUtc(fromDate, '00:00', runtime.timezone).getTime();
-    const toMs = zonedToUtc(addDays(toDate, 1), '00:00', runtime.timezone).getTime();
-    const buffer = bufferMsOf(runtime.rules);
-    const remote = await this.loadGoogleBusy(runtime, fromMs - buffer, toMs + buffer);
-    if (remote.revoked) return { revoked: true };
     const { appointments, ownEventIds } = await this.occupancySnapshot(runtime.clientId);
     const result = buildAvailableSlots({
       now: this.now(),
@@ -460,7 +654,7 @@ class AgendaService {
       fromDate,
       toDate,
       appointments,
-      googleBusy: remote.busy,
+      googleBusy: [],
       ownEventIds,
       limit: options.limit,
       onePerDay: Boolean(options.onePerDay),
@@ -473,7 +667,7 @@ class AgendaService {
   async freshOfferList(runtime, service, startDate, excludeAppointmentId = null) {
     try {
       const day = localDate(startDate, runtime.timezone);
-      const found = await this.findSlots(runtime, service, day, day, { limit: 8, excludeAppointmentId });
+      const found = await this.findSlots(runtime, service, day, day, { limit: 288, excludeAppointmentId });
       return found.revoked ? [] : (found.slots || []);
     } catch (_error) {
       return [];
@@ -528,7 +722,7 @@ class AgendaService {
       bufferMs: bufferMsOf(runtime.rules),
       excludeAppointmentId
     });
-    return occupied >= capacityOf(service);
+    return occupied >= appointmentsPerBlockOf(runtime.rules);
   }
 
   /** Busy de Google alrededor de un horario concreto (para verificar antes de escribir). */
@@ -636,8 +830,10 @@ class AgendaService {
     const dayMode = !requestedDate;
     let found;
     try {
+      // Día concreto: devolver todos los huecos libres de la jornada (tope alto por intervalo mínimo 5 min).
+      // Modo fechas: hasta 10 días con al menos un hueco.
       found = await this.findSlots(runtime, service, requestedDate || today, requestedDate || horizon, {
-        limit: dayMode ? 10 : 48,
+        limit: dayMode ? 10 : 288,
         onePerDay: dayMode
       });
     } catch (_error) {
@@ -663,19 +859,29 @@ class AgendaService {
         exact = all.find((slot) => slot.startLocal === wanted) || null;
       }
       slots = exact
-        ? [exact].concat(all.filter((slot) => slot.start !== exact.start)).slice(0, 12)
-        : all.slice(0, 12);
+        ? [exact].concat(all.filter((slot) => slot.start !== exact.start))
+        : all;
     }
+    const slotCount = slots.length;
+    const offerText = dayMode
+      ? slots.map((item, index) => `${index + 1}. ${item.label} (${item.date})`).join('\n')
+      : slots.map((item, index) => `${index + 1}. ${item.label}`).join('\n');
     let instruction = exact
-      ? `Ese horario está libre. Hoy es ${today}. Pide confirmación antes de reservar.`
+      ? (
+        slotCount > 1
+          ? `El horario pedido está libre. Hoy es ${today}. Confirma ese horario si lo quieren, y además enumera TODOS los ${slotCount} horarios libres de offerText / slots (no digas solo uno).`
+          : `Ese horario está libre. Hoy es ${today}. Pide confirmación antes de reservar.`
+      )
       : dayMode
-        ? (slots.length
-          ? `Hoy es ${today}. El año es ${today.slice(0, 4)}. Esta respuesta solo trae fechas libres, en date y label. Ofrece solo esas fechas, sin horas. Cuando elijan una, vuelve a llamar getAvailableSlots con ese date. No menciones otro año.`
+        ? (slotCount
+          ? `Hoy es ${today}. El año es ${today.slice(0, 4)}. Esta respuesta solo trae fechas libres. Ofrece las ${slotCount} fechas de offerText / slots, sin horas. Cuando elijan una, vuelve a llamar getAvailableSlots con ese date. No menciones otro año.`
           : `Hoy es ${today}. No hay días con horario libre en los próximos ${runtime.rules.maxDaysAhead} días. No inventes días ni horarios.`)
-        : `Hoy es ${today}. El año es ${today.slice(0, 4)}. Ofrece solo los horarios devueltos, usando label. No menciones otro año.`;
+        : (slotCount
+          ? `Hoy es ${today}. El año es ${today.slice(0, 4)}. Hay ${slotCount} horarios libres este día. Debes copiar offerText completo o cada label de slots (TODOS). PROHIBIDO inventar horarios que no estén en la lista. Solo los bloques devueltos. No menciones otro año.`
+          : `Hoy es ${today}. No hay horarios libres ese día. No inventes horarios.`);
     if (correctedFrom) {
-      const outcome = slots.length
-        ? `Ofrece solo los horarios del ${requestedDate}.`
+      const outcome = slotCount
+        ? `Enumera TODOS los ${slotCount} horarios del ${requestedDate} (offerText).`
         : `El ${requestedDate} no tiene horarios. No digas que no hay disponibilidad en general.`;
       instruction = `La fecha ${correctedFrom} ya pasó. Hoy es ${today}. El año es ${today.slice(0, 4)}. Busqué ${requestedDate}. ${outcome} No digas ${correctedFrom.slice(0, 4)}.`;
     }
@@ -687,6 +893,8 @@ class AgendaService {
       correctedFrom,
       mode: dayMode ? 'days' : 'times',
       exact: Boolean(exact),
+      slotCount,
+      offerText,
       slots,
       instruction
     };
@@ -708,14 +916,6 @@ class AgendaService {
       return { success: false, error: 'Este canal no puede modificar la agenda.', instruction: 'No confirmes la cita.' };
     }
 
-    let remote;
-    try {
-      remote = await this.busyAround(runtime, slot);
-    } catch (_error) {
-      return UNVERIFIED_RESULT;
-    }
-    if (remote.revoked) return REVOKED_RESULT;
-
     const view = {
       service: brief(service),
       start: slot.start.toISOString(),
@@ -725,7 +925,7 @@ class AgendaService {
     };
 
     if (mode === 'dry') {
-      if (await this.slotIsFull(runtime, service, slot, remote.busy)) {
+      if (await this.slotIsFull(runtime, service, slot, [])) {
         return this.slotFullResult(runtime, service, slot);
       }
       return {
@@ -746,7 +946,7 @@ class AgendaService {
       customerName,
       customerPhone: cleanPhone(context.userId),
       notes: typeof args.notes === 'string' ? args.notes.trim() : '',
-      googleBusy: remote.busy,
+      googleBusy: [],
       rules: runtime.rules
     });
     if (!booked.ok) {
@@ -774,8 +974,10 @@ class AgendaService {
       code: 'slot_full',
       error: 'Ese horario ya está ocupado.',
       offerList,
+      offerText: offerList.map((item, index) => `${index + 1}. ${item.label}`).join('\n'),
+      slotCount: offerList.length,
       instruction: offerList.length
-        ? 'No confirmes la cita. Ofrece solo los horarios de offerList.'
+        ? `No confirmes la cita. Hay ${offerList.length} alternativas. Enumera TODAS (offerText / offerList), sin dejar solo la última.`
         : 'No confirmes la cita. Ese día ya no tiene horarios; consulta getAvailableSlots para otro día.'
     };
   }
@@ -810,14 +1012,6 @@ class AgendaService {
       };
     }
 
-    let remote;
-    try {
-      remote = await this.busyAround(runtime, slot);
-    } catch (_error) {
-      return UNVERIFIED_RESULT;
-    }
-    if (remote.revoked) return REVOKED_RESULT;
-
     const moved = await rescheduleAppointmentRecord({
       appointmentsStore: this.appointmentsStore,
       clientId: runtime.clientId,
@@ -825,7 +1019,7 @@ class AgendaService {
       service,
       start: slot.start,
       end: slot.end,
-      googleBusy: remote.busy,
+      googleBusy: [],
       rules: runtime.rules
     });
     if (!moved.ok) {

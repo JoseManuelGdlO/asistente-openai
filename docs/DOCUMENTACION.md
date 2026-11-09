@@ -361,7 +361,7 @@ Flujo: claim al llegar el webhook → si el handler termina (incluido aviso de n
 
 Respetan `FIRESTORE_COLLECTION_PREFIX` (p. ej. `QA_agenda_settings`). **No** leen `calendar_settings`.
 
-- `agenda_settings/{clientId}`: `enabled`, `connection` (status, email, calendarId, timezone, lastError…), tokens cifrados + nonce OAuth, `hours` por día, `services[]` (`durationMinutes`, `capacity`, `active`), `exceptions[]`, `rules`, `playgroundWriteEnabled`, `adminNotice`.
+- `agenda_settings/{clientId}`: `enabled`, `connection` (status, email, calendarId, timezone, lastError…), tokens cifrados + nonce OAuth, `hours` por día, `services[]` (`durationMinutes`, `active`), `exceptions[]`, `rules` (incluye `appointmentsPerBlock`), `playgroundWriteEnabled`, `adminNotice`.
 - `agenda_appointments/{clientId}/items/{appointmentId}`: `serviceId`, `start`/`end` (ISO UTC), datos del cliente, `status` (`confirmed` | `cancelled`), `sync` (`pending` | `synced` | `retry` | `failed`), `eventId`, `syncAttempts`, `nextRetryAt`, `lastSyncError`.
 
 Detalle en la sección 10.3.
@@ -505,9 +505,9 @@ En la ficha de cada consultorio, la pestaña **Configuración** es un hub; su pr
 
 Solo si hay: Google conectado + calendario elegido + al menos un día abierto + al menos un servicio activo. Si la agenda está incompleta, desconectada o con OAuth revocado, el bot no inventa horarios.
 
-### Servicios y cupo (`capacity`)
+### Servicios y citas por bloque
 
-Cada servicio tiene duración y `capacity` (1–100): cuántas citas caben **en el mismo horario** (cupo 3 = hasta 3 citas a las 10:00). La disponibilidad cruza jornada, excepciones por fecha (`YYYY-MM-DD`: cerrado o intervalos distintos), reglas (aviso mínimo, días máximos, intervalo, buffer), citas propias y bloqueos de Google (freeBusy) sin contar dos veces los eventos ya sincronizados.
+Cada servicio tiene duración; el cupo es global en `rules.appointmentsPerBlock` (1–100): cuántas citas caben en cada bloque según esa duración (cupo 3 + servicio 120 min → hasta 3 citas en 09:00–11:00, otras 3 en 11:00–13:00, etc.). La disponibilidad cruza jornada, excepciones por fecha (`YYYY-MM-DD`: cerrado o intervalos distintos), reglas (aviso mínimo, días máximos, buffer, citas por bloque) y citas propias en Firestore.
 
 ### Reserva y sincronización con Google
 

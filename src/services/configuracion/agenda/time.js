@@ -63,6 +63,13 @@ function weekdayKeyFromDate(dateStr) {
   return WEEKDAY_KEYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
 }
 
+/** Lunes de la semana civil de `dateStr` (AAAA-MM-DD). */
+function mondayOfWeek(dateStr) {
+  const index = WEEKDAY_KEYS.indexOf(weekdayKeyFromDate(dateStr));
+  const daysFromMonday = index < 0 ? 0 : (index + 6) % 7;
+  return addDays(dateStr, -daysFromMonday);
+}
+
 function rangesOverlap(start, end, otherStart, otherEnd, bufferMs) {
   const gap = Math.max(0, bufferMs || 0);
   return start < otherEnd + gap && otherStart < end + gap;
@@ -213,6 +220,7 @@ module.exports = {
   localDate,
   addDays,
   weekdayKeyFromDate,
+  mondayOfWeek,
   rangesOverlap,
   formatDayLabel,
   formatSlotLabel,

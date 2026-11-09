@@ -171,6 +171,43 @@ class GoogleCalendarClient {
     }
   }
 
+  /**
+   * Eventos del calendario en [timeMin, timeMax) (singleEvents expandido).
+   * Incluye títulos; útil para el previsualizador del panel.
+   */
+  async listEvents(token, { calendarId, timeMin, timeMax, timeZone }) {
+    try {
+      const res = await axios.get(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            timeMin,
+            timeMax,
+            timeZone,
+            singleEvents: true,
+            orderBy: 'startTime',
+            maxResults: 250
+          },
+          timeout: 15000
+        }
+      );
+      return (res.data?.items || []).map((item) => {
+        const start = item.start?.dateTime || item.start?.date || '';
+        const end = item.end?.dateTime || item.end?.date || '';
+        return {
+          id: item.id || '',
+          summary: item.summary || '(sin título)',
+          start,
+          end,
+          allDay: Boolean(item.start?.date && !item.start?.dateTime)
+        };
+      }).filter((item) => item.id && item.start && item.end);
+    } catch (error) {
+      throw mapAxiosError(error);
+    }
+  }
+
   async createEvent(token, calendarId, event) {
     try {
       const res = await axios.post(

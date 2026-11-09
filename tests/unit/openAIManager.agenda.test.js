@@ -1,6 +1,7 @@
 const OpenAIManager = require('../../src/managers/openAIManager');
 const {
-  mergeTools, toolDefinitions, buildInstructions, isAgendaTool, replyOffersAppointmentTime
+  mergeTools, toolDefinitions, buildInstructions, isAgendaTool, replyOffersAppointmentTime,
+  replyInventedOfferedTimes, replyInventedHoursOnDateOffer
 } = require('../../src/services/configuracion/agenda/tools');
 const { defaultRules } = require('../../src/services/configuracion/agenda/constants');
 
@@ -62,6 +63,23 @@ describe('OpenAIManager y agenda', () => {
     expect(tools).toEqual([{ type: 'function', name: 'enviar_pdf' }]);
   });
 
+  it('detects invented clocks that are not in the availability offer', () => {
+    const offer = {
+      success: true,
+      offerText: '1. lunes 9, 09:00–11:00\n2. lunes 9, 11:00–13:00',
+      slots: [
+        { startLocal: '2026-11-09T09:00', endLocal: '2026-11-09T11:00', label: 'lunes 9, 09:00–11:00' },
+        { startLocal: '2026-11-09T11:00', endLocal: '2026-11-09T13:00', label: 'lunes 9, 11:00–13:00' }
+      ]
+    };
+    expect(replyInventedOfferedTimes('Tenemos 09:00–11:00 y 11:00–13:00', offer)).toBe(false);
+    expect(replyInventedOfferedTimes('Hay 09:00, 09:30, 10:00 y 10:30', offer)).toBe(true);
+    expect(replyInventedHoursOnDateOffer('El martes a las 10:00', {
+      success: true,
+      slots: [{ date: '2026-11-10', label: 'martes, 10 de noviembre' }]
+    })).toBe(true);
+  });
+
   it('consulta la agenda antes de ofrecer un horario', async () => {
     expect(replyOffersAppointmentTime('Hay lugar a las 9:00')).toBe(true);
     expect(replyOffersAppointmentTime('El servicio dura 2 horas')).toBe(false);
@@ -100,6 +118,50 @@ describe('OpenAIManager y agenda', () => {
     const forced = manager.openai.responses.create.mock.calls[1][0];
     expect(forced.tool_choice).toEqual({ type: 'function', name: 'getAvailableSlots' });
     expect(result).toContain('12:00');
+  });
+
+  it('reintenta si tras getAvailableSlots inventa horas que no están en offerText', async () => {
+    const execute = jest.fn().mockResolvedValue({
+      success: true,
+      slotCount: 2,
+      offerText: '1. lunes 9, 09:00–11:00\n2. lunes 9, 11:00–13:00',
+      slots: [
+        { startLocal: '2026-11-09T09:00', endLocal: '2026-11-09T11:00', label: 'lunes 9, 09:00–11:00' },
+        { startLocal: '2026-11-09T11:00', endLocal: '2026-11-09T13:00', label: 'lunes 9, 11:00–13:00' }
+      ],
+      instruction: 'Copia offerText.'
+    });
+    const manager = managerWith(agendaStub(READY_RUNTIME, execute), []);
+    manager.openai.responses.create
+      .mockResolvedValueOnce({
+        output_text: '',
+        output: [{
+          type: 'function_call',
+          name: 'getAvailableSlots',
+          arguments: '{"serviceId":"svc_premium01","date":"2026-11-09","preferredStart":null}',
+          call_id: 'call_1'
+        }]
+      })
+      .mockResolvedValueOnce({
+        output_text: '{"reply":"Hay lugar a las 09:00, 09:30, 10:00 y 10:30"}',
+        output: [{ type: 'message', role: 'assistant', content: [] }]
+      })
+      .mockResolvedValueOnce({
+        output_text: '{"reply":"Quedan 09:00–11:00 y 11:00–13:00"}',
+        output: [{ type: 'message', role: 'assistant', content: [] }]
+      });
+
+    const result = await manager.processMessage('521', 'horarios del lunes', 'bot-1', { origin: 'playground' });
+    expect(execute).toHaveBeenCalled();
+    expect(manager.openai.responses.create).toHaveBeenCalledTimes(3);
+    const correctionCall = manager.openai.responses.create.mock.calls[2][0];
+    const correctionMsg = correctionCall.input.find((item) => (
+      item.role === 'user' && String(item.content || '').includes('inventó horas')
+    ));
+    expect(correctionMsg).toBeTruthy();
+    expect(correctionMsg.content).toContain('09:00–11:00');
+    expect(result).toContain('09:00–11:00');
+    expect(result).not.toContain('09:30');
   });
 
   it('con la agenda apagada no manda las tools de agenda', async () => {

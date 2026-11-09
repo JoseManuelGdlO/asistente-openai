@@ -31,6 +31,26 @@ function toIdSet(value) {
  * Google que coincide exactamente con una cita propia ya sincronizada
  * (eventId en ownEventIds) no se cuenta dos veces.
  */
+/** Resta intervalos propios de un busy de Google (freeBusy suele fusionar eventos contiguos). */
+function subtractOwnRanges(busyStart, busyEnd, ownIntervals) {
+  let fragments = [[busyStart, busyEnd]];
+  for (const [ownStart, ownEnd] of ownIntervals) {
+    if (!Number.isFinite(ownStart) || !Number.isFinite(ownEnd) || ownEnd <= ownStart) continue;
+    const next = [];
+    for (const [fragStart, fragEnd] of fragments) {
+      if (ownEnd <= fragStart || ownStart >= fragEnd) {
+        next.push([fragStart, fragEnd]);
+        continue;
+      }
+      if (fragStart < ownStart) next.push([fragStart, ownStart]);
+      if (ownEnd < fragEnd) next.push([ownEnd, fragEnd]);
+    }
+    fragments = next;
+    if (!fragments.length) break;
+  }
+  return fragments;
+}
+
 function countOccupancy({
   startMs,
   endMs,
@@ -41,38 +61,53 @@ function countOccupancy({
   excludeAppointmentId = null
 }) {
   const own = toIdSet(ownEventIds);
-  const ownRanges = new Set();
+  const ownIntervals = [];
   let count = 0;
 
+  // Cupo por horario: solo solape estricto (sin buffer). Si se aplicara buffer,
+  // 3 citas de 09:00–11:00 llenarían también el bloque 11:00–13:00 y el cupo
+  // parecería “por día” en vez de “por horario”.
   for (const appointment of appointments || []) {
     if (!isBlocking(appointment)) continue;
     if (excludeAppointmentId && appointment.id === excludeAppointmentId) continue;
     const aStart = toMs(appointment.start);
     const aEnd = toMs(appointment.end);
     if (!Number.isFinite(aStart) || !Number.isFinite(aEnd)) continue;
-    if (appointment.eventId && own.has(appointment.eventId)) ownRanges.add(`${aStart}|${aEnd}`);
-    if (rangesOverlap(startMs, endMs, aStart, aEnd, bufferMs)) count += 1;
+    ownIntervals.push([aStart, aEnd]);
+    if (rangesOverlap(startMs, endMs, aStart, aEnd, 0)) count += 1;
   }
 
-  // Las citas excluidas (p. ej. la que se reprograma) también dejan libre su evento espejo.
+  // Reprogramación: el evento espejo de la cita excluida tampoco bloquea.
   const excluded = excludeAppointmentId
     ? (appointments || []).find((item) => item.id === excludeAppointmentId)
     : null;
-  const excludedRange = excluded && excluded.eventId && own.has(excluded.eventId)
-    ? `${toMs(excluded.start)}|${toMs(excluded.end)}`
-    : null;
+  if (excluded?.eventId && own.has(excluded.eventId)) {
+    const eStart = toMs(excluded.start);
+    const eEnd = toMs(excluded.end);
+    if (Number.isFinite(eStart) && Number.isFinite(eEnd)) ownIntervals.push([eStart, eEnd]);
+  }
 
+  // Bloqueos externos de Google: como máximo +1 cupo por horario candidato.
+  // freeBusy suele devolver muchos segmentos cortos; si cada uno sumara +1,
+  // un servicio largo (p. ej. 120 min) se “llenaría” el cupo aunque solo haya
+  // ruido/eventos cortos y solo quedaría el último hueco del día.
+  let googleBlocks = false;
   for (const busy of googleBusy || []) {
+    if (googleBlocks) break;
     const bStart = toMs(busy.start);
     const bEnd = toMs(busy.end);
     if (!Number.isFinite(bStart) || !Number.isFinite(bEnd)) continue;
-    const key = `${bStart}|${bEnd}`;
-    if (key === excludedRange) continue;
     const busyId = busy.eventId || busy.id;
     if (busyId && own.has(busyId)) continue;
-    if (ownRanges.has(key)) continue;
-    if (rangesOverlap(startMs, endMs, bStart, bEnd, bufferMs)) count += 1;
+    const external = subtractOwnRanges(bStart, bEnd, ownIntervals);
+    for (const [fragStart, fragEnd] of external) {
+      if (rangesOverlap(startMs, endMs, fragStart, fragEnd, bufferMs)) {
+        googleBlocks = true;
+        break;
+      }
+    }
   }
+  if (googleBlocks) count += 1;
   return count;
 }
 
@@ -84,7 +119,9 @@ function clampCapacity(value) {
 
 /**
  * Horarios disponibles entre fromDate y toDate (fechas locales AAAA-MM-DD).
- * Un horario está abierto si occupied < service.capacity.
+ * Cada cita dura service.durationMinutes; los inicios se ofrecen cada
+ * rules.slotIntervalMinutes (p. ej. 30). Cupo = rules.appointmentsPerBlock
+ * (columnas verticales del calendario).
  * Con onePerDay devuelve { dates: [{ date, dayLabel, slot }] } (primer hueco por día);
  * si no, { slots: [...] }.
  */
@@ -104,10 +141,12 @@ function buildAvailableSlots({
   onePerDay = false,
   excludeAppointmentId = null
 }) {
-  const interval = Math.max(5, Number(rules.slotIntervalMinutes) || 30);
+  const durationMinutes = Math.max(5, Number(service.durationMinutes) || 30);
+  const durationMs = durationMinutes * 60000;
+  const stepMinutes = Math.max(5, Number(rules.slotIntervalMinutes) || 30);
+  const stepMs = stepMinutes * 60000;
   const bufferMs = Math.max(0, Number(rules.bufferMinutes) || 0) * 60000;
-  const durationMs = Number(service.durationMinutes) * 60000;
-  const capacity = clampCapacity(service.capacity ?? 1);
+  const capacity = clampCapacity(rules.appointmentsPerBlock ?? 1);
   const nowMs = (now instanceof Date ? now : new Date(now)).getTime();
   const minStart = nowMs + (Number(rules.minNoticeMinutes) || 0) * 60000;
   const maxStart = nowMs + (Number(rules.maxDaysAhead) || 30) * 86400000;
@@ -126,7 +165,7 @@ function buildAvailableSlots({
       while (cursor + durationMs <= close && (onePerDay ? !foundDay : slots.length < max)) {
         const startMs = cursor;
         const endMs = startMs + durationMs;
-        cursor += interval * 60000;
+        cursor += stepMs;
         if (startMs < minStart || startMs > maxStart) continue;
         const occupied = countOccupancy({
           startMs, endMs, appointments, googleBusy, ownEventIds, bufferMs, excludeAppointmentId

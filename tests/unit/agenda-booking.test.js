@@ -7,12 +7,19 @@ const {
 } = require('../../src/services/configuracion/agenda/booking');
 
 describe('agenda booking', () => {
-  const service = { id: 'svc_a', durationMinutes: 30, capacity: 1 };
+  const service = { id: 'svc_a', durationMinutes: 30 };
   const start = new Date('2026-11-09T15:00:00.000Z');
   const end = new Date('2026-11-09T15:30:00.000Z');
-  const base = { clientId: 'C1', service, start, end, googleBusy: [], rules: { bufferMinutes: 0 } };
+  const base = {
+    clientId: 'C1',
+    service,
+    start,
+    end,
+    googleBusy: [],
+    rules: { bufferMinutes: 0, appointmentsPerBlock: 1 }
+  };
 
-  it('books first slot and rejects second when capacity is 1', async () => {
+  it('books first slot and rejects second when appointmentsPerBlock is 1', async () => {
     const store = new MemoryAppointmentsStore();
     const first = await bookAppointment({ ...base, appointmentsStore: store, customerName: 'Ana' });
     expect(first.ok).toBe(true);
@@ -24,17 +31,17 @@ describe('agenda booking', () => {
     expect(second).toEqual({ ok: false, code: 'slot_full' });
   });
 
-  it('allows two when capacity is 2 and rejects the third', async () => {
+  it('allows two when appointmentsPerBlock is 2 and rejects the third', async () => {
     const store = new MemoryAppointmentsStore();
-    const svc = { ...service, capacity: 2 };
-    const a = await bookAppointment({ ...base, service: svc, appointmentsStore: store, customerName: 'A' });
-    const b = await bookAppointment({ ...base, service: svc, appointmentsStore: store, customerName: 'B' });
-    const c = await bookAppointment({ ...base, service: svc, appointmentsStore: store, customerName: 'C' });
+    const rules = { ...base.rules, appointmentsPerBlock: 2 };
+    const a = await bookAppointment({ ...base, rules, appointmentsStore: store, customerName: 'A' });
+    const b = await bookAppointment({ ...base, rules, appointmentsStore: store, customerName: 'B' });
+    const c = await bookAppointment({ ...base, rules, appointmentsStore: store, customerName: 'C' });
     expect(a.ok && b.ok).toBe(true);
     expect(c).toEqual({ ok: false, code: 'slot_full' });
   });
 
-  it('concurrent bookings never exceed capacity', async () => {
+  it('concurrent bookings never exceed appointmentsPerBlock', async () => {
     const store = new MemoryAppointmentsStore();
     const results = await Promise.all(
       ['A', 'B', 'C', 'D'].map((n) => bookAppointment({ ...base, appointmentsStore: store, customerName: n }))
@@ -44,20 +51,20 @@ describe('agenda booking', () => {
 
   it('does not double-count the Google mirror of a confirmed appointment', async () => {
     const store = new MemoryAppointmentsStore();
-    const svc = { ...service, capacity: 2 };
-    const a = await bookAppointment({ ...base, service: svc, appointmentsStore: store, customerName: 'A' });
+    const rules = { ...base.rules, appointmentsPerBlock: 2 };
+    const a = await bookAppointment({ ...base, rules, appointmentsStore: store, customerName: 'A' });
     await store.runTransaction('C1', async (tx) => {
       const row = await tx.get(a.appointment.id);
       tx.set(a.appointment.id, { ...row, eventId: 'g1', sync: 'synced' });
     });
     const googleBusy = [{ id: 'g1', start: start.toISOString(), end: end.toISOString() }];
     const b = await bookAppointment({
-      ...base, service: svc, appointmentsStore: store, customerName: 'B', googleBusy
+      ...base, rules, appointmentsStore: store, customerName: 'B', googleBusy
     });
     expect(b.ok).toBe(true);
   });
 
-  it('counts foreign google busy blocks against capacity', async () => {
+  it('counts foreign google busy blocks against appointmentsPerBlock', async () => {
     const store = new MemoryAppointmentsStore();
     const googleBusy = [{ id: 'other', start: start.toISOString(), end: end.toISOString() }];
     const res = await bookAppointment({ ...base, appointmentsStore: store, customerName: 'A', googleBusy });

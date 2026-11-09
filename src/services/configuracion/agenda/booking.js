@@ -6,8 +6,8 @@ function toDate(value) {
   return value instanceof Date ? value : new Date(value);
 }
 
-function capacityOf(service) {
-  const number = Number(service?.capacity ?? 1);
+function appointmentsPerBlockOf(rules) {
+  const number = Number(rules?.appointmentsPerBlock ?? 1);
   if (!Number.isInteger(number)) return CAPACITY_MIN;
   return Math.min(CAPACITY_MAX, Math.max(CAPACITY_MIN, number));
 }
@@ -48,7 +48,7 @@ async function loadOwnEventIds(tx, confirmed) {
   return ids;
 }
 
-function isFull({ confirmed, ownEventIds, googleBusy, service, rules, start, end, excludeAppointmentId }) {
+function isFull({ confirmed, ownEventIds, googleBusy, rules, start, end, excludeAppointmentId }) {
   const occupied = countOccupancy({
     startMs: toDate(start).getTime(),
     endMs: toDate(end).getTime(),
@@ -58,7 +58,7 @@ function isFull({ confirmed, ownEventIds, googleBusy, service, rules, start, end
     bufferMs: bufferMsOf(rules),
     excludeAppointmentId: excludeAppointmentId || null
   });
-  return occupied >= capacityOf(service);
+  return occupied >= appointmentsPerBlockOf(rules);
 }
 
 /**
@@ -86,7 +86,7 @@ async function bookAppointment({
   return appointmentsStore.runTransaction(clientId, async (tx) => {
     const confirmed = await tx.listConfirmed();
     const ownEventIds = await loadOwnEventIds(tx, confirmed);
-    if (isFull({ confirmed, ownEventIds, googleBusy, service, rules, start, end, excludeAppointmentId })) {
+    if (isFull({ confirmed, ownEventIds, googleBusy, rules, start, end, excludeAppointmentId })) {
       return { ok: false, code: 'slot_full' };
     }
     const nowIso = new Date().toISOString();
@@ -138,7 +138,7 @@ async function rescheduleAppointmentRecord({
     const confirmed = await tx.listConfirmed();
     const ownEventIds = await loadOwnEventIds(tx, confirmed);
     if (isFull({
-      confirmed, ownEventIds, googleBusy, service, rules, start, end, excludeAppointmentId: appointmentId
+      confirmed, ownEventIds, googleBusy, rules, start, end, excludeAppointmentId: appointmentId
     })) {
       return { ok: false, code: 'slot_full' };
     }

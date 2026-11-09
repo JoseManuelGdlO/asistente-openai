@@ -33,8 +33,222 @@
     let calendars = null;
     let busy = false;
     let destroyed = false;
+    let previewWeekStart = '';
+    let previewServiceId = '';
 
     const path = (suffix = '') => `/clients/${encodeURIComponent(clientId)}/configuracion/agenda${suffix}`;
+    const WEEKDAY_SHORT = {
+      monday: 'Lun', tuesday: 'Mar', wednesday: 'Mié', thursday: 'Jue',
+      friday: 'Vie', saturday: 'Sáb', sunday: 'Dom'
+    };
+
+    function previewRangeLabel(preview) {
+      if (!preview?.weekStart || !preview?.weekEnd) return '';
+      const a = preview.weekStart.slice(8, 10);
+      const b = preview.weekEnd.slice(8, 10);
+      const months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+      const m1 = months[Number(preview.weekStart.slice(5, 7)) - 1] || '';
+      const m2 = months[Number(preview.weekEnd.slice(5, 7)) - 1] || '';
+      const year = preview.weekEnd.slice(0, 4);
+      if (m1 === m2) return `${Number(a)}–${Number(b)} ${m1} ${year}`;
+      return `${Number(a)} ${m1} – ${Number(b)} ${m2} ${year}`;
+    }
+
+    function buildPreviewHtml(preview) {
+      const days = preview.days || [];
+      const lanes = Math.max(1, Math.min(12, Number(preview.appointmentsPerBlock) || Number(preview.calendarColumns) || 1));
+      let anyOpen = false;
+      for (const day of days) {
+        if ((day.intervals || []).length) {
+          anyOpen = true;
+          break;
+        }
+      }
+
+      const aptsByDate = {};
+      for (const apt of preview.appointments || []) {
+        const date = String(apt.startLocal || '').slice(0, 10);
+        if (!date) continue;
+        if (!aptsByDate[date]) aptsByDate[date] = [];
+        aptsByDate[date].push(apt);
+      }
+      const googleByDate = {};
+      for (const event of preview.googleEvents || []) {
+        const date = String(event.startLocal || '').slice(0, 10);
+        if (!date) continue;
+        if (!googleByDate[date]) googleByDate[date] = [];
+        googleByDate[date].push(event);
+      }
+      const slotsByDate = {};
+      for (const slot of preview.blocks || []) {
+        const date = String(slot.date || slot.startLocal || '').slice(0, 10);
+        if (!date) continue;
+        if (!slotsByDate[date]) slotsByDate[date] = [];
+        slotsByDate[date].push(slot);
+      }
+
+      const dayColumns = days.map((day) => {
+        const blocks = (slotsByDate[day.date] || []).slice().sort((a, b) => (
+          String(a.startLocal).localeCompare(String(b.startLocal))
+        ));
+        const dayApts = aptsByDate[day.date] || [];
+        const dayGoogle = googleByDate[day.date] || [];
+        const laneCols = [];
+        for (let lane = 0; lane < lanes; lane += 1) {
+          const cells = blocks.map((block) => {
+            const startHm = String(block.startLocal || '').slice(11, 16);
+            const aptEndHm = (apt) => String(apt.endLocal || block.endLocal || '').slice(11, 16);
+            // Anclar cada cita solo a la fila de su inicio.
+            const inBlock = dayApts
+              .filter((apt) => String(apt.start || '') === String(block.start || '')
+                || String(apt.startLocal || '').slice(0, 16) === String(block.startLocal || '').slice(0, 16))
+              .sort((a, b) => (
+                String(a.start).localeCompare(String(b.start))
+                || String(a.id || '').localeCompare(String(b.id || ''))
+              ));
+            const apt = inBlock[lane] || null;
+            if (apt) {
+              const label = [apt.customerName, apt.serviceName].filter(Boolean).join(' · ') || 'Cita';
+              const endHm = aptEndHm(apt);
+              const title = `${startHm}–${endHm} · ${label}${apt.sync ? ` · sync: ${apt.sync}` : ''}`;
+              return `<div class="agenda-preview-cell is-booked" title="${escapeHtml(title)}">
+                <strong>${escapeHtml(startHm)}</strong>
+                <span>${escapeHtml(label)}</span>
+              </div>`;
+            }
+            if (block.bookable === false) {
+              return `<div class="agenda-preview-cell is-past" title="${escapeHtml(startHm)} · fuera de reserva">
+                <strong>${escapeHtml(startHm)}</strong>
+                <span>—</span>
+              </div>`;
+            }
+            const kind = block.full ? 'is-full' : 'is-free';
+            const title = `${startHm} · cupo ${lane + 1}/${lanes}${block.full ? ' (lleno)' : ' libre'}`;
+            return `<div class="agenda-preview-cell ${kind}" title="${escapeHtml(title)}">
+              <strong>${escapeHtml(startHm)}</strong>
+              <span>${block.full ? 'Lleno' : 'Libre'}</span>
+            </div>`;
+          }).join('');
+          laneCols.push(`
+            <div class="agenda-preview-lane">
+              <div class="agenda-preview-lane-head">Cupo ${lane + 1}</div>
+              <div class="agenda-preview-lane-body">
+                ${cells || '<p class="muted agenda-preview-empty">Sin bloques</p>'}
+              </div>
+            </div>
+          `);
+        }
+        const googleBits = dayGoogle.map((event) => {
+          const startHm = String(event.startLocal || '').slice(11, 16);
+          const endHm = String(event.endLocal || '').slice(11, 16);
+          const label = event.summary || 'Google';
+          return `<div class="agenda-preview-google-chip" title="${escapeHtml(`${startHm}–${endHm} · ${label}`)}">${escapeHtml(startHm)} ${escapeHtml(label)}</div>`;
+        }).join('');
+        const head = `${WEEKDAY_SHORT[day.weekday] || day.weekday} ${Number(String(day.date).slice(8, 10))}`;
+        return `
+          <div class="agenda-preview-day ${day.closed ? 'is-closed' : ''}">
+            <div class="agenda-preview-day-head" title="${escapeHtml(day.label || '')}">${escapeHtml(head)}</div>
+            <div class="agenda-preview-lanes" style="grid-template-columns: repeat(${lanes}, minmax(0, 1fr))">
+              ${laneCols.join('')}
+            </div>
+            ${googleBits ? `<div class="agenda-preview-google-row">${googleBits}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      const google = preview.google || {};
+      let googleNote = '';
+      if (!google.connected) {
+        googleNote = '<p class="muted">Conecta Google Calendar para ver también esos eventos en la vista previa.</p>';
+      } else if (!google.ok) {
+        googleNote = `<p class="calendar-warning">No se pudieron leer eventos de Google${google.error ? `: ${escapeHtml(google.error)}` : ''}.</p>`;
+      }
+
+      const services = preview.services || [];
+      const serviceOptions = services.map((service) => `
+        <option value="${escapeHtml(service.id)}" ${service.id === preview.serviceId ? 'selected' : ''}>
+          ${escapeHtml(service.name)} (${escapeHtml(String(service.durationMinutes))} min)
+        </option>
+      `).join('');
+      const servicePicker = services.length
+        ? `<label class="agenda-preview-service">Servicio
+            <select data-preview-service>${serviceOptions}</select>
+          </label>`
+        : '<p class="muted">Agrega un servicio activo para ver los bloques.</p>';
+      const durationNote = preview.durationMinutes
+        ? `<p class="muted">Columnas = citas simultáneas (${escapeHtml(String(lanes))}). Filas cada ${escapeHtml(String(preview.slotIntervalMinutes || 30))} min hasta el cierre. Reserva hasta donde quepa el servicio (${escapeHtml(String(preview.durationMinutes))} min).</p>`
+        : '';
+
+      return `
+        <div class="agenda-preview-toolbar">
+          <button type="button" class="btn-sm btn-secondary" data-preview-nav="-7">←</button>
+          <strong>${escapeHtml(previewRangeLabel(preview))}</strong>
+          <button type="button" class="btn-sm btn-secondary" data-preview-nav="7">→</button>
+          <button type="button" class="btn-sm btn-secondary" data-preview-nav="today">Hoy</button>
+          ${servicePicker}
+        </div>
+        ${durationNote}
+        <div class="agenda-preview-legend muted">
+          <span><i class="agenda-preview-swatch slot-free"></i> Libre</span>
+          <span><i class="agenda-preview-swatch apt"></i> Cita</span>
+          <span><i class="agenda-preview-swatch slot-full"></i> Lleno</span>
+          <span><i class="agenda-preview-swatch google"></i> Google</span>
+        </div>
+        ${googleNote}
+        ${anyOpen ? '' : '<p class="muted">Esta semana no tiene horarios de atención abiertos.</p>'}
+        <div class="agenda-preview-scroll">
+          <div class="agenda-preview-week">
+            ${dayColumns}
+          </div>
+        </div>
+      `;
+    }
+
+    async function refreshPreview(weekStart, serviceId) {
+      if (destroyed) return;
+      const root = container.querySelector('[data-agenda-preview]');
+      if (!root) return;
+      root.innerHTML = '<p class="muted">Cargando vista previa…</p>';
+      try {
+        const params = new URLSearchParams();
+        if (weekStart) params.set('weekStart', weekStart);
+        const sid = serviceId !== undefined ? serviceId : previewServiceId;
+        if (sid) params.set('serviceId', sid);
+        const query = params.toString() ? `?${params.toString()}` : '';
+        const res = await api(`${path('/preview')}${query}`);
+        if (destroyed) return;
+        const preview = res.preview;
+        previewWeekStart = preview.weekStart || weekStart || '';
+        previewServiceId = preview.serviceId || sid || '';
+        root.innerHTML = buildPreviewHtml(preview);
+        root.querySelectorAll('[data-preview-nav]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const action = button.getAttribute('data-preview-nav');
+            if (action === 'today') {
+              previewWeekStart = '';
+              refreshPreview('', previewServiceId).catch(fail);
+              return;
+            }
+            const delta = Number(action);
+            if (!Number.isFinite(delta) || !previewWeekStart) {
+              refreshPreview(previewWeekStart, previewServiceId).catch(fail);
+              return;
+            }
+            const [y, m, d] = previewWeekStart.split('-').map(Number);
+            const next = new Date(Date.UTC(y, m - 1, d + delta));
+            const nextStart = next.toISOString().slice(0, 10);
+            refreshPreview(nextStart, previewServiceId).catch(fail);
+          });
+        });
+        root.querySelector('[data-preview-service]')?.addEventListener('change', (event) => {
+          previewServiceId = event.target.value || '';
+          refreshPreview(previewWeekStart, previewServiceId).catch(fail);
+        });
+      } catch (err) {
+        if (destroyed) return;
+        root.innerHTML = `<p class="calendar-warning">${escapeHtml((err && err.message) || 'No se pudo cargar la vista previa')}</p>`;
+      }
+    }
 
     function flash(message, kind) {
       const el = document.getElementById('form-flash');
@@ -94,7 +308,6 @@
           name: row.querySelector('[data-svc-name]')?.value || '',
           description: row.querySelector('[data-svc-description]')?.value || '',
           durationMinutes: Number(row.querySelector('[data-svc-duration]')?.value || 30),
-          capacity: Number(row.querySelector('[data-svc-capacity]')?.value || 1),
           active: Boolean(row.querySelector('[data-svc-active]')?.checked)
         };
         const id = row.querySelector('[data-svc-id]')?.value;
@@ -117,8 +330,10 @@
       state.rules = {
         minNoticeMinutes: num('[data-rule="minNoticeMinutes"]', state.rules?.minNoticeMinutes),
         maxDaysAhead: num('[data-rule="maxDaysAhead"]', state.rules?.maxDaysAhead),
-        slotIntervalMinutes: num('[data-rule="slotIntervalMinutes"]', state.rules?.slotIntervalMinutes),
+        slotIntervalMinutes: num('[data-rule="slotIntervalMinutes"]', state.rules?.slotIntervalMinutes ?? 30),
         bufferMinutes: num('[data-rule="bufferMinutes"]', state.rules?.bufferMinutes),
+        appointmentsPerBlock: num('[data-rule="appointmentsPerBlock"]', state.rules?.appointmentsPerBlock ?? 1),
+        calendarColumns: num('[data-rule="appointmentsPerBlock"]', state.rules?.appointmentsPerBlock ?? 1),
         allowCancel: Boolean(container.querySelector('[data-rule="allowCancel"]')?.checked),
         allowReschedule: Boolean(container.querySelector('[data-rule="allowReschedule"]')?.checked)
       };
@@ -217,9 +432,6 @@
           <label>Duración (minutos)
             <input type="number" data-svc-duration min="5" max="480" step="5" value="${escapeHtml(service.durationMinutes ?? 30)}" ${dis}>
           </label>
-          <label>Capacidad (citas simultáneas por horario)
-            <input type="number" data-svc-capacity min="1" max="100" step="1" value="${escapeHtml(service.capacity ?? 1)}" ${dis}>
-          </label>
           <label class="check">
             <input type="checkbox" data-svc-active ${service.active !== false ? 'checked' : ''} ${dis}>
             <span>Servicio activo</span>
@@ -257,10 +469,12 @@
       `;
     }
 
-    function ruleNumber(key, label, min, max, step = 1) {
+    function ruleNumber(key, label, min, max, step = 1, fallback = '') {
+      const raw = state.rules?.[key];
+      const value = raw === undefined || raw === null || raw === '' ? fallback : raw;
       return `
         <label>${label}
-          <input type="number" data-rule="${key}" min="${min}" max="${max}" step="${step}" value="${escapeHtml(state.rules?.[key] ?? '')}" ${dis}>
+          <input type="number" data-rule="${key}" min="${min}" max="${max}" step="${step}" value="${escapeHtml(value)}" ${dis}>
         </label>
       `;
     }
@@ -355,6 +569,12 @@
           <h3>Horarios de atención</h3>
           ${DAYS.map(dayRow).join('')}
 
+          <h3>Vista previa</h3>
+          <p class="muted">Semana laboral: cada día se parte en columnas verticales (una por cupo de “Citas por bloque”), como varios calendarios en uno. Sin eje de horas.</p>
+          <div class="agenda-preview" data-agenda-preview>
+            <p class="muted">Cargando vista previa…</p>
+          </div>
+
           <h3>Servicios</h3>
           ${(state.services || []).map(serviceRow).join('') || '<p class="muted">Sin servicios. Agrega uno.</p>'}
           <div class="actions">
@@ -371,7 +591,10 @@
           <div class="stack">
             ${ruleNumber('minNoticeMinutes', 'Anticipación mínima (minutos)', 0, 10080)}
             ${ruleNumber('maxDaysAhead', 'Máximo de días a futuro', 1, 365)}
-            ${ruleNumber('slotIntervalMinutes', 'Intervalo entre horarios (minutos)', 5, 240, 5)}
+            ${ruleNumber('slotIntervalMinutes', 'Incremento del calendario (minutos)', 5, 120, 5, 30)}
+            <p class="muted">Cada cuántos minutos avanza el calendario y los horarios ofrecidos (default 30: 09:00, 09:30, 10:00…). Cada cita ocupa la <strong>duración del servicio</strong>.</p>
+            ${ruleNumber('appointmentsPerBlock', 'Citas por bloque / columnas del calendario', 1, 12)}
+            <p class="muted">Cupo simultáneo por horario de inicio y número de columnas verticales en la vista previa. Ej. 3 = hasta 3 citas a las 09:00 (3 columnas).</p>
             ${ruleNumber('bufferMinutes', 'Tiempo de preparación entre citas (minutos)', 0, 240, 5)}
             <label class="check">
               <input type="checkbox" data-rule="allowCancel" ${state.rules?.allowCancel !== false ? 'checked' : ''} ${dis}>
@@ -398,6 +621,7 @@
         </section>
       `;
       bind();
+      refreshPreview(previewWeekStart).catch(fail);
     }
 
     // ── Eventos ───────────────────────────────────────────────────────────
@@ -537,7 +761,7 @@
       on('#agenda-add-service', 'click', () => {
         syncFromDom();
         state.services = state.services.concat([{
-          name: '', description: '', durationMinutes: 30, capacity: 1, active: true
+          name: '', description: '', durationMinutes: 30, active: true
         }]);
         render();
       });

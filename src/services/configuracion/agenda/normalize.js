@@ -8,6 +8,7 @@ const {
   MAX_EXCEPTIONS,
   defaultRules
 } = require('./constants');
+// CAPACITY_MIN/MAX reutilizados como rango de appointmentsPerBlock.
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -97,11 +98,6 @@ function normalizeServices(input) {
     if (!Number.isInteger(duration) || duration < 5 || duration > 480) {
       return { ok: false, error: `La duración de "${name}" debe estar entre 5 y 480 minutos` };
     }
-    const rawCapacity = item?.capacity === undefined || item?.capacity === null || item?.capacity === ''
-      ? 1
-      : item.capacity;
-    const capacity = readInt(rawCapacity, CAPACITY_MIN, CAPACITY_MAX, `La capacidad de "${name}"`);
-    if (!capacity.ok) return capacity;
     let id = typeof item?.id === 'string' ? item.id.trim() : '';
     if (id && !SERVICE_ID_RE.test(id)) {
       return { ok: false, error: `Identificador de servicio inválido en "${name}"` };
@@ -109,12 +105,12 @@ function normalizeServices(input) {
     if (!id) id = `svc_${crypto.randomBytes(6).toString('hex')}`;
     if (ids.has(id)) return { ok: false, error: 'Hay servicios con el mismo identificador' };
     ids.add(id);
+    // capacity por servicio queda obsoleto; se ignora si llega en el payload.
     services.push({
       id,
       name,
       description,
       durationMinutes: duration,
-      capacity: capacity.value,
       active: item?.active !== false
     });
   }
@@ -157,10 +153,23 @@ function normalizeRules(input) {
   if (!minNotice.ok) return minNotice;
   const maxDays = readInt(source.maxDaysAhead ?? defaults.maxDaysAhead, 1, 365, 'El máximo de días a futuro');
   if (!maxDays.ok) return maxDays;
-  const interval = readInt(source.slotIntervalMinutes ?? defaults.slotIntervalMinutes, 5, 240, 'El intervalo de horarios');
+  const interval = readInt(
+    source.slotIntervalMinutes ?? defaults.slotIntervalMinutes,
+    5,
+    120,
+    'El incremento del calendario'
+  );
   if (!interval.ok) return interval;
   const buffer = readInt(source.bufferMinutes ?? defaults.bufferMinutes, 0, 240, 'El tiempo de preparación');
   if (!buffer.ok) return buffer;
+  // Citas por bloque = columnas verticales del calendario (mismo valor).
+  const perBlock = readInt(
+    source.appointmentsPerBlock ?? source.calendarColumns ?? defaults.appointmentsPerBlock,
+    CAPACITY_MIN,
+    Math.min(CAPACITY_MAX, 12),
+    'Las citas por bloque / columnas del calendario'
+  );
+  if (!perBlock.ok) return perBlock;
   return {
     ok: true,
     value: {
@@ -168,6 +177,8 @@ function normalizeRules(input) {
       maxDaysAhead: maxDays.value,
       slotIntervalMinutes: interval.value,
       bufferMinutes: buffer.value,
+      appointmentsPerBlock: perBlock.value,
+      calendarColumns: perBlock.value,
       allowCancel: source.allowCancel !== false,
       allowReschedule: source.allowReschedule !== false
     }
