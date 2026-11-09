@@ -1,9 +1,5 @@
 const WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
-function pad(value) {
-  return String(value).padStart(2, '0');
-}
-
 function formatParts(date, timeZone) {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -23,6 +19,7 @@ function formatParts(date, timeZone) {
   return parts;
 }
 
+/** Hora de pared (fecha + HH:mm) en `timeZone` -> instante UTC (Date). */
 function zonedToUtc(dateStr, timeStr, timeZone) {
   const [year, month, day] = dateStr.split('-').map(Number);
   const [hour, minute] = timeStr.split(':').map(Number);
@@ -66,94 +63,16 @@ function weekdayKeyFromDate(dateStr) {
   return WEEKDAY_KEYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
 }
 
-function toMinutes(hour, minute) {
-  return (Number(hour) * 60) + Number(minute);
-}
-
-function clockToMinutes(value) {
-  const [hour, minute] = String(value || '').split(':');
-  return toMinutes(hour, minute);
+/** Lunes de la semana civil de `dateStr` (AAAA-MM-DD). */
+function mondayOfWeek(dateStr) {
+  const index = WEEKDAY_KEYS.indexOf(weekdayKeyFromDate(dateStr));
+  const daysFromMonday = index < 0 ? 0 : (index + 6) % 7;
+  return addDays(dateStr, -daysFromMonday);
 }
 
 function rangesOverlap(start, end, otherStart, otherEnd, bufferMs) {
   const gap = Math.max(0, bufferMs || 0);
   return start < otherEnd + gap && otherStart < end + gap;
-}
-
-function fitsHours(startUtc, endUtc, hours, timeZone) {
-  const startDate = localDate(startUtc, timeZone);
-  const endDate = localDate(endUtc, timeZone);
-  if (startDate !== endDate) return false;
-  const day = hours?.[weekdayKeyFromDate(startDate)];
-  if (!day?.enabled || !Array.isArray(day.intervals)) return false;
-  const startParts = formatParts(startUtc, timeZone);
-  const endParts = formatParts(endUtc, timeZone);
-  const startMin = toMinutes(startParts.hour, startParts.minute);
-  const endMin = toMinutes(endParts.hour, endParts.minute);
-  return day.intervals.some((interval) => {
-    const open = clockToMinutes(interval.start);
-    const close = clockToMinutes(interval.end);
-    return startMin >= open && endMin <= close;
-  });
-}
-
-const LOCAL_DATETIME_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
-const EXPLICIT_ZONE_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
-
-function hasExplicitZone(value) {
-  return typeof value === 'string' && EXPLICIT_ZONE_RE.test(value.trim());
-}
-
-function sameMonthDayInYear(dateStr, year) {
-  const match = String(dateStr).match(/^\d{4}-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  const candidate = `${year}-${match[1]}-${match[2]}`;
-  const [y, m, d] = candidate.split('-').map(Number);
-  const check = new Date(Date.UTC(y, m - 1, d));
-  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== d) return null;
-  return candidate;
-}
-
-/**
- * Una fecha anterior a hoy con otro año se mueve al mismo mes y día
- * de este año, o del siguiente si ese día ya pasó.
- * El mismo año se deja como pasado para que el llamador lo rechace.
- */
-function rollPastDate(dateStr, today) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return null;
-  if (dateStr >= today) return { date: dateStr, correctedFrom: null, past: false };
-  if (dateStr.slice(0, 4) === today.slice(0, 4)) {
-    return { date: dateStr, correctedFrom: null, past: true };
-  }
-  const year = Number(today.slice(0, 4));
-  let rolled = sameMonthDayInYear(dateStr, year);
-  if (!rolled || rolled < today) rolled = sameMonthDayInYear(dateStr, year + 1);
-  if (!rolled) return { date: dateStr, correctedFrom: null, past: true };
-  return { date: rolled, correctedFrom: dateStr, past: false };
-}
-
-function parseLocalDateTime(value, timeZone) {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const local = value.trim().match(LOCAL_DATETIME_RE);
-  if (!local) return null;
-  return zonedToUtc(local[1], local[2], timeZone);
-}
-
-/**
- * Acepta la hora local con o sin segundos, y también un ISO con Z o desfase.
- * El ISO con zona es un instante real (el campo start del horario).
- * Sin zona, la hora del reloj se lee en la zona del calendario.
- */
-function interpretSlotStart(value, timeZone) {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const text = value.trim();
-  if (hasExplicitZone(text)) {
-    const parsed = new Date(text);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-  const wall = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/);
-  if (!wall) return null;
-  return zonedToUtc(wall[1], wall[2], timeZone);
 }
 
 function formatDayLabel(start, timeZone) {
@@ -181,84 +100,129 @@ function formatSlotLabel(start, end, timeZone) {
   return `${day}, ${clock.format(start)}–${clock.format(end)}`;
 }
 
-function generateSlots({
-  now,
-  timeZone,
-  hours,
-  durationMinutes,
-  rules,
-  fromDate,
-  toDate,
-  busy = [],
-  limit = 8,
-  onePerDay = false
-}) {
-  const interval = Math.max(5, Number(rules.slotIntervalMinutes) || 30);
-  const bufferMs = Math.max(0, Number(rules.bufferMinutes) || 0) * 60000;
-  const durationMs = durationMinutes * 60000;
-  const minStart = now.getTime() + (Number(rules.minNoticeMinutes) || 0) * 60000;
-  const maxStart = now.getTime() + (Number(rules.maxDaysAhead) || 30) * 86400000;
-  const slots = [];
-  let date = fromDate;
-  while (date <= toDate && slots.length < limit) {
-    const day = hours?.[weekdayKeyFromDate(date)];
-    let foundDay = false;
-    if (day?.enabled && Array.isArray(day.intervals)) {
-      const windows = [...day.intervals].sort((a, b) => a.start.localeCompare(b.start));
-      for (const window of windows) {
-        if (foundDay) break;
-        let cursor = zonedToUtc(date, window.start, timeZone);
-        const close = zonedToUtc(date, window.end, timeZone);
-        while (cursor.getTime() + durationMs <= close.getTime() && slots.length < limit) {
-          const startMs = cursor.getTime();
-          const endMs = startMs + durationMs;
-          const allowed = startMs >= minStart && startMs <= maxStart;
-          const conflict = busy.some((item) => rangesOverlap(
-            startMs,
-            endMs,
-            item.start,
-            item.end,
-            bufferMs
-          ));
-          if (allowed && !conflict) {
-            const start = new Date(startMs);
-            const end = new Date(endMs);
-            slots.push({
-              start: start.toISOString(),
-              end: end.toISOString(),
-              startLocal: formatLocal(start, timeZone),
-              endLocal: formatLocal(end, timeZone),
-              dayLabel: formatDayLabel(start, timeZone),
-              label: formatSlotLabel(start, end, timeZone)
-            });
-            if (onePerDay) {
-              foundDay = true;
-              break;
-            }
-          }
-          cursor = new Date(startMs + interval * 60000);
-        }
-      }
-    }
-    date = addDays(date, 1);
+/**
+ * Ventanas de atención de una fecha local (AAAA-MM-DD).
+ * Una excepción de esa fecha manda sobre el horario semanal:
+ * cerrada => sin ventanas; con intervalos => esos intervalos.
+ */
+function dayWindows({ date, hours, exceptions }) {
+  const exception = Array.isArray(exceptions)
+    ? exceptions.find((item) => item?.date === date)
+    : null;
+  if (exception) {
+    const intervals = Array.isArray(exception.intervals) ? exception.intervals : [];
+    if (exception.closed || !intervals.length) return { closed: true, intervals: [] };
+    return {
+      closed: false,
+      intervals: intervals
+        .map((interval) => ({ start: interval.start, end: interval.end }))
+        .sort((a, b) => a.start.localeCompare(b.start))
+    };
   }
-  return slots;
+  const day = hours?.[weekdayKeyFromDate(date)];
+  if (!day?.enabled || !Array.isArray(day.intervals) || !day.intervals.length) {
+    return { closed: true, intervals: [] };
+  }
+  return {
+    closed: false,
+    intervals: day.intervals
+      .map((interval) => ({ start: interval.start, end: interval.end }))
+      .sort((a, b) => a.start.localeCompare(b.start))
+  };
+}
+
+const LOCAL_DATETIME_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
+const EXPLICIT_ZONE_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+function hasExplicitZone(value) {
+  return typeof value === 'string' && EXPLICIT_ZONE_RE.test(value.trim());
+}
+
+function sameMonthDayInYear(dateStr, year) {
+  const match = String(dateStr).match(/^\d{4}-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const candidate = `${year}-${match[1]}-${match[2]}`;
+  const [y, m, d] = candidate.split('-').map(Number);
+  const check = new Date(Date.UTC(y, m - 1, d));
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== d) return null;
+  return candidate;
+}
+
+/**
+ * Una fecha anterior a hoy con otro año se mueve al mismo mes y día de este año
+ * (o del siguiente si ya pasó). El mismo año se deja como pasado para que el llamador lo rechace.
+ */
+function rollPastDate(dateStr, today) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return null;
+  if (dateStr >= today) return { date: dateStr, correctedFrom: null, past: false };
+  if (dateStr.slice(0, 4) === today.slice(0, 4)) {
+    return { date: dateStr, correctedFrom: null, past: true };
+  }
+  const year = Number(today.slice(0, 4));
+  let rolled = sameMonthDayInYear(dateStr, year);
+  if (!rolled || rolled < today) rolled = sameMonthDayInYear(dateStr, year + 1);
+  if (!rolled) return { date: dateStr, correctedFrom: null, past: true };
+  return { date: rolled, correctedFrom: dateStr, past: false };
+}
+
+function parseLocalDateTime(value, timeZone) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const local = value.trim().match(LOCAL_DATETIME_RE);
+  if (!local) return null;
+  return zonedToUtc(local[1], local[2], timeZone);
+}
+
+/**
+ * Acepta la hora local con o sin segundos, y también un ISO con Z o desfase
+ * (instante real). Sin zona, la hora del reloj se lee en la zona de la agenda.
+ */
+function interpretSlotStart(value, timeZone) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = value.trim();
+  if (hasExplicitZone(text)) {
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const wall = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/);
+  if (!wall) return null;
+  return zonedToUtc(wall[1], wall[2], timeZone);
+}
+
+function clockMinutes(value) {
+  const [hour, minute] = String(value || '').split(':');
+  return (Number(hour) * 60) + Number(minute);
+}
+
+/** ¿[startUtc, endUtc] cabe completo en una ventana de atención de ese día (excepciones incluidas)? */
+function fitsHours(startUtc, endUtc, { hours, exceptions = [], timeZone }) {
+  const date = localDate(startUtc, timeZone);
+  if (date !== localDate(endUtc, timeZone)) return false;
+  const { intervals } = dayWindows({ date, hours, exceptions });
+  const startParts = formatParts(startUtc, timeZone);
+  const endParts = formatParts(endUtc, timeZone);
+  const startMin = (Number(startParts.hour) * 60) + Number(startParts.minute);
+  const endMin = (Number(endParts.hour) * 60) + Number(endParts.minute);
+  return intervals.some((interval) => (
+    startMin >= clockMinutes(interval.start) && endMin <= clockMinutes(interval.end)
+  ));
 }
 
 module.exports = {
+  hasExplicitZone,
+  rollPastDate,
+  parseLocalDateTime,
+  interpretSlotStart,
+  fitsHours,
+  WEEKDAY_KEYS,
   formatParts,
   zonedToUtc,
   formatLocal,
   localDate,
   addDays,
   weekdayKeyFromDate,
+  mondayOfWeek,
   rangesOverlap,
-  fitsHours,
-  hasExplicitZone,
-  rollPastDate,
-  parseLocalDateTime,
-  interpretSlotStart,
   formatDayLabel,
   formatSlotLabel,
-  generateSlots
+  dayWindows
 };

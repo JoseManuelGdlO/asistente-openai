@@ -18,7 +18,7 @@ const {
   createCalendarInviteToken,
   calendarInviteFields,
   calendarInviteUrlFor
-} = require('./services/calendar/invite');
+} = require('./services/configuracion/agenda/invite');
 const defaultMetaSignup = require('./services/metaSignupService');
 const {
   verifyMetaWebhookChallenge,
@@ -28,7 +28,7 @@ const {
 const { parseAssistantVersionBody } = require('./services/assistantVersionInput');
 const { sendHttpError } = require('./utils/httpError');
 const { describeFirestoreTarget } = require('./services/firestoreEnv');
-const { mountCalendarRoutes } = require('./services/calendar/routes');
+const { mountAgendaRoutes } = require('./services/configuracion/agenda/routes');
 const { mountBlacklistRoutes } = require('./services/blacklist/routes');
 
 const ULTRAMSG_FIELD_KEYS = ['ULTRAMSG_TOKEN', 'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_WEBHOOK_TOKEN'];
@@ -690,11 +690,12 @@ function createApp(deps = {}) {
   });
 
   async function calendarSummary(clientId) {
-    if (!deps.calendarService || typeof deps.calendarService.publicSummary !== 'function') return null;
+    const service = deps.agendaService || null;
+    if (!service || typeof service.publicSummary !== 'function') return null;
     try {
-      return await deps.calendarService.publicSummary(clientId);
+      return await service.publicSummary(clientId);
     } catch (error) {
-      console.error('Error leyendo el resumen de calendario:', error.message);
+      console.error('Error leyendo el resumen de agenda:', error.message);
       return null;
     }
   }
@@ -1815,8 +1816,8 @@ function createApp(deps = {}) {
     res.sendFile(path.join(publicDir, 'vincular.html'));
   });
 
-  mountCalendarRoutes(app, {
-    calendarService: deps.calendarService || null,
+  mountAgendaRoutes(app, {
+    agendaService: deps.agendaService || null,
     requireAdminAuth,
     requireEditLock: (req, res, clientId) => requireEditLockHolder(firebaseService, req, res, clientId),
     commandManager,

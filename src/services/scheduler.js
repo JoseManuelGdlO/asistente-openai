@@ -13,6 +13,10 @@ class Scheduler {
     this.tasks = new Map();
   }
 
+  setAgendaSyncHandler(handler) {
+    this.agendaSyncHandler = typeof handler === 'function' ? handler : null;
+  }
+
   // Inicializar todas las tareas programadas
   init() {
     console.log('🕐 Inicializando tareas programadas...');
@@ -28,8 +32,27 @@ class Scheduler {
 
     // Limpieza diaria de webhook_dedup expirados (3:00 AM)
     this.scheduleWebhookDedupCleanup();
+
+    // Sync de citas agenda con Google Calendar (cada 2 minutos)
+    this.scheduleAgendaSync();
     
     console.log('✅ Tareas programadas inicializadas');
+  }
+
+  scheduleAgendaSync() {
+    const task = cron.schedule('*/2 * * * *', async () => {
+      if (!this.agendaSyncHandler) return;
+      try {
+        await this.agendaSyncHandler();
+      } catch (error) {
+        console.error('❌ Error en sync de agenda:', error.message);
+      }
+    }, {
+      scheduled: true,
+      timezone: 'America/Mexico_City'
+    });
+    this.tasks.set('agendaSync', task);
+    console.log('📅 Sync agenda programado cada 2 minutos');
   }
 
   // Programar envío de agenda diaria a las 10:00 AM

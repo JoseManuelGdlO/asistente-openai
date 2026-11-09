@@ -22,11 +22,13 @@ const confirmationManager = new ConfirmationManager();
 const userContextManager = new UserContextManager();
 const documentStore = new DocumentStore();
 const openAIManager = new OpenAIManager();
-const { createCalendarService } = require('./services/calendar/createCalendarService');
-const calendarService = createCalendarService({
+const { createAgendaService } = require('./services/configuracion/agenda/createAgendaService');
+
+const agendaService = createAgendaService({
   firebaseService: openAIManager.firebaseService
 });
-openAIManager.calendarBooking = calendarService;
+openAIManager.calendarBooking = agendaService;
+
 const webhookManager = new WebhookManager(
   ultraMsgManager,
   openAIManager,
@@ -36,6 +38,7 @@ const webhookManager = new WebhookManager(
 );
 const schedulerController = new SchedulerController(scheduler);
 webhookManager.debounceManager.startSweep();
+scheduler.setAgendaSyncHandler(() => agendaService.processSyncQueue());
 
 async function reinitUltraMsgInstances() {
   console.log('🔄 Re-inicializando instancias UltraMsg...');
@@ -50,7 +53,7 @@ const app = createApp({
   schedulerController,
   documentStore,
   reinitUltraMsgInstances,
-  calendarService
+  agendaService
 });
 
 async function autoReloadClients() {

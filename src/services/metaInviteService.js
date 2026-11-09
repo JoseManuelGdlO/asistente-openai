@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { digitsOnly } = require('./metaConfig');
-const { describeCalendarInvite, redactCalendarInvite } = require('./calendar/invite');
+const { describeCalendarInvite, redactCalendarInvite } = require('./configuracion/agenda/invite');
 
 const INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const CLIENT_SECRET_KEYS = [

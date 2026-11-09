@@ -106,6 +106,19 @@ class GoogleCalendarClient {
     }
   }
 
+  /** Revoca el refresh token en Google (mejor esfuerzo; el llamador ignora fallos). */
+  async revoke(refreshToken) {
+    try {
+      const body = new URLSearchParams({ token: refreshToken });
+      await axios.post('https://oauth2.googleapis.com/revoke', body.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 15000
+      });
+    } catch (error) {
+      throw mapAxiosError(error);
+    }
+  }
+
   async userEmail(token) {
     try {
       const res = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -154,6 +167,43 @@ class GoogleCalendarClient {
       return (calendar?.busy || []).map((item) => ({ start: item.start, end: item.end }));
     } catch (error) {
       if (error instanceof GoogleCalendarError) throw error;
+      throw mapAxiosError(error);
+    }
+  }
+
+  /**
+   * Eventos del calendario en [timeMin, timeMax) (singleEvents expandido).
+   * Incluye títulos; útil para el previsualizador del panel.
+   */
+  async listEvents(token, { calendarId, timeMin, timeMax, timeZone }) {
+    try {
+      const res = await axios.get(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            timeMin,
+            timeMax,
+            timeZone,
+            singleEvents: true,
+            orderBy: 'startTime',
+            maxResults: 250
+          },
+          timeout: 15000
+        }
+      );
+      return (res.data?.items || []).map((item) => {
+        const start = item.start?.dateTime || item.start?.date || '';
+        const end = item.end?.dateTime || item.end?.date || '';
+        return {
+          id: item.id || '',
+          summary: item.summary || '(sin título)',
+          start,
+          end,
+          allDay: Boolean(item.start?.date && !item.start?.dateTime)
+        };
+      }).filter((item) => item.id && item.start && item.end);
+    } catch (error) {
       throw mapAxiosError(error);
     }
   }

@@ -1,10 +1,15 @@
 const OpenAI = require('openai');
 const FirebaseService = require('../services/firebaseService');
 
-const { replyOffersAppointmentTime } = require('../services/calendar/tools');
+const {
+  replyOffersAppointmentTime,
+  latestAvailabilityOffer,
+  replyInventedOfferedTimes,
+  replyInventedHoursOnDateOffer
+} = require('../services/configuracion/agenda/tools');
 
 const MAX_HISTORY_ITEMS = 40;
-const MAX_TOOL_LOOPS = 3;
+const MAX_TOOL_LOOPS = 5;
 
 // El PDF solo se reenvía si el usuario lo pide: menciona el documento + una intención de repetir
 const DOC_MENTION_REGEX = /(pdf|dossier|documento|archivo|folleto|temario|catalogo|catálogo)/;
@@ -456,7 +461,7 @@ class OpenAIManager {
       args = {};
     }
 
-    if (this.calendarBooking && this.calendarBooking.isCalendarTool(functionName)) {
+    if (this.calendarBooking && this.calendarBooking.isAgendaTool(functionName)) {
       try {
         return await this.calendarBooking.execute(functionName, args, {
           clientId: runContext?.clientId,
@@ -689,7 +694,7 @@ class OpenAIManager {
         ? this.calendarBooking.mergeTools(storedTools, calendarToolDefs)
         : storedTools;
       const visibleTools = this.calendarBooking && !calendarRuntime?.ready
-        ? allTools.filter((tool) => !this.calendarBooking.isCalendarTool(tool?.name || tool?.function?.name))
+        ? allTools.filter((tool) => !this.calendarBooking.isAgendaTool(tool?.name || tool?.function?.name))
         : allTools;
       const canOfferPdf = await this.canOfferEnviarPdf(
         message,
@@ -769,6 +774,35 @@ class OpenAIManager {
             toolsLocked = false;
             forceCalendarLookup = true;
             console.log('📅 Respuesta con horario sin consultar el calendario; se exige getAvailableSlots');
+            continue;
+          }
+          const offer = latestAvailabilityOffer(runContext.toolTrace);
+          const inventedTimes = replyInventedOfferedTimes(replyText, offer);
+          const inventedHoursOnDates = replyInventedHoursOnDateOffer(replyText, offer);
+          if (
+            calendarRuntime?.ready
+            && offer
+            && (inventedTimes || inventedHoursOnDates)
+            && loops < MAX_TOOL_LOOPS
+            && !runContext.availabilityOfferCorrected
+          ) {
+            runContext.availabilityOfferCorrected = true;
+            items.splice(itemsBeforeOutput);
+            const correction = inventedHoursOnDates
+              ? (
+                'Corrección del sistema: getAvailableSlots solo trajo FECHAS (sin horas). '
+                + 'En reply ofrece únicamente esas fechas (date/label u offerText). '
+                + 'Prohibido inventar horas. Cuando elijan un día, se volverá a consultar con date.'
+              )
+              : (
+                'Corrección del sistema: tu reply inventó horas que no están en getAvailableSlots. '
+                + 'Copia offerText tal cual o enumera solo los label de slots. '
+                + 'Prohibido interpolar horarios (p. ej. cada 30 min). '
+                + `offerText obligatorio:\n${offer.offerText || '(ver slots)'}`
+              );
+            items.push({ type: 'message', role: 'user', content: correction });
+            toolsLocked = true;
+            console.log('📅 Reply inventó horarios; se exige copiar offerText de getAvailableSlots');
             continue;
           }
           break;

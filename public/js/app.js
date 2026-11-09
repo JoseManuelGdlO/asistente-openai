@@ -1202,7 +1202,7 @@
         if (!canEdit) return;
         if (storedCalendarInvite && !confirm('El link anterior dejará de servir. ¿Generar uno nuevo?')) return;
         try {
-          const result = await api(`/clients/${encodeURIComponent(client.id)}/calendar/invite`, { method: 'POST' });
+          const result = await api(`/clients/${encodeURIComponent(client.id)}/configuracion/agenda/invite`, { method: 'POST' });
           if (result.calendarInviteUrl) {
             sessionStorage.setItem(`calendarInviteUrl:${client.id}`, result.calendarInviteUrl);
           }
@@ -1219,7 +1219,7 @@
     if (dismissCalendarBtn) {
       dismissCalendarBtn.addEventListener('click', async () => {
         try {
-          await api(`/clients/${encodeURIComponent(client.id)}/calendar/notice/dismiss`, { method: 'POST' });
+          await api(`/clients/${encodeURIComponent(client.id)}/configuracion/agenda/notice/dismiss`, { method: 'POST' });
           render();
         } catch (err) {
           showFlash(document.getElementById('form-flash'), err.message, 'err');
@@ -1284,7 +1284,7 @@
         </aside>
         <div class="assistant-editor">
           <p class="muted assistant-intro">El prompt es el cerebro del bot. Tools, config y responseSchema se editan como JSON.</p>
-          <div id="calendar-mount"></div>
+          <div id="configuracion-mount"></div>
           <div id="blacklist-mount"></div>
           <form id="assistant-form" class="card stack">
             <div id="version-viewing" class="version-viewing" hidden>
@@ -1780,20 +1780,37 @@
       history.replaceState(null, '', `${location.pathname}${location.search}${clean}`);
     }
 
-    if (window.CalendarPanel) {
-      window.CalendarPanel.mount(document.getElementById('calendar-mount'), {
-        clientId,
-        canEdit,
-        api,
-        escapeHtml,
-        inviteUrl: client?.calendarInvite?.status === 'pending'
-          ? (sessionStorage.getItem(`calendarInviteUrl:${clientId}`) || '')
-          : '',
-        onInviteUrl: (url) => sessionStorage.setItem(`calendarInviteUrl:${clientId}`, url),
-        onState: applyPlaygroundCalendar,
-        onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
+    let agendaPanel = null;
+    if (window.ConfiguracionHub) {
+      window.ConfiguracionHub.mount(document.getElementById('configuracion-mount'), {
+        // Al volver de Google (?calendar=...) se abre la agenda directamente.
+        autoOpen: Boolean(notice && calendarNotices[notice]),
+        onCloseAgenda: () => {
+          if (agendaPanel && typeof agendaPanel.destroy === 'function') agendaPanel.destroy();
+          agendaPanel = null;
+        },
+        onOpenAgenda: (slot) => {
+          if (!slot || !window.AgendaPanel) return;
+          agendaPanel = window.AgendaPanel.mount(slot, {
+            clientId,
+            canEdit,
+            api,
+            escapeHtml,
+            inviteUrl: client?.calendarInvite?.status === 'pending'
+              ? (sessionStorage.getItem(`calendarInviteUrl:${clientId}`) || '')
+              : '',
+            onInviteUrl: (url) => sessionStorage.setItem(`calendarInviteUrl:${clientId}`, url),
+            onState: applyPlaygroundCalendar,
+            onError: (err) => handleLostEditLock(document.getElementById('form-flash'), err)
+          });
+        }
       });
     }
+
+    // Estado inicial del interruptor de escritura de prueba (aunque la agenda no esté abierta).
+    api(`/clients/${encodeURIComponent(clientId)}/configuracion/agenda`)
+      .then((res) => applyPlaygroundCalendar(res.agenda))
+      .catch(() => {});
 
     if (window.BlacklistPanel) {
       window.BlacklistPanel.mount(document.getElementById('blacklist-mount'), {
@@ -1812,11 +1829,14 @@
         return;
       }
       try {
-        const res = await api(`/clients/${encodeURIComponent(clientId)}/calendar/playground-write`, {
+        const res = await api(`/clients/${encodeURIComponent(clientId)}/configuracion/agenda/playground-write`, {
           method: 'PUT',
           body: { enabled: next }
         });
-        applyPlaygroundCalendar(res.calendar);
+        applyPlaygroundCalendar(res.agenda);
+        if (agendaPanel && !(typeof agendaPanel.isDestroyed === 'function' && agendaPanel.isDestroyed())) {
+          agendaPanel.setState(res.agenda);
+        }
       } catch (err) {
         event.target.checked = !next;
         if (handleLostEditLock(document.getElementById('form-flash'), err)) return;

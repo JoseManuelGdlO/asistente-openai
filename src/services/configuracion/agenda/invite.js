@@ -1,8 +1,13 @@
 const crypto = require('crypto');
 const { signState, openSigned, stateSecret } = require('./oauthState');
 
+// Los campos del asistente conservan el prefijo `calendarInvite*` / `CALENDAR_INVITE_*`
+// para no tocar los links ya emitidos ni la lectura en Firestore.
 const CALENDAR_INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const RESULT_TTL_MS = 15 * 60 * 1000;
+
+// Página pública del invitado: se mantiene la ruta para no invalidar los links ya emitidos.
+const INVITE_PAGE_PATH = '/calendar/conectar';
 
 function hashCalendarInviteToken(token) {
   return crypto.createHash('sha256').update(String(token || '').trim()).digest('hex');
@@ -17,16 +22,16 @@ function createCalendarInviteToken(now = Date.now()) {
   };
 }
 
-function publicBaseUrl(req) {
-  const configured = String(process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || '').trim().replace(/\/+$/, '');
+function publicBaseUrl(req, env = process.env) {
+  const configured = String(env.PUBLIC_BASE_URL || env.APP_BASE_URL || '').trim().replace(/\/+$/, '');
   if (configured) return configured;
   const proto = req?.get?.('x-forwarded-proto') || req?.protocol || 'http';
   const host = req?.get?.('x-forwarded-host') || req?.get?.('host') || 'localhost:3000';
   return `${proto}://${host}`;
 }
 
-function calendarInviteUrlFor(req, token) {
-  return `${publicBaseUrl(req)}/calendar/conectar/${encodeURIComponent(token)}`;
+function calendarInviteUrlFor(req, token, env = process.env) {
+  return `${publicBaseUrl(req, env)}${INVITE_PAGE_PATH}/${encodeURIComponent(token)}`;
 }
 
 function parseExpiry(value) {
@@ -94,11 +99,12 @@ function readInviteResult(token, secret, now = Date.now()) {
 
 function inviteResultUrl(req, payload, env = process.env, now = Date.now()) {
   const signed = signInviteResult(payload, stateSecret(env), now);
-  return `${publicBaseUrl(req)}/calendar/conectar/listo?r=${encodeURIComponent(signed)}`;
+  return `${publicBaseUrl(req, env)}${INVITE_PAGE_PATH}/listo?r=${encodeURIComponent(signed)}`;
 }
 
 module.exports = {
   CALENDAR_INVITE_TTL_MS,
+  INVITE_PAGE_PATH,
   hashCalendarInviteToken,
   createCalendarInviteToken,
   calendarInviteUrlFor,

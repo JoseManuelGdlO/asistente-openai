@@ -1,6 +1,6 @@
 const admin = require('firebase-admin');
 const { hashInviteToken } = require('./metaInviteService');
-const { hashCalendarInviteToken } = require('./calendar/invite');
+const { hashCalendarInviteToken } = require('./configuracion/agenda/invite');
 const { parseAssistantVersionBody, promptExcerpt } = require('./assistantVersionInput');
 const {
   ROOT_COLLECTIONS,
@@ -74,6 +74,8 @@ class FirebaseService {
     this.loginConfirmationsCollection = col('login_confirmations');
     this.assistantEditLocksCollection = col('assistant_edit_locks');
     this.calendarSettingsCollection = col('calendar_settings');
+    this.agendaSettingsCollection = col('agenda_settings');
+    this.agendaAppointmentsCollection = col('agenda_appointments');
 
     if (process.env.NODE_ENV !== 'test' && !loggedFirestoreTarget) {
       loggedFirestoreTarget = true;

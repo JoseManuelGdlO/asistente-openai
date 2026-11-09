@@ -15,7 +15,9 @@ const ROOT_COLLECTIONS = Object.freeze([
   'webhook_dedup',
   'login_confirmations',
   'assistant_edit_locks',
-  'calendar_settings'
+  'calendar_settings',
+  'agenda_settings',
+  'agenda_appointments'
 ]);
 
 function resolveFirestoreTarget(env = process.env) {

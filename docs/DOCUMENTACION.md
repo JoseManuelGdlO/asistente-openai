@@ -86,7 +86,8 @@ Los mensajes de grupos de WhatsApp (`@g.us`) **no se responden**, para evitar sp
 
 ### 3.7 Tareas programadas
 
-- Agenda diaria (10:00, zona México) — *preparada; las citas reales aún no están conectadas a Google Calendar*.
+- Agenda diaria (10:00, zona México) — *preparada; aún no lee las citas de `agenda_appointments`*.
+- Sync de citas con Google (`agendaSync`, cada 2 minutos) — reintenta citas `pending`/`retry` (ver 10.3).
 - Limpieza semanal (domingo 2:00).
 - Verificación de estado cada hora.
 
@@ -256,7 +257,7 @@ Variables opcionales: `SEED_CLIENT_ID`, `SEED_CLIENT_NAME`, `SEED_ADMIN_PHONE`, 
 
 - No responde en grupos.
 - No procesa documentos de pacientes como “contenido para leer” (salvo admin `/upload`).
-- No genera por sí sola la agenda diaria de citas (scheduler aún placeholder).
+- No genera por sí sola la agenda diaria de citas (scheduler aún placeholder); las reservas las hace con las tools de Agendar citas (10.3).
 - No usa Assistants API (`threads`/`runs`) ni Chat Completions en runtime.
 - No usa `previous_response_id` ni Conversations API (historial solo en Firestore).
 
@@ -355,6 +356,15 @@ Documento ID = `ultra:{messageId}` o `own:{messageId}`.
 | `updatedAt` | Fecha |
 
 Flujo: claim al llegar el webhook → si el handler termina (incluido aviso de negocio o error de OpenAI convertido a texto) → `completed` (24h) → HTTP 200. Si lanza **antes** de notificar al usuario → se borra el claim → HTTP 500 → UltraMsg puede reintentar.
+
+### Colecciones `agenda_settings` y `agenda_appointments` (Configuración → Agendar citas)
+
+Respetan `FIRESTORE_COLLECTION_PREFIX` (p. ej. `QA_agenda_settings`). **No** leen `calendar_settings`.
+
+- `agenda_settings/{clientId}`: `enabled`, `connection` (status, email, calendarId, timezone, lastError…), tokens cifrados + nonce OAuth, `hours` por día, `services[]` (`durationMinutes`, `active`), `exceptions[]`, `rules` (incluye `appointmentsPerBlock`), `playgroundWriteEnabled`, `adminNotice`.
+- `agenda_appointments/{clientId}/items/{appointmentId}`: `serviceId`, `start`/`end` (ISO UTC), datos del cliente, `status` (`confirmed` | `cancelled`), `sync` (`pending` | `synced` | `retry` | `failed`), `eventId`, `syncAttempts`, `nextRetryAt`, `lastSyncError`.
+
+Detalle en la sección 10.3.
 
 ### Credenciales del servidor
 
@@ -480,6 +490,66 @@ En la pestaña **Assistant** hay un chat de prueba que llama a OpenAI y Firestor
 |--------|------|-------------|
 | GET | `/playground/:clientId` | Historial (`items`), `pendingMessages`, `flushAt`, `locked` |
 | POST | `/playground/:clientId/chat` | Encola `{ message, reset? }`; `queued` o `reply` si debounce=0 |
+
+---
+
+## 10.3 Configuración → Agendar citas
+
+En la ficha de cada consultorio, la pestaña **Configuración** es un hub; su primera opción es **Agendar citas**. Reemplaza por completo el antiguo módulo Calendar (panel, tools y runtime): no hay motor dual ni botón de migración.
+
+**Corte limpio (sin migración).** Los datos y OAuth del Calendar anterior (`calendar_settings`, citas viejas) **no se leen ni se migran**. Cada consultorio debe reconectar Google y volver a configurar horarios y servicios. Los documentos viejos quedan huérfanos en Firestore (limpieza manual opcional). Solo se reutiliza el cliente Google (`src/services/googleCalendar/client.js`: OAuth, freeBusy, eventos).
+
+**Código**: `src/services/configuracion/agenda/` (settings, disponibilidad, reserva, sync, tools, rutas). Panel: `public/js/configuracion-hub.js` y `public/js/agenda-panel.js`.
+
+### Cuándo agenda el bot
+
+Solo si hay: Google conectado + calendario elegido + al menos un día abierto + al menos un servicio activo. Si la agenda está incompleta, desconectada o con OAuth revocado, el bot no inventa horarios.
+
+### Servicios y citas por bloque
+
+Cada servicio tiene duración; el cupo es global en `rules.appointmentsPerBlock` (1–100): cuántas citas caben en cada bloque según esa duración (cupo 3 + servicio 120 min → hasta 3 citas en 09:00–11:00, otras 3 en 11:00–13:00, etc.). La disponibilidad cruza jornada, excepciones por fecha (`YYYY-MM-DD`: cerrado o intervalos distintos), reglas (aviso mínimo, días máximos, buffer, citas por bloque) y citas propias en Firestore.
+
+### Reserva y sincronización con Google
+
+1. Al confirmar, una transacción de Firestore revalida el cupo; si está lleno responde `slot_full` y el bot vuelve a consultar horarios.
+2. Si hay lugar: `status=confirmed`, `sync=pending`.
+3. Se intenta crear el evento en Google. Éxito → `synced` + `eventId`. Error → la cita **sigue confirmada**, `sync=retry` con `nextRetryAt`, y el bot confirma al cliente igualmente.
+4. El scheduler ejecuta `agendaSync` cada 2 minutos: reintenta citas `pending`/`retry` vencidas (crear/actualizar/borrar evento al reagendar o cancelar) con backoff creciente (30 s → 1 min → 2 min → … → 24 h). Tras 12 intentos fallidos queda `sync=failed` con `lastSyncError` visible; la reserva nunca se borra.
+
+### Tools del bot
+
+`listBookingServices`, `getAvailableSlots`, `createAppointment`, `rescheduleAppointment`, `cancelAppointment` (el playground usa las mismas; con escritura desactivada simula sin agendar).
+
+### OAuth de Google
+
+| Ruta | Uso |
+|------|-----|
+| `/configuracion/agenda/oauth/callback` | **Callback nuevo** (el que se registra en Google Cloud) |
+| `/calendar/oauth/callback` | Alias legado, sigue respondiendo para no romper redirect URIs ya registrados |
+| `/calendar/conectar/:token` | Página pública de invitación (se mantiene para no invalidar links emitidos) |
+
+Redirect URI: si `GOOGLE_CALENDAR_REDIRECT_URI` está definida se usa tal cual; si no, `{APP_BASE_URL|PUBLIC_BASE_URL}/configuracion/agenda/oauth/callback`. Registra en Google Cloud Console la URI nueva (y deja la legada mientras haya conexiones/invites en curso).
+
+### API (requieren `ADMIN_API_TOKEN`; las mutaciones exigen edit-lock → `409` si otro la tiene)
+
+Prefijo `/clients/:clientId/configuracion/agenda`:
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/` | Estado del panel |
+| PUT | `/settings` | Horarios, servicios, excepciones, reglas, zona horaria |
+| PUT | `/enabled` | Activa/desactiva |
+| PUT | `/playground-write` | Permite agendar de verdad desde el playground |
+| GET | `/calendars` | Lista calendarios de Google |
+| POST | `/select-calendar` | Elige calendario |
+| POST | `/oauth/start` | Inicia OAuth |
+| POST | `/invite` | Genera link de invitación |
+| POST | `/disconnect` | Desconecta Google |
+| POST | `/notice/dismiss` | Cierra el aviso del panel |
+
+Públicas: `GET /public/calendar/invite/:token`, `POST /public/calendar/invite/:token/start`, `GET /public/calendar/result`, `GET /calendar/conectar/listo`. **No existe** `/migrate`.
+
+Errores de API: `401` sin auth, `404` consultorio inexistente, `409` lock, `400` validación.
 
 ---
 
@@ -660,6 +730,8 @@ Copia `config-ultramsg.example` a `.env` y completa. Lo esencial:
 | `ADMIN_API_TOKEN` | Panel admin y API de gestión (clientes, assistants, playground, documentos, sesiones, bots, scheduler, UltraMsg) |
 | `MESSAGE_DEBOUNCE_MS` | Silencio antes de flush a la IA (default `2500`; `0` desactiva el buffer) |
 | `MESSAGE_DEBOUNCE_MAX_MS` | Tope del lote desde el primer mensaje (default `8000`) |
+| `GOOGLE_CALENDAR_CLIENT_ID` / `GOOGLE_CALENDAR_CLIENT_SECRET` | OAuth de Google para Agendar citas |
+| `GOOGLE_CALENDAR_REDIRECT_URI` | Opcional. Si falta: `{APP_BASE_URL\|PUBLIC_BASE_URL}/configuracion/agenda/oauth/callback` (el alias `/calendar/oauth/callback` sigue activo) |
 | `PORT` | Puerto (default 3000) |
 | `UPLOADS_DIR` | Carpeta de PDFs (opcional) |
 
@@ -708,7 +780,8 @@ npm run ngrok    # exponer puerto 3000 en desarrollo
 
 ## 15. Limitaciones y estado actual (transparencia)
 
-- **Agenda diaria**: la estructura existe; la obtención de citas (`getTodaysAppointments`) aún no está conectada a Google Calendar (suele devolver lista vacía).
+- **Agenda diaria** (recordatorio de 10:00): la estructura existe; la obtención de citas (`getTodaysAppointments`) aún no lee `agenda_appointments` (suele devolver lista vacía). No confundir con **Configuración → Agendar citas** (sección 10.3), que ya agenda de verdad.
+- **Agendar citas**: sin multi-recurso (doctor/silla/sala), sin importación masiva ni pantalla global de agenda; no migra datos del Calendar anterior.
 - **Limpieza semanal**: principalmente logging; no es un borrado agresivo de datos.
 - **Historial**: persistido en Firestore (`bot_sessions`); sobrevive reinicios del servidor. Si OpenAI falla a mitad, se guarda el turno del usuario (sin pares de tools rotos).
 - **Documentación antigua** (`README.md` y algunas guías) puede mencionar Meta/Facebook; esta `DOCUMENTACION.md` refleja Responses + Firebase.
