@@ -110,7 +110,7 @@
             if (apt) {
               const label = [apt.customerName, apt.serviceName].filter(Boolean).join(' · ') || 'Cita';
               const endHm = aptEndHm(apt);
-              const title = `${startHm}–${endHm} · ${label}${apt.sync ? ` · sync: ${apt.sync}` : ''}`;
+              const title = `${startHm}–${endHm} · ${label}${apt.customerAddress ? ` · ${apt.customerAddress}` : ''}${apt.sync ? ` · sync: ${apt.sync}` : ''}`;
               return `<div class="agenda-preview-cell is-booked" title="${escapeHtml(title)}">
                 <strong>${escapeHtml(startHm)}</strong>
                 <span>${escapeHtml(label)}</span>

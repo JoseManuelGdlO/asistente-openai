@@ -23,8 +23,7 @@ const {
   dayWindows,
   rollPastDate,
   parseLocalDateTime,
-  interpretSlotStart,
-  fitsHours
+  slotStartCandidates
 } = require('./time');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -37,6 +36,48 @@ function httpError(message, status) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+const PLACEHOLDER_NAMES = new Set([
+  'cliente', 'client', 'usuario', 'user', 'nombre', 'prueba', 'test',
+  'anonimo', 'anónimo', 'sin nombre', 'n/a', 'na', 'xxx', 'desconocido'
+]);
+
+function isPlaceholderName(name) {
+  return PLACEHOLDER_NAMES.has(String(name || '').trim().toLowerCase());
+}
+
+const PLACEHOLDER_ADDRESSES = new Set([
+  'domicilio', 'direccion', 'dirección', 'sin direccion', 'sin dirección',
+  'pendiente', 'n/a', 'na', 'xxx', 'casa', 'hogar', 'calle', '.', '-', 'null'
+]);
+
+function normalizeSaid(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isRealPersonName(name) {
+  const value = String(name || '').trim();
+  if (!value || isPlaceholderName(value)) return false;
+  return /[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}/.test(value);
+}
+
+function isRealAddress(address) {
+  const value = String(address || '').trim();
+  if (value.length < 8 || PLACEHOLDER_ADDRESSES.has(value.toLowerCase())) return false;
+  return /[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/.test(value);
+}
+
+function personSaid(value, userMessages) {
+  if (!Array.isArray(userMessages)) return true;
+  const blob = normalizeSaid(userMessages.join('\n'));
+  const needle = normalizeSaid(value);
+  return Boolean(needle) && blob.includes(needle);
 }
 
 function cleanPhone(userId) {
@@ -456,6 +497,7 @@ class AgendaService {
         id: row.id,
         serviceName: row.serviceName || '',
         customerName: row.customerName || '',
+        customerAddress: row.customerAddress || '',
         start: row.start,
         end: row.end,
         startLocal: Number.isFinite(start.getTime()) ? formatLocal(start, timezone) : '',
@@ -658,6 +700,7 @@ class AgendaService {
       ownEventIds,
       limit: options.limit,
       onePerDay: Boolean(options.onePerDay),
+      includeFull: Boolean(options.includeFull),
       excludeAppointmentId: options.excludeAppointmentId || null
     });
     return { revoked: false, ...result };
@@ -684,30 +727,76 @@ class AgendaService {
     return 'blocked';
   }
 
-  resolveSlot(runtime, service, startValue) {
-    const start = interpretSlotStart(startValue, runtime.timezone);
-    if (!start) return { ok: false, error: 'El horario debe ir como YYYY-MM-DDTHH:mm.', format: true };
-    const end = new Date(start.getTime() + service.durationMinutes * 60000);
+  /**
+   * La hora que manda el playground (10:00) es la hora del calendario, no UTC.
+   * 2026-11-16T10:00 y 2026-11-16T10:00Z reservan las 10:00 en la zona de la agenda.
+   */
+  async resolveOfferedSlot(runtime, service, startValue) {
+    const text = typeof startValue === 'string' ? startValue.trim() : '';
+    const dateMatch = text.match(/(\d{4}-\d{2}-\d{2})/);
+    const clockMatch = text.match(/(\d{1,2}):(\d{2})/);
+    if (!dateMatch || !clockMatch) {
+      return { ok: false, error: 'El horario debe ir como YYYY-MM-DDTHH:mm.', format: true };
+    }
+    const date = dateMatch[1];
+    const hm = `${String(clockMatch[1]).padStart(2, '0')}:${clockMatch[2]}`;
+    const found = await this.findSlots(runtime, service, date, date, { limit: 288, includeFull: true });
+    if (found.revoked) return { ok: false, error: REVOKED_RESULT.error, revoked: true };
+    const grid = found.slots || [];
+    const localKey = `${date}T${hm}`;
+    let hit = grid.find((slot) => slot.startLocal === localKey) || null;
+    if (!hit) {
+      for (const candidate of slotStartCandidates(text, runtime.timezone)) {
+        const key = formatLocal(candidate, runtime.timezone);
+        hit = grid.find((slot) => slot.startLocal === key) || null;
+        if (hit && key !== localKey) break;
+        if (hit) break;
+      }
+    }
+    if (!hit) {
+      return {
+        ok: false,
+        error: 'Ese horario no se puede reservar: no está entre los inicios de este servicio.',
+        date
+      };
+    }
+    const start = new Date(hit.start);
+    const end = new Date(hit.end);
     const nowMs = this.now().getTime();
     if (start.getTime() < nowMs + (runtime.rules.minNoticeMinutes * 60000)) {
-      return { ok: false, error: 'Ese horario no cumple la anticipación mínima.' };
+      return { ok: false, error: 'Ese horario no cumple la anticipación mínima.', date };
     }
     if (start.getTime() > nowMs + (runtime.rules.maxDaysAhead * 86400000)) {
-      return { ok: false, error: 'Ese horario supera el máximo de días a futuro.' };
+      return { ok: false, error: 'Ese horario supera el máximo de días a futuro.', date };
     }
-    if (!fitsHours(start, end, runtime)) {
-      return { ok: false, error: 'Ese horario está fuera del horario de atención.' };
-    }
-    return { ok: true, start, end };
+    if (hit.full) return { ok: false, full: true, start, end, date };
+    return { ok: true, start, end, date };
   }
 
-  slotFailure(slot) {
+  async slotRejected(runtime, service, slot) {
+    if (slot.revoked) {
+      return { success: false, error: slot.error, phase: 'revoked', instruction: REVOKED_RESULT.instruction };
+    }
+    if (slot.full) return this.slotFullResult(runtime, service, slot);
+    const alternatives = slot.date
+      ? (await this.freshOfferList(runtime, service, zonedToUtc(slot.date, '12:00', runtime.timezone)))
+      : [];
+    const offerList = alternatives.map((item) => ({
+      startLocal: item.startLocal,
+      endLocal: item.endLocal,
+      label: item.label
+    }));
     return {
       success: false,
       error: slot.error,
+      offerList,
+      offerText: offerList.map((item, index) => `${index + 1}. ${item.label}`).join('\n'),
+      slotCount: offerList.length,
       instruction: slot.format
         ? 'No pidas el formato a la persona. Vuelve a llamar copiando startLocal del horario ofrecido.'
-        : 'No confirmes ese horario. Ofrece alternativas reales consultando getAvailableSlots.'
+        : (offerList.length
+          ? 'No confirmes ese horario. Ofrece solo offerText. Para reservar, copia startLocal tal cual (hora local, sin Z).'
+          : 'No confirmes ese horario. Consulta getAvailableSlots de otro día.')
     };
   }
 
@@ -787,7 +876,8 @@ class AgendaService {
     }
     const today = localDate(this.now(), runtime.timezone);
     const preferredText = typeof args.preferredStart === 'string' ? args.preferredStart.trim() : '';
-    let preferred = preferredText ? interpretSlotStart(preferredText, runtime.timezone) : null;
+    const preferredCandidates = preferredText ? slotStartCandidates(preferredText, runtime.timezone) : [];
+    let preferred = preferredCandidates[0] || null;
     if (preferredText && !preferred) {
       return {
         success: false,
@@ -854,13 +944,23 @@ class AgendaService {
       slots = (found.dates || []).map((item) => ({ date: item.date, label: item.dayLabel }));
     } else {
       const all = found.slots || [];
-      if (preferred) {
-        const wanted = formatLocal(preferred, runtime.timezone);
-        exact = all.find((slot) => slot.startLocal === wanted) || null;
+      if (preferredText) {
+        const clock = preferredText.match(/(\d{1,2}):(\d{2})/);
+        if (clock && requestedDate) {
+          const key = `${requestedDate}T${String(clock[1]).padStart(2, '0')}:${clock[2]}`;
+          exact = all.find((slot) => slot.startLocal === key) || null;
+        }
       }
-      slots = exact
-        ? [exact].concat(all.filter((slot) => slot.start !== exact.start))
+      const raw = exact
+        ? [exact].concat(all.filter((slot) => slot.startLocal !== exact.startLocal))
         : all;
+      // Solo hora local al modelo: el ISO UTC confunde y termina como “15:00” fuera de horario.
+      slots = raw.map((slot) => ({
+        startLocal: slot.startLocal,
+        endLocal: slot.endLocal,
+        dayLabel: slot.dayLabel,
+        label: slot.label
+      }));
     }
     const slotCount = slots.length;
     const offerText = dayMode
@@ -874,10 +974,10 @@ class AgendaService {
       )
       : dayMode
         ? (slotCount
-          ? `Hoy es ${today}. El año es ${today.slice(0, 4)}. Esta respuesta solo trae fechas libres. Ofrece las ${slotCount} fechas de offerText / slots, sin horas. Cuando elijan una, vuelve a llamar getAvailableSlots con ese date. No menciones otro año.`
+          ? `Hoy es ${today}. El año es ${today.slice(0, 4)}. Esta respuesta solo trae fechas libres. Ofrece las ${slotCount} fechas de offerText / slots, sin horas, y termina el turno. Prohibido volver a llamar getAvailableSlots ahora. Cuando la persona elija una fecha, en el siguiente turno llama con ese date. No menciones otro año.`
           : `Hoy es ${today}. No hay días con horario libre en los próximos ${runtime.rules.maxDaysAhead} días. No inventes días ni horarios.`)
         : (slotCount
-          ? `Hoy es ${today}. El año es ${today.slice(0, 4)}. Hay ${slotCount} horarios libres este día. Debes copiar offerText completo o cada label de slots (TODOS). PROHIBIDO inventar horarios que no estén en la lista. Solo los bloques devueltos. No menciones otro año.`
+          ? `Hoy es ${today}. El año es ${today.slice(0, 4)}. Hay ${slotCount} horarios libres este día. Debes copiar offerText completo o cada label de slots (TODOS) y terminar el turno. Prohibido llamar createAppointment ahora. Espera a que la persona elija uno. Cuando lo elija, si falta su nombre completo o su dirección, pídelos antes de reservar. PROHIBIDO inventar horarios que no estén en la lista. No menciones otro año.`
           : `Hoy es ${today}. No hay horarios libres ese día. No inventes horarios.`);
     if (correctedFrom) {
       const outcome = slotCount
@@ -906,11 +1006,24 @@ class AgendaService {
       return { success: false, error: 'Ese servicio no está disponible.', instruction: 'No reserves un servicio que no esté activo.' };
     }
     const customerName = typeof args.customerName === 'string' ? args.customerName.trim() : '';
-    if (!customerName) {
-      return { success: false, error: 'Falta el nombre de quien reserva.', instruction: 'Pide el nombre antes de crear la cita.' };
+    const customerAddress = typeof args.customerAddress === 'string' ? args.customerAddress.trim() : '';
+    const userMessages = Array.isArray(context?.userMessages) ? context.userMessages : null;
+    const nameOk = isRealPersonName(customerName) && personSaid(customerName, userMessages);
+    const addressOk = isRealAddress(customerAddress) && personSaid(customerAddress, userMessages);
+    if (!nameOk || !addressOk) {
+      const missing = [
+        !nameOk ? 'el nombre completo' : '',
+        !addressOk ? 'la dirección completa donde se hará el servicio' : ''
+      ].filter(Boolean).join(' y ');
+      return {
+        success: false,
+        error: `Falta ${missing}.`,
+        instruction: `Pide ${missing}. No confirmes la cita y no inventes esos datos: tienen que estar escritos por la persona.`
+      };
     }
-    const slot = this.resolveSlot(runtime, service, args.start);
-    if (!slot.ok) return this.slotFailure(slot);
+    const slot = await this.resolveOfferedSlot(runtime, service, args.start);
+    console.log(`Agenda create ${JSON.stringify(args.start)} -> ${slot.ok ? formatLocal(slot.start, runtime.timezone) : slot.error}`);
+    if (!slot.ok) return this.slotRejected(runtime, service, slot);
     const mode = this.mutationMode(context.origin, runtime);
     if (mode === 'blocked') {
       return { success: false, error: 'Este canal no puede modificar la agenda.', instruction: 'No confirmes la cita.' };
@@ -918,10 +1031,13 @@ class AgendaService {
 
     const view = {
       service: brief(service),
+      startLocal: formatLocal(slot.start, runtime.timezone),
+      endLocal: formatLocal(slot.end, runtime.timezone),
       start: slot.start.toISOString(),
       end: slot.end.toISOString(),
       label: formatSlotLabel(slot.start, slot.end, runtime.timezone),
-      customerName
+      customerName,
+      customerAddress
     };
 
     if (mode === 'dry') {
@@ -944,6 +1060,7 @@ class AgendaService {
       start: slot.start,
       end: slot.end,
       customerName,
+      customerAddress,
       customerPhone: cleanPhone(context.userId),
       notes: typeof args.notes === 'string' ? args.notes.trim() : '',
       googleBusy: [],
@@ -962,13 +1079,19 @@ class AgendaService {
       syncPending: !synced.ok,
       ...view,
       instruction: synced.ok
-        ? 'La cita quedó agendada. Confirma solo estos datos.'
-        : 'La cita quedó agendada. Confirma solo estos datos; la copia en el calendario se completa sola en segundo plano. No menciones errores técnicos.'
+        ? 'La cita quedó agendada. Confirma el nombre, la dirección, label y startLocal (hora local). No leas el campo start: es UTC interno.'
+        : 'La cita quedó agendada. Confirma el nombre, la dirección, label y startLocal (hora local). No leas el campo start: es UTC interno. La copia en el calendario se completa sola.'
     };
   }
 
   async slotFullResult(runtime, service, slot, excludeAppointmentId = null) {
-    const offerList = await this.freshOfferList(runtime, service, slot.start, excludeAppointmentId);
+    const offerList = (await this.freshOfferList(runtime, service, slot.start, excludeAppointmentId))
+      .map((item) => ({
+        startLocal: item.startLocal,
+        endLocal: item.endLocal,
+        dayLabel: item.dayLabel,
+        label: item.label
+      }));
     return {
       success: false,
       code: 'slot_full',
@@ -995,8 +1118,8 @@ class AgendaService {
     if (!service) {
       return { success: false, error: 'El servicio de esa cita ya no está disponible.', instruction: 'No muevas la cita.' };
     }
-    const slot = this.resolveSlot(runtime, service, args.start);
-    if (!slot.ok) return this.slotFailure(slot);
+    const slot = await this.resolveOfferedSlot(runtime, service, args.start);
+    if (!slot.ok) return this.slotRejected(runtime, service, slot);
     const mode = this.mutationMode(context.origin, runtime);
     if (mode === 'blocked') {
       return { success: false, error: 'Este canal no puede modificar la agenda.', instruction: 'No confirmes el cambio.' };

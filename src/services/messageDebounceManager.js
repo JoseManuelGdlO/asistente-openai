@@ -54,8 +54,11 @@ class MessageDebounceManager {
     processContext = {}
   }) {
     const { debounceMs, maxMs } = this.getConfig();
+    // El playground no puede ir a la cola de Firestore: el servidor de QA también la barre
+    // y contesta con código viejo.
+    const immediate = debounceMs <= 0 || flushContext.origin === 'playground';
 
-    if (debounceMs <= 0) {
+    if (immediate) {
       const locked = await this.firebaseService.isBotSessionLocked(userId, clientCode);
       if (locked) {
         return { accepted: false, reason: 'locked' };

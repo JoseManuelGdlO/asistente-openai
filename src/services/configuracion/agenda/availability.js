@@ -139,6 +139,7 @@ function buildAvailableSlots({
   ownEventIds,
   limit = 8,
   onePerDay = false,
+  includeFull = false,
   excludeAppointmentId = null
 }) {
   const durationMinutes = Math.max(5, Number(service.durationMinutes) || 30);
@@ -170,7 +171,8 @@ function buildAvailableSlots({
         const occupied = countOccupancy({
           startMs, endMs, appointments, googleBusy, ownEventIds, bufferMs, excludeAppointmentId
         });
-        if (occupied >= capacity) continue;
+        const full = occupied >= capacity;
+        if (full && !includeFull) continue;
         const start = new Date(startMs);
         const end = new Date(endMs);
         const slot = {
@@ -179,7 +181,8 @@ function buildAvailableSlots({
           startLocal: formatLocal(start, timeZone),
           endLocal: formatLocal(end, timeZone),
           dayLabel: formatDayLabel(start, timeZone),
-          label: formatSlotLabel(start, end, timeZone)
+          label: formatSlotLabel(start, end, timeZone),
+          full
         };
         if (onePerDay) {
           dates.push({ date, dayLabel: slot.dayLabel, slot });

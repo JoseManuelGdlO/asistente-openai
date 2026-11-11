@@ -46,6 +46,13 @@ function formatLocal(date, timeZone) {
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 }
 
+/** Hora de pared del calendario, sin Z: 2026-11-16T10:00:00 en `timeZone`. */
+function calendarDateTime(value, timeZone) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${formatLocal(date, timeZone)}:00`;
+}
+
 function localDate(date, timeZone) {
   const parts = formatParts(date, timeZone);
   return `${parts.year}-${parts.month}-${parts.day}`;
@@ -188,6 +195,41 @@ function interpretSlotStart(value, timeZone) {
   return zonedToUtc(wall[1], wall[2], timeZone);
 }
 
+/**
+ * Candidatos de instante para un `start` de tool: el parseo principal más
+ * alternativas típicas del modelo (pegar Z a startLocal, o copiar la hora
+ * del ISO UTC como si fuera local, p. ej. 15:00 en vez de 09:00 CDMX).
+ */
+function slotStartCandidates(value, timeZone) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return [];
+  const seen = new Set();
+  const out = [];
+  const push = (date) => {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return;
+    const key = date.getTime();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(date);
+  };
+  push(interpretSlotStart(text, timeZone));
+  if (hasExplicitZone(text)) {
+    const stripped = text.replace(EXPLICIT_ZONE_RE, '');
+    push(interpretSlotStart(stripped, timeZone));
+    return out;
+  }
+  const wall = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/);
+  if (!wall) return out;
+  const hour = Number(wall[2]);
+  const minute = wall[3];
+  const isoUtc = `${wall[1]}T${wall[2]}:${minute}:00.000Z`;
+  // Con segundos (ISO truncado) o hora ≥ 14: suele ser el UTC de un startLocal matutino en MX.
+  if (text.includes(':') && (/\d{2}:\d{2}:\d{2}/.test(text) || hour >= 14)) {
+    push(new Date(isoUtc));
+  }
+  return out;
+}
+
 function clockMinutes(value) {
   const [hour, minute] = String(value || '').split(':');
   return (Number(hour) * 60) + Number(minute);
@@ -212,11 +254,13 @@ module.exports = {
   rollPastDate,
   parseLocalDateTime,
   interpretSlotStart,
+  slotStartCandidates,
   fitsHours,
   WEEKDAY_KEYS,
   formatParts,
   zonedToUtc,
   formatLocal,
+  calendarDateTime,
   localDate,
   addDays,
   weekdayKeyFromDate,
