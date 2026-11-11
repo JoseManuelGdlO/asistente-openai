@@ -5,7 +5,11 @@ const {
   replyOffersAppointmentTime,
   latestAvailabilityOffer,
   replyInventedOfferedTimes,
-  replyInventedHoursOnDateOffer
+  replyInventedHoursOnDateOffer,
+  planAgendaToolRound,
+  DAYS_ONLY_SKIP,
+  WAIT_FOR_TIME_SKIP,
+  EXTRA_BOOKING_SKIP
 } = require('../services/configuracion/agenda/tools');
 
 const MAX_HISTORY_ITEMS = 40;
@@ -463,10 +467,15 @@ class OpenAIManager {
 
     if (this.calendarBooking && this.calendarBooking.isAgendaTool(functionName)) {
       try {
+        const userMessages = (runContext?.items || [])
+          .filter((item) => item?.role === 'user' && !String(item.content || '').startsWith('Corrección del sistema'))
+          .map((item) => (typeof item.content === 'string' ? item.content : ''))
+          .filter(Boolean);
         return await this.calendarBooking.execute(functionName, args, {
           clientId: runContext?.clientId,
           userId: runContext?.userId,
-          origin: runContext?.origin || null
+          origin: runContext?.origin || null,
+          userMessages
         });
       } catch (error) {
         console.error('Error en herramienta de calendario:', error.message);
@@ -649,7 +658,8 @@ class OpenAIManager {
       allowResend,
       allowDocumentSend: allowResend || this.isCourseIntent(message),
       pendingDocuments: [],
-      toolTrace: []
+      toolTrace: [],
+      items: []
     };
 
     let items = null;
@@ -657,6 +667,7 @@ class OpenAIManager {
     try {
       const session = await this.firebaseService.getOrCreateBotSession(userId, clientCode);
       items = Array.isArray(session.items) ? [...session.items] : [];
+      runContext.items = items;
       if (Array.isArray(session.sentDocumentIds)) {
         runContext.sessionSentDocuments = new Set(session.sentDocumentIds);
       }
@@ -808,11 +819,26 @@ class OpenAIManager {
           break;
         }
 
-        // Un intento de tool por turno: pase lo que pase, el siguiente loop es solo texto
-        toolsLocked = true;
+        // Lista de días: se responde con esas fechas y no se piden horarios en el mismo turno.
+        // Horarios de un día ya elegido: el mismo turno todavía puede crear la cita.
+        // Tras crear, mover o cancelar, el siguiente paso es solo el texto de confirmación.
+        const userNamedTime = replyOffersAppointmentTime(message);
+        const round = planAgendaToolRound(functionCalls, { userNamedTime });
+        const listedSlots = functionCalls.some((call) => call.name === 'getAvailableSlots');
+        const readOnlyAgenda = functionCalls.every((call) => (
+          call.name === 'getAvailableSlots' || call.name === 'listBookingServices'
+        ));
+        toolsLocked = !readOnlyAgenda || (listedSlots && !userNamedTime);
 
-        for (const call of functionCalls) {
-          const result = await this.executeFunctionCall(call, runContext);
+        for (const step of round) {
+          const call = step.call;
+          const result = step.action === 'skip-for-days'
+            ? DAYS_ONLY_SKIP
+            : step.action === 'skip-until-choice'
+              ? WAIT_FOR_TIME_SKIP
+              : step.action === 'skip-extra-booking'
+                ? EXTRA_BOOKING_SKIP
+                : await this.executeFunctionCall(call, runContext);
           let args = {};
           try {
             args = JSON.parse(call.arguments || '{}');

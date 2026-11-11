@@ -4,7 +4,7 @@ const { AgendaService } = require('../../src/services/configuracion/agenda/agend
 const { createAgendaService } = require('../../src/services/configuracion/agenda/createAgendaService');
 const { signState, verifyState } = require('../../src/services/configuracion/agenda/oauthState');
 const {
-  toolDefinitions, isAgendaTool, mergeTools, buildInstructions
+  toolDefinitions, isAgendaTool, mergeTools, buildInstructions, planAgendaToolRound
 } = require('../../src/services/configuracion/agenda/tools');
 
 const CLIENT = 'C1';
@@ -53,7 +53,12 @@ async function setup({ google = fakeGoogle(), appointmentsPerBlock = 1, docPatch
 
 const create = (service, context = { clientId: CLIENT, origin: 'meta', userId: '5215512345678@c.us' }, extra = {}) => (
   service.execute('createAppointment', {
-    serviceId: 'svc_a', start: SLOT_10, customerName: 'Ana', notes: null, ...extra
+    serviceId: 'svc_a',
+    start: SLOT_10,
+    customerName: 'Ana',
+    customerAddress: 'Av. Reforma 120, Col. Centro',
+    notes: null,
+    ...extra
   }, context)
 );
 
@@ -82,6 +87,37 @@ describe('agenda tools definitions', () => {
     });
     expect(text).toContain('svc_a');
     expect(text).not.toContain('svc_off');
+    expect(text).toMatch(/no vuelvas a llamar getAvailableSlots en ese turno/i);
+  });
+
+  it('keeps the first reply on dates when the model also asks for one day', () => {
+    const calls = [
+      { name: 'listBookingServices', arguments: '{}' },
+      { name: 'getAvailableSlots', arguments: '{"serviceId":"svc_a","date":null,"preferredStart":null}' },
+      { name: 'getAvailableSlots', arguments: '{"serviceId":"svc_a","date":"2026-11-12","preferredStart":null}' }
+    ];
+    const round = planAgendaToolRound(calls);
+    expect(round.map((step) => step.action)).toEqual(['run', 'run', 'skip-for-days']);
+    const chosenDay = planAgendaToolRound([
+      { name: 'getAvailableSlots', arguments: '{"serviceId":"svc_a","date":"2026-11-13","preferredStart":null}' }
+    ]);
+    expect(chosenDay.map((step) => step.action)).toEqual(['run']);
+  });
+
+  it('does not book when the person only named the day', () => {
+    const calls = [
+      { name: 'getAvailableSlots', arguments: '{"serviceId":"svc_a","date":"2026-11-13","preferredStart":null}' },
+      { name: 'createAppointment', arguments: '{"start":"2026-11-13T09:00","customerName":"Cliente"}' },
+      { name: 'createAppointment', arguments: '{"start":"2026-11-13T09:30","customerName":"Cliente"}' }
+    ];
+    const waiting = planAgendaToolRound(calls, { userNamedTime: false });
+    expect(waiting.map((step) => step.action)).toEqual(['run', 'skip-until-choice', 'skip-until-choice']);
+    const chosen = planAgendaToolRound(calls, { userNamedTime: true });
+    expect(chosen.map((step) => step.action)).toEqual(['run', 'run', 'skip-extra-booking']);
+    const pickedByNumber = planAgendaToolRound([
+      { name: 'createAppointment', arguments: '{"start":"2026-11-14T09:00","customerName":"Mario Molina","customerAddress":"prueba 222"}' }
+    ], { userNamedTime: false });
+    expect(pickedByNumber.map((step) => step.action)).toEqual(['run']);
   });
 });
 
@@ -279,6 +315,59 @@ describe('agenda createAppointment', () => {
     expect(google.freeBusy).not.toHaveBeenCalled();
   });
 
+  it('books the local clock even if the model appends Z, and snaps a UTC clock only when it is not a real start', async () => {
+    const { service } = await setup({
+      docPatch: {
+        hours: {
+          monday: { enabled: true, intervals: [{ start: '09:00', end: '12:00' }] },
+          tuesday: { enabled: false, intervals: [] },
+          wednesday: { enabled: false, intervals: [] },
+          thursday: { enabled: false, intervals: [] },
+          friday: { enabled: false, intervals: [] },
+          saturday: { enabled: false, intervals: [] },
+          sunday: { enabled: false, intervals: [] }
+        }
+      }
+    });
+    // 10:00Z se lee como hora local 10:00 (la que está en startLocal), no como 04:00
+    const withZ = await create(service, undefined, { start: `${SLOT_10}Z`, customerName: 'Zeta' });
+    expect(withZ.success).toBe(true);
+    expect(withZ.startLocal).toBe(SLOT_10);
+    expect(withZ.start).toBe(SLOT_10_START);
+    // 16:00 no cabe en 09:00–12:00; 16:00 UTC sí es el inicio local 10:00, que ya está ocupado
+    const utcAsLocal = await create(service, undefined, {
+      start: '2026-11-09T16:00',
+      customerName: 'UtcLocal'
+    });
+    expect(utcAsLocal.error || '').not.toMatch(/horario de atención/i);
+    expect(utcAsLocal.code).toBe('slot_full');
+  });
+
+  it('getAvailableSlots exposes only local clocks to the model', async () => {
+    const { service } = await setup({
+      docPatch: {
+        rules: {
+          minNoticeMinutes: 0,
+          maxDaysAhead: 30,
+          slotIntervalMinutes: 30,
+          bufferMinutes: 0,
+          allowCancel: true,
+          allowReschedule: true
+        }
+      }
+    });
+    const result = await service.execute('getAvailableSlots', {
+      serviceId: 'svc_a', date: '2026-11-09', preferredStart: null
+    }, { clientId: CLIENT });
+    expect(result.success).toBe(true);
+    expect(result.slots[0]).toEqual(expect.objectContaining({
+      startLocal: '2026-11-09T09:00',
+      endLocal: '2026-11-09T09:30'
+    }));
+    expect(result.slots[0]).not.toHaveProperty('start');
+    expect(result.slots[0]).not.toHaveProperty('end');
+  });
+
   it('requires a customer name and a valid slot', async () => {
     const { service } = await setup();
     expect((await create(service, undefined, { customerName: ' ' })).success).toBe(false);
@@ -287,6 +376,31 @@ describe('agenda createAppointment', () => {
     expect((await create(service, undefined, { start: '2026-11-14T10:00' })).success).toBe(false);
     // Sin anticipación mínima
     expect((await create(service, undefined, { start: '2026-11-09T06:30' })).success).toBe(false);
+  });
+
+  it('refuses to book until the person wrote their name and address', async () => {
+    const { service } = await setup();
+    const onlyTime = {
+      clientId: CLIENT,
+      origin: 'meta',
+      userId: '5215512345678@c.us',
+      userMessages: ['9:00']
+    };
+    const missing = await create(service, onlyTime, { customerName: '.', customerAddress: 'calle' });
+    expect(missing.success).toBe(false);
+    expect(missing.error).toMatch(/nombre/);
+    expect(missing.error).toMatch(/dirección/);
+    const invented = await create(service, onlyTime);
+    expect(invented.success).toBe(false);
+    const said = await create(service, {
+      ...onlyTime,
+      userMessages: ['Soy Ana Gómez y la dirección es Av. Reforma 120, Col. Centro. Quiero las 10:00']
+    }, {
+      customerName: 'Ana Gómez',
+      customerAddress: 'Av. Reforma 120, Col. Centro'
+    });
+    expect(said.success).toBe(true);
+    expect(said.customerAddress).toBe('Av. Reforma 120, Col. Centro');
   });
 
   it('honors closed exceptions', async () => {

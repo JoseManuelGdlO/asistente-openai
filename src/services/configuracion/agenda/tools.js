@@ -25,7 +25,7 @@ function toolDefinitions() {
     {
       type: 'function',
       name: 'getAvailableSlots',
-      description: 'Consulta disponibilidad real de la agenda. Si date es null, devuelve solo fechas libres (date y label), sin horas. Si date trae un día, devuelve los horarios de ese día. Ofrece primero las fechas y, cuando elijan una, vuelve a llamar con ese date.',
+      description: 'Consulta disponibilidad real de la agenda. La primera llamada va con date null y devuelve solo los días libres, sin horas. Responde con esos días y detente. Cuando la persona elija un día, llama otra vez con ese date para traer solo los horarios de ese día. Prohibido pedir los horarios de un día en el mismo turno en que date fue null.',
       strict: true,
       parameters: {
         type: 'object',
@@ -41,7 +41,7 @@ function toolDefinitions() {
     {
       type: 'function',
       name: 'createAppointment',
-      description: 'Crea una cita solo después de que la persona confirmó el servicio y el horario. El éxito depende de esta respuesta, no de tu texto.',
+      description: 'Crea una sola cita cuando la persona ya eligió un horario y ya dijo su nombre completo y la dirección del servicio. Si falta el nombre o el domicilio, no la llames: pídelos y espera. Copia esos datos tal como los escribió. Una sola llamada por turno.',
       strict: true,
       parameters: {
         type: 'object',
@@ -49,10 +49,11 @@ function toolDefinitions() {
         properties: {
           serviceId: { type: 'string', description: 'Identificador del servicio' },
           start: { type: 'string', description: 'Inicio YYYY-MM-DDTHH:mm en la zona de la agenda' },
-          customerName: { type: 'string', description: 'Nombre de quien reserva' },
+          customerName: { type: 'string', description: 'Nombre completo que la persona escribió. No lo inventes.' },
+          customerAddress: { type: 'string', description: 'Dirección completa del servicio, copiada de lo que escribió la persona. No la inventes.' },
           notes: nullable('Notas breves o null')
         },
-        required: ['serviceId', 'start', 'customerName', 'notes']
+        required: ['serviceId', 'start', 'customerName', 'customerAddress', 'notes']
       }
     },
     {
@@ -101,10 +102,70 @@ function formatSubprompt(timezone, today) {
       ? `Hoy es ${today} en ${timezone}. Si dicen un día y un mes sin año, usa ${today.slice(0, 4)}, o el año siguiente si ese día ya pasó.`
       : `Zona horaria de las herramientas: ${timezone}.`,
     'Campo date: YYYY-MM-DD.',
-    'Campos start y preferredStart: YYYY-MM-DDTHH:mm en la zona de la agenda. Copia startLocal. No envíes Z ni desfase.',
+    'Campos start y preferredStart: copia exactamente startLocal (YYYY-MM-DDTHH:mm en la zona de la agenda). Prohibido Z, desfases o la hora UTC. Ej. si startLocal es 09:00, envía …T09:00; nunca …T15:00.',
     'Si date va vacío, getAvailableSlots devuelve solo fechas en date y label, sin horas. Ofrece solo esas fechas. Cuando elijan una, vuelve a llamar con ese date: responde con offerText completo (todos los libres del día). Prohibido mencionar un solo horario si slotCount > 1. Para reservar, copia startLocal.'
   ].join('\n');
 }
+
+function callArguments(call) {
+  if (call?.arguments && typeof call.arguments === 'object') return call.arguments;
+  try {
+    return JSON.parse(call?.arguments || '{}');
+  } catch (_error) {
+    return {};
+  }
+}
+
+function isDayListSlotsCall(call) {
+  if (call?.name !== 'getAvailableSlots') return false;
+  const date = callArguments(call).date;
+  return date == null || String(date).trim() === '';
+}
+
+/**
+ * Lista de días: solo corre esa consulta.
+ * Si en el mismo lote se piden horarios y la persona no dijo una hora, no se reserva.
+ * Una cita ya pedida en un turno posterior (aunque elijan con el número de la lista) sí se crea, una sola vez.
+ * @returns {{ call: object, action: 'run'|'skip-for-days'|'skip-until-choice'|'skip-extra-booking' }[]}
+ */
+function planAgendaToolRound(functionCalls, options = {}) {
+  const calls = Array.isArray(functionCalls) ? functionCalls : [];
+  const userNamedTime = options.userNamedTime === true;
+  const firstDayList = calls.findIndex(isDayListSlotsCall);
+  const askedSlots = calls.some((call) => call?.name === 'getAvailableSlots');
+  const blockCreates = firstDayList >= 0 || (askedSlots && !userNamedTime);
+  let createKept = false;
+  return calls.map((call, index) => {
+    if (call?.name === 'createAppointment' || call?.name === 'rescheduleAppointment') {
+      if (blockCreates) return { call, action: 'skip-until-choice' };
+      if (createKept) return { call, action: 'skip-extra-booking' };
+      createKept = true;
+      return { call, action: 'run' };
+    }
+    if (firstDayList < 0 || call?.name !== 'getAvailableSlots') return { call, action: 'run' };
+    if (index === firstDayList) return { call, action: 'run' };
+    return { call, action: 'skip-for-days' };
+  });
+}
+
+const DAYS_ONLY_SKIP = {
+  success: false,
+  skipped: true,
+  mode: 'days',
+  instruction: 'Ignora esta llamada. En este turno ya se pidió la lista de días. Responde solo con esas fechas, sin horas. Cuando la persona elija un día, vuelve a consultar ese date.'
+};
+
+const WAIT_FOR_TIME_SKIP = {
+  success: false,
+  skipped: true,
+  instruction: 'No reserves. La persona todavía no eligió un horario. Enumera TODOS los horarios de offerText y espera a que elija uno. No confirmes ninguna cita.'
+};
+
+const EXTRA_BOOKING_SKIP = {
+  success: false,
+  skipped: true,
+  instruction: 'Ignora esta llamada. Solo se reserva el horario que la persona eligió, una vez. No confirmes otras citas.'
+};
 
 function replyOffersAppointmentTime(text) {
   const value = String(text || '');
@@ -121,15 +182,21 @@ function normalizeClock(value) {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
-/** Última oferta exitosa de getAvailableSlots en el toolTrace del turno. */
+/** Última oferta con horarios. Si en el turno también hubo una consulta solo de fechas, no tapa a la de horas. */
 function latestAvailabilityOffer(toolTrace) {
   const rows = Array.isArray(toolTrace) ? toolTrace : [];
+  let datesOnly = null;
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const entry = rows[index];
-    if (entry?.name !== 'getAvailableSlots') continue;
-    if (entry.result?.success) return entry.result;
+    if (entry?.name !== 'getAvailableSlots' || !entry.result?.success) continue;
+    const slots = Array.isArray(entry.result.slots) ? entry.result.slots : [];
+    const timed = entry.result.mode === 'times' || slots.some((slot) => (
+      slot?.startLocal || /\d{1,2}:\d{2}/.test(String(slot?.label || ''))
+    ));
+    if (timed) return entry.result;
+    if (!datesOnly) datesOnly = entry.result;
   }
-  return null;
+  return datesOnly;
 }
 
 /**
@@ -198,13 +265,13 @@ function buildInstructions(runtime) {
     'Tienes acceso solo a los servicios configurados abajo. Identifica cuál pidió la persona antes de ofrecer un horario.',
     'Antes de proponer, confirmar o dar por disponible cualquier hora o día de cita, llama getAvailableSlots en este turno. El horario operativo del prompt no es disponibilidad.',
     'getAvailableSlots calcula disponibilidad solo con nuestra agenda (citas ya reservadas + horarios, duración del servicio, citas por bloque globales y excepciones). Ofrece únicamente lo que devuelva la tool.',
-    'La primera consulta va sin date y devuelve solo fechas. Ofrece solo esos date y label, sin horas. Cuando elijan un día, consulta ese date: la tool trae slotCount, offerText y slots con TODOS los huecos libres según nuestra agenda.',
+    'La primera consulta va sin date y devuelve solo fechas. Ofrece solo esos date y label, sin horas, y no vuelvas a llamar getAvailableSlots en ese turno. Cuando la persona elija un día, en el turno siguiente consulta ese date: la tool trae slotCount, offerText y slots con TODOS los huecos libres de ese día.',
     'OBLIGATORIO: copia offerText tal cual o enumera cada label de slots. Prohibido inventar, interpolar o “rellenar” horas aunque el prompt hable de horario operativo. Si la tool dio 09:00–11:00 y 09:30–11:30, di solo esos; nunca inventes otros.',
     'No inventes horarios, días, duraciones ni disponibilidad. La duración es la del servicio, en minutos; el cupo es global (citas por bloque / columnas), no por servicio.',
     'Pide confirmación explícita antes de reservar, reprogramar o cancelar.',
     'Solo confirma una cita cuando createAppointment, rescheduleAppointment o cancelAppointment devuelva success true y un identificador. Si la respuesta trae dryRun o testMode, explica que es una simulación y que la cita no quedó agendada.',
     'Si no hay disponibilidad, ofrece únicamente los horarios alternativos devueltos por la herramienta (slots u offerList).',
-    'Puedes llamar las herramientas necesarias en este turno. Después responde en el formato de salida del bot, sin volver a llamar herramientas.',
+    'Si getAvailableSlots devolvió solo fechas, responde con esas fechas y termina. Si devolvió los horarios de un día, copia todos y termina. Cuando la persona elija un horario, pide el nombre completo y la dirección del servicio si aún no los dijo. No llames createAppointment sin esos dos datos, copiados de sus mensajes. Después responde en el formato de salida del bot.',
     'Si la respuesta del bot es JSON, conserva ese contrato y escribe el mensaje para la persona en el campo reply.',
     `Zona horaria: ${timezone}.`,
     `Anticipación mínima: ${rules.minNoticeMinutes} minutos. Horizonte: ${rules.maxDaysAhead} días. Preparación entre citas: ${rules.bufferMinutes} minutos.`,
@@ -228,5 +295,10 @@ module.exports = {
   allowedClocksFromOffer,
   replyInventedOfferedTimes,
   replyInventedHoursOnDateOffer,
+  isDayListSlotsCall,
+  planAgendaToolRound,
+  DAYS_ONLY_SKIP,
+  WAIT_FOR_TIME_SKIP,
+  EXTRA_BOOKING_SKIP,
   buildInstructions
 };

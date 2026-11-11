@@ -1,4 +1,5 @@
 const { SYNC_BACKOFF_MS } = require('./constants');
+const { calendarDateTime } = require('./time');
 
 const MAX_SYNC_ATTEMPTS = 12;
 const MAX_ERROR_LENGTH = 300;
@@ -43,6 +44,7 @@ function eventBody({ service, appointment, timeZone, clientId }) {
       'Cita creada por Intelekia.',
       `Servicio: ${serviceName} (${duration} min)`,
       customerName ? `Cliente: ${customerName}` : '',
+      appointment.customerAddress ? `Dirección: ${appointment.customerAddress}` : '',
       appointment.customerPhone ? `WhatsApp: ${appointment.customerPhone}` : '',
       appointment.notes ? `Notas: ${appointment.notes}` : ''
     ].filter(Boolean).join('\n'),
